@@ -73,9 +73,11 @@ it token by token.
 ## Running it
 
 ```bash
-forge install                 # restores lib/ (OpenZeppelin, forge-std, chainlink)
+git clone https://github.com/allyourbases69/bnbulls.git
+cd bnbulls
+git submodule update --init   # restores lib/ (forge-std, OpenZeppelin, chainlink)
 forge build
-forge test                    # 631 tests
+forge test                    # 686 tests
 
 cd frontend
 npm install
@@ -83,10 +85,25 @@ npm run verify                # art + rarity + combat + typed-data
 npm run dev
 ```
 
-Mainnet-fork tests are excluded from the default run and need an RPC:
+⚠ `--init`, **not** `--init --recursive`. OpenZeppelin carries its own test-only
+submodules (`forge-std` → `dapphub/ds-test`) which fail to clone and abort the
+whole checkout. This repo needs OZ's `contracts/` source, never its test rig.
+
+⚠ **On Windows**, chainlink-brownie-contracts vendors some very deep paths and
+will fail with `Filename too long` unless long paths are enabled, and it is
+worth cloning somewhere short:
 
 ```bash
-FOUNDRY_PROFILE=fork forge test -j 1     # first run is single-threaded
+git config --global core.longpaths true
+```
+
+Mainnet-fork tests are **excluded from the default run** — `no_match_path` in
+`foundry.toml` — so a plain `forge test` is green while 61 tests never execute.
+Run them explicitly; they need an **archive** RPC (the public endpoints return
+403 on a pinned fork):
+
+```bash
+BSC_FORK_RPC_URL=<archive-rpc> FOUNDRY_PROFILE=fork forge test -j 1   # 61 tests
 ```
 
 ---

@@ -42,7 +42,12 @@ jobs:
           # ⚠ REQUIRED. The foundry deps are submodules; without this the
           #   checkout has no lib/ and nothing compiles. A fresh clone that
           #   could not build is the bug this repo shipped with until 2026-08-07.
-          submodules: recursive
+          #
+          # ⚠ AND IT MUST BE `true`, NOT `recursive`. openzeppelin-contracts
+          #   carries its own test-only submodules (forge-std -> dapphub/ds-test)
+          #   which fail to clone and abort the whole checkout. We need OZ's
+          #   contracts/ source, never its test rig. Verified by clean clone.
+          submodules: true
 
       - uses: foundry-rs/foundry-toolchain@v1
         with:
@@ -66,7 +71,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          submodules: recursive
+          submodules: true
 
       - uses: foundry-rs/foundry-toolchain@v1
         with:

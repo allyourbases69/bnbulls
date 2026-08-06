@@ -1,0 +1,5 @@
+.vercel
+# `npm run gen:brand:proof` output: the icon rendered at the sizes a browser
+# actually uses, so the 16px crop can be inspected rather than assumed. Local
+# evidence, not a build artefact.
+.brand-proof

@@ -1,0 +1,20 @@
+{
+  "name": "bnbulls",
+  "private": true,
+  "type": "module",
+  "description": "Bull-themed PvP NFT game on BNB Chain",
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "ethers": "6.16.0"
+  },
+  "scripts": {
+    "art": "node generator/build.mjs",
+    "art:names": "node generator/names.mjs",
+    "art:compare": "node generator/compare.mjs",
+    "build": "forge build",
+    "test": "forge test -vv",
+    "test:fork": "forge test --fork-url $RPC_URL -vv",
+    "fmt": "forge fmt",
+    "check": "npm run art && forge build && forge test"
+  }
+}

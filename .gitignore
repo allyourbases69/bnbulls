@@ -1,0 +1,96 @@
+# bnbulls — what goes to github, and what deliberately does not.
+#
+# The repo is PRIVATE, but it is written as though it might one day be shown to
+# someone for trust. Owner's rule: publish "only what's needed on the contract
+# and front end, so people cannot full clone us but we can give trust", and
+# never keys, passwords or private info.
+#
+# So: the VERIFIABLE artefacts are in (contracts, tests, deploy scripts, the
+# frontend, the art engine). The OPERATIONAL playbook and the internal strategy
+# log are out — those are the part that took the thinking, and they are not
+# needed to check that the chain does what it claims.
+
+# ── SECRETS · never, under any circumstance ─────────────────────────────────
+.env
+.env.*
+!.env.example
+*.env
+!*.env.example
+secrets/
+*.pem
+*.key
+*.pwd
+*.enc
+*keystore*
+*password*
+
+# ── build output / caches ───────────────────────────────────────────────────
+node_modules/
+.next/
+out/
+cache/
+cache_forge/
+artifacts/
+.buildgate/
+*.tsbuildinfo
+.DS_Store
+Thumbs.db
+
+# ── chain run artefacts ─────────────────────────────────────────────────────
+# `broadcast/` holds raw tx payloads from real runs, `.state/` is keeper
+# cursors. Neither is source, and both leak operational detail.
+broadcast/
+.state/
+deployments/*.json
+!deployments/names.json
+!deployments/rarity.json
+
+# ── THE MOAT · the operational half of the product ──────────────────────────
+# The keeper fleet is ~40 modules of bots, price keepers, alert routing, dedupe
+# and containers. It is what makes the game RUN, and it is not needed by anyone
+# checking that the contracts do what they say. Same for the brand render
+# pipeline and the copy.
+marketing/
+
+# ── internal strategy and history ───────────────────────────────────────────
+# The design log, the ops rules, the migration plan, the launch-venue research
+# and the voice guide. Every one is either commercially sensitive, a record of
+# mistakes, or a playbook. The contracts and their tests carry the trust story
+# on their own.
+DECISIONS.md
+BUILD-PLAN.md
+BNBULLS-BOOTSTRAP.md
+KEEPER-FLEET-AND-OPS.md
+LEARNINGS-AND-MISTAKES.md
+DEPLOY-SAFETY-PREFLIGHT.md
+VOICE-AND-BRAND.md
+BNB-CHAIN-FACTS.md
+FOUR-MEME-LAUNCH-ROUTE.md
+POT-ASSET-SWAP-DESIGN.md
+SNAPSHOT-AND-MIGRATION.md
+SNAPSHOT-ANNOUNCEMENT-COPY.md
+
+# ── the $FIGHT snapshot evidence ────────────────────────────────────────────
+# 11MB of raw chain logs. Real, and worth publishing WITH the announcement so
+# the numbers are checkable, but it is migration evidence rather than source.
+snapshot-archive/
+
+# ── large art review renders ────────────────────────────────────────────────
+generator/art-review/
+frontend/.brand-proof/
+
+# ── third-party reference art ───────────────────────────────────────────────
+# The inspiration images the owner dropped in the root at kickoff. Not ours,
+# not needed, and stock art of unknown licence has no business in a repo that
+# might be shown to someone.
+download.jpg
+images*.jpg
+images*.png
+*.avif
+
+# ── foundry dependencies ────────────────────────────────────────────────────
+# Vendored third-party source (OpenZeppelin, forge-std, chainlink). Restored
+# with `forge install`; see the README. No reason to republish someone else's
+# library, and it keeps the diff to code we actually wrote.
+lib/
+*.webp

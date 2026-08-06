@@ -1,0 +1,167 @@
+'use client';
+
+import Link from 'next/link';
+import { useReadContract } from 'wagmi';
+import { BullsAbi, MarketplaceAbi } from '@/lib/abi';
+import { contractAddress, explorerBaseUrl } from '@/lib/env';
+import { shortAddr, formatUsd1e18 } from '@/lib/format';
+import { NotDeployed } from '@/components/shared/NotDeployed';
+
+interface BullStruct {
+  strength: number;
+  dexterity: number;
+  constitution: number;
+  intelligence: number;
+  wisdom: number;
+  charisma: number;
+  weaponId: number;
+  level: number;
+  xp: number;
+  elo: number;
+  wins: number;
+  losses: number;
+  ties: number;
+  isDead: boolean;
+  name: string;
+}
+
+interface ListingStruct {
+  seller: `0x${string}`;
+  listedAt: bigint;
+  bnbullMode: number;
+  usdPrice: bigint;
+  bnbullPrice: bigint;
+}
+
+const ZERO_ADDR = '0x0000000000000000000000000000000000000000';
+
+/**
+ * The live, on-chain half of a bull's page: owner, alive/dead, fight record,
+ * ELO, and listing state. Everything here reads a real contract call and
+ * renders an honest "not deployed" / "not minted yet" state rather than a
+ * placeholder the moment any piece is missing — see the frontend package
+ * brief's "no fake data anywhere" constraint.
+ */
+export function BullOnChainPanel({ tokenId, isKing }: { tokenId: number; isKing: boolean }) {
+  const bullsAddress = contractAddress('bullsNft');
+  const marketAddress = contractAddress('marketplace');
+  const explorer = explorerBaseUrl();
+
+  const {
+    data: owner,
+    isError: ownerError,
+    isLoading: ownerLoading,
+  } = useReadContract({
+    address: bullsAddress ?? undefined,
+    abi: BullsAbi,
+    functionName: 'ownerOf',
+    args: [BigInt(tokenId)],
+    query: { enabled: !!bullsAddress },
+  });
+
+  const { data: bullData, isLoading: bullLoading } = useReadContract({
+    address: bullsAddress ?? undefined,
+    abi: BullsAbi,
+    functionName: 'getBull',
+    args: [BigInt(tokenId)],
+    query: { enabled: !!bullsAddress && !ownerError },
+  });
+
+  const { data: listing } = useReadContract({
+    address: marketAddress ?? undefined,
+    abi: MarketplaceAbi,
+    functionName: 'listingOf',
+    args: [BigInt(tokenId)],
+    query: { enabled: !!marketAddress && !ownerError },
+  });
+
+  if (!bullsAddress) {
+    return <NotDeployed what="the bulls collection" />;
+  }
+
+  if (!ownerLoading && ownerError) {
+    return (
+      <div className="rounded border border-bull-border bg-bull-panel px-4 py-3 text-sm text-bull-text-dim">
+        {isKing ? 'the king ' : 'this bull '}hasn&apos;t been minted yet. the contract is live,
+        token #{tokenId} just doesn&apos;t exist on chain yet. this is a preview of exactly
+        what it will look like the moment it does.
+      </div>
+    );
+  }
+
+  const b = bullData as unknown as BullStruct | undefined;
+  const l = listing as unknown as ListingStruct | undefined;
+  const isListed = !!l && l.seller && l.seller !== ZERO_ADDR;
+
+  return (
+    <div className="rounded border border-bull-border bg-bull-panel p-4">
+      <dl className="grid grid-cols-2 gap-x-6 gap-y-4 text-sm sm:grid-cols-3">
+        <div>
+          <dt className="font-mono text-xs uppercase tracking-wide text-bull-text-faint">owner</dt>
+          <dd className="mt-1">
+            {ownerLoading || !owner ? (
+              'loading…'
+            ) : (
+              <a
+                href={`${explorer}/address/${owner}`}
+                target="_blank"
+                rel="noreferrer noopener"
+                className="font-mono text-bull-gold hover:underline"
+              >
+                {shortAddr(owner as string)}
+              </a>
+            )}
+          </dd>
+        </div>
+        <div>
+          <dt className="font-mono text-xs uppercase tracking-wide text-bull-text-faint">status</dt>
+          <dd className="mt-1">
+            {bullLoading || !b ? (
+              'loading…'
+            ) : b.isDead ? (
+              <span className="text-bull-red">dead 💀</span>
+            ) : (
+              <span className="text-bull-text">alive</span>
+            )}
+          </dd>
+        </div>
+        <div>
+          <dt className="font-mono text-xs uppercase tracking-wide text-bull-text-faint">elo</dt>
+          <dd className="mt-1 font-mono">{bullLoading || !b ? '—' : b.elo}</dd>
+        </div>
+        <div>
+          <dt className="font-mono text-xs uppercase tracking-wide text-bull-text-faint">
+            fight record
+          </dt>
+          <dd className="mt-1 font-mono">
+            {bullLoading || !b ? '—' : `${b.wins}W · ${b.losses}L · ${b.ties}T`}
+          </dd>
+        </div>
+        <div className="col-span-2 sm:col-span-1">
+          <dt className="font-mono text-xs uppercase tracking-wide text-bull-text-faint">
+            marketplace
+          </dt>
+          <dd className="mt-1">
+            {!marketAddress ? (
+              'not deployed yet'
+            ) : isListed ? (
+              <Link href="/market" className="text-bull-gold hover:underline">
+                listed · {formatUsd1e18(l?.usdPrice)}
+              </Link>
+            ) : (
+              'not listed'
+            )}
+          </dd>
+        </div>
+      </dl>
+      {b?.isDead && (
+        <p className="mt-4 text-sm text-bull-text-dim">
+          this bull is in the graveyard.{' '}
+          <Link href="/graveyard" className="text-bull-gold hover:underline">
+            check the revive ladder →
+          </Link>
+        </p>
+      )}
+    </div>
+  );
+}

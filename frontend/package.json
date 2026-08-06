@@ -1,0 +1,41 @@
+{
+  "name": "bnbulls-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "bnbulls — bull-themed PvP NFT game on BNB Chain. Next.js frontend scaffold.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "verify:art": "node scripts/verify-art-port.ts",
+    "verify:rarity": "node scripts/verify-rarity-port.ts",
+    "verify:combat": "node scripts/verify-combat-port.ts",
+    "verify:typed-data": "node scripts/verify-typed-data.ts",
+    "verify": "npm run verify:art && npm run verify:rarity && npm run verify:combat && npm run verify:typed-data",
+    "gen:abi": "node scripts/generate-abi.ts",
+    "gen:brand": "node scripts/gen-brand-assets.ts",
+    "gen:brand:proof": "node scripts/gen-brand-assets.ts --proof"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "5.101.4",
+    "next": "15.5.22",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "viem": "2.55.11",
+    "wagmi": "2.19.5"
+  },
+  "devDependencies": {
+    "@types/node": "20.14.10",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.4",
+    "autoprefixer": "10.5.4",
+    "eslint": "9.39.5",
+    "eslint-config-next": "15.5.22",
+    "postcss": "8.5.25",
+    "tailwindcss": "3.4.19",
+    "typescript": "5.9.3"
+  }
+}

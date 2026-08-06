@@ -1,0 +1,504 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ═══════════════════════════════════════════════════════════════════════
+   THE PALETTE LIVES HERE AND NOWHERE ELSE.
+   ═══════════════════════════════════════════════════════════════════════
+   `DECISIONS.md §17` says the look and the lore are not settled, so a
+   rebrand has to be a reskin, not a rebuild. Every colour on the site is a
+   custom property below; `tailwind.config.ts` maps each one to a `bull-*`
+   utility through `rgb(var(--x) / <alpha-value>)`, so opacity modifiers
+   (`text-bull-gold/40`) keep working. Change a triplet here and the whole
+   site changes. The lore STRINGS live in the other half of the same idea,
+   `src/lib/brand.ts`.
+
+   Values are space-separated R G B channels, NOT hex — that is what makes
+   the `<alpha-value>` slot work.
+
+   The mood (`VOICE-AND-BRAND.md §5`): dark, some blood, some marble, with
+   BNB gold as the accent rather than a wall-to-wall yellow. Gold is
+   deliberately RESERVED: brand, links, legendary tier, the 1/1, and the
+   "bazinga" CTA. Everything else is bone on dark.
+   ═════════════════════════════════════════════════════════════════════ */
+:root {
+  color-scheme: dark;
+
+  /* Backgrounds — dark, warm, a butcher's-block undertone. */
+  --bull-bg: 20 18 15; /* #14120F */
+  --bull-panel: 29 26 22; /* #1D1A16 */
+  --bull-panel-hover: 38 34 28; /* #26221C */
+  --bull-border: 51 45 36; /* #332D24 */
+
+  /* Text — bone. */
+  --bull-text: 240 234 224; /* #F0EAE0 */
+  --bull-text-dim: 176 167 147; /* #B0A793 */
+  --bull-text-faint: 110 102 86; /* #6E6656 */
+
+  /* Accent — BNB gold. `#F0B90B` is BNB Chain's own colour (DECISIONS §7). */
+  --bull-gold: 240 185 11; /* #F0B90B */
+  --bull-gold-hover: 255 206 59; /* #FFCE3B */
+  --bull-gold-ink: 20 18 15; /* text ON gold */
+  /* The hotter gold, used ONLY by the pulsing hero/nav CTA so it stays
+     visibly distinct from an ordinary gold button. */
+  --bull-gold-hot: 255 211 77; /* #FFD34D */
+
+  /* Blood — death, danger, the red rag. */
+  --bull-blood: 138 44 44; /* #8A2C2C */
+  --bull-red: 193 62 62; /* #C13E3E */
+
+  /* Rarity ladder, common → legendary (DECISIONS §7). */
+  --rarity-common: 156 146 132;
+  --rarity-uncommon: 196 105 58;
+  --rarity-rare: 110 156 92;
+  --rarity-epic: 136 146 168;
+  --rarity-legendary: 240 185 11;
+}
+
+@layer base {
+  html,
+  body {
+    background-color: rgb(var(--bull-bg));
+    color: rgb(var(--bull-text));
+    font-family: theme('fontFamily.sans');
+    font-size: 16px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    /* No page may ever scroll sideways on a phone. */
+    overflow-x: hidden;
+  }
+
+  body {
+    /* Honour iPhone safe-area insets (notch, home indicator). */
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-family: theme('fontFamily.display');
+  }
+
+  /* Pixel art must NEVER be smoothed, anywhere it is used. Every bull on
+     this site is a 48x56 grid blown up by an integer factor; a resampled
+     one is mush, and mush next to hard pixel type looks broken. */
+  canvas,
+  img.pixel,
+  canvas.pixel {
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    image-rendering: -moz-crisp-edges;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   COMPONENT VOCABULARY — ported from fighting fefers' `laws-*` set.
+   The SHAPES, sizes, tap targets and states are theirs (proven, and the
+   owner knows they work); only the colours are bnbulls.
+   ═════════════════════════════════════════════════════════════════════ */
+@layer components {
+  .bull-card {
+    background-color: rgb(var(--bull-panel));
+    border: 1px solid rgb(var(--bull-border));
+    background-image: linear-gradient(
+        180deg,
+        rgba(255, 255, 255, 0.02) 0%,
+        rgba(255, 255, 255, 0) 100%
+      ),
+      radial-gradient(circle at 30% 40%, rgba(240, 185, 11, 0.045) 0%, transparent 50%);
+    background-size: cover;
+    transition: transform 120ms ease, box-shadow 180ms ease, border-color 180ms ease;
+  }
+
+  /* Cards lift + edge-glow on hover, like picking a fighter out of a line-up. */
+  .bull-card-hover:hover {
+    transform: translateY(-2px);
+    background-color: rgb(var(--bull-panel-hover));
+    border-color: rgb(var(--bull-gold) / 0.55);
+    box-shadow: 0 4px 18px rgb(var(--bull-gold) / 0.14), 0 0 0 1px rgb(var(--bull-gold) / 0.2);
+  }
+
+  /*
+   * Primary button. Pill, gold fill, near-black ink. `min-height: 2.75rem`
+   * is Apple's 44px tap floor and is not negotiable on a phone.
+   */
+  .bull-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.625rem 1.4rem;
+    min-height: 2.75rem;
+    font-family: theme('fontFamily.display');
+    font-size: 0.85rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    border-radius: 9999px;
+    color: rgb(var(--bull-gold-ink));
+    background-color: rgb(var(--bull-gold));
+    border: 2px solid rgb(var(--bull-gold));
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+    transition: transform 80ms ease, box-shadow 150ms ease, filter 150ms ease,
+      background-color 120ms ease;
+  }
+  .bull-btn:hover:not(:disabled) {
+    background-color: rgb(var(--bull-gold-hover));
+    box-shadow: 0 0 14px rgb(var(--bull-gold) / 0.35);
+    filter: brightness(1.04);
+  }
+  .bull-btn:active:not(:disabled) {
+    transform: translateY(2px) scale(0.985);
+    box-shadow: 0 0 4px rgb(var(--bull-gold) / 0.25);
+  }
+  .bull-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .bull-btn-secondary {
+    background-color: transparent;
+    color: rgb(var(--bull-text));
+    border: 2px solid rgb(var(--bull-border));
+  }
+  .bull-btn-secondary:hover:not(:disabled) {
+    border-color: rgb(var(--bull-gold));
+    background-color: transparent;
+  }
+
+  .bull-btn-danger {
+    background-color: rgb(var(--bull-red));
+    border-color: rgb(var(--bull-red));
+    color: rgb(var(--bull-text));
+  }
+  .bull-btn-danger:hover:not(:disabled) {
+    background-color: rgb(var(--bull-red) / 0.85);
+  }
+
+  /* Heartbeat for the big-moment buttons (mint, fight). Add alongside
+     `.bull-btn`. */
+  @keyframes bull-pulse {
+    0%,
+    100% {
+      box-shadow: 0 0 0 0 rgb(var(--bull-gold) / 0.45);
+    }
+    50% {
+      box-shadow: 0 0 0 7px rgb(var(--bull-gold) / 0);
+    }
+  }
+  .bull-btn-pulse:not(:disabled) {
+    animation: bull-pulse 1.8s ease-out infinite;
+  }
+
+  /* Display header. Space Grotesk, tight tracking, sentence case. */
+  .bull-header {
+    font-family: theme('fontFamily.display');
+    font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+
+  /* 16px text so iOS Safari does not auto-zoom the page on focus. */
+  .bull-input {
+    display: block;
+    width: 100%;
+    min-height: 2.75rem;
+    padding: 0.5rem 0.75rem;
+    font-size: 1rem;
+    font-family: theme('fontFamily.mono');
+    color: rgb(var(--bull-text));
+    background-color: rgb(var(--bull-bg));
+    border: 1px solid rgb(var(--bull-border));
+    outline: none;
+  }
+  .bull-input:focus {
+    border-color: rgb(var(--bull-gold));
+  }
+
+  /*
+   * "Gold bazinga" — the named, reusable CTA look (`VOICE-AND-BRAND.md §5`).
+   * ⚠ HERO AND NAV ONLY. A plain "buy" sitting next to the mint button must
+   * MATCH the mint button (`.bull-btn`), never this. What separates the two
+   * is the HOTTER gold plus the glow pulse, so the distinction survives a
+   * theme where the brand colour is already gold.
+   */
+  @keyframes bull-bazinga-glow {
+    0%,
+    100% {
+      box-shadow: 0 0 6px rgb(var(--bull-gold-hot) / 0.55), 0 0 2px rgb(var(--bull-gold-hot) / 0.85);
+    }
+    50% {
+      box-shadow: 0 0 24px rgb(var(--bull-gold-hot) / 0.95), 0 0 10px rgb(var(--bull-gold-hot) / 0.9);
+    }
+  }
+  .bull-bazinga {
+    background-color: rgb(var(--bull-gold-hot)) !important;
+    border-color: rgb(var(--bull-gold-hot)) !important;
+    color: rgb(var(--bull-gold-ink)) !important;
+    animation: bull-bazinga-glow 1.5s ease-in-out infinite;
+  }
+  .bull-bazinga:hover {
+    filter: brightness(1.08);
+    transform: translateY(-1px);
+  }
+
+  /* Text-only variant for the nav row: no box, sits with the other links,
+     but hot gold with a pulsing glow so it still pops. */
+  @keyframes bull-bazinga-text-glow {
+    0%,
+    100% {
+      text-shadow: 0 0 4px rgb(var(--bull-gold-hot) / 0.5);
+    }
+    50% {
+      text-shadow: 0 0 11px rgb(var(--bull-gold-hot) / 0.95);
+    }
+  }
+  .bull-bazinga-text {
+    color: rgb(var(--bull-gold-hot)) !important;
+    animation: bull-bazinga-text-glow 1.5s ease-in-out infinite;
+  }
+
+  /*
+   * Landing hero backdrop: "the yards" — a stockyard rail grid in gold,
+   * radially masked so it fades out under the copy. Pure CSS, no image
+   * files. The pseudo-elements paint at z-0, so the host section needs
+   * `relative overflow-hidden` and the content `relative z-10`.
+   */
+  .bg-yard-grid::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image: linear-gradient(rgb(var(--bull-gold) / 0.07) 1px, transparent 1px),
+      linear-gradient(90deg, rgb(var(--bull-gold) / 0.07) 1px, transparent 1px);
+    background-size: 2.2rem 2.2rem;
+    mask-image: radial-gradient(ellipse 70% 60% at 50% 45%, #000 20%, transparent 75%);
+    -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 45%, #000 20%, transparent 75%);
+  }
+  .bg-yard-grid::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(
+      ellipse 50% 45% at 50% 42%,
+      rgb(var(--bull-gold) / 0.1),
+      transparent 70%
+    );
+  }
+
+  /* The same treatment dialled right down, fixed behind every page, so no
+     screen is a flat black rectangle. Pointer-events off; never affects
+     layout. */
+  .bull-app-texture::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background-image: linear-gradient(rgb(var(--bull-gold) / 0.022) 1px, transparent 1px),
+      linear-gradient(90deg, rgb(var(--bull-gold) / 0.022) 1px, transparent 1px);
+    background-size: 2.6rem 2.6rem;
+    mask-image: radial-gradient(ellipse 90% 90% at 50% 0%, #000 0%, transparent 85%);
+    -webkit-mask-image: radial-gradient(ellipse 90% 90% at 50% 0%, #000 0%, transparent 85%);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .bull-btn,
+    .bull-card {
+      transition: none;
+    }
+    .bull-btn-pulse:not(:disabled) {
+      animation: none;
+    }
+    .bull-bazinga {
+      animation: none;
+      box-shadow: 0 0 14px rgb(var(--bull-gold-hot) / 0.8);
+    }
+    .bull-bazinga-text {
+      animation: none;
+      text-shadow: 0 0 8px rgb(var(--bull-gold-hot) / 0.8);
+    }
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   THE POTS, DRESSED.
+   One vocabulary shared by the site-wide ticker strip and the standing
+   panels, so both surfaces read as the same two pots. The pot's colour
+   rides in as custom properties off ONE class on the outermost element
+   (`pot-bnbull` or `pot-bnb`), so every rule below is written once and
+   dresses both.
+
+   $BNBULL is gold (the brand), BNB is bone-white/steel. You should never
+   have to read the label to know which pot you are looking at.
+
+   Everything that moves in here is decoration and dies under
+   prefers-reduced-motion at the bottom. The NUMBERS never move:
+   tabular-nums everywhere, so a tick up cannot jitter a row.
+   ═════════════════════════════════════════════════════════════════════ */
+@layer components {
+  .pot-bnbull {
+    --pot-ink: 240 185 11;
+    --pot-ink-bright: 255 214 92;
+  }
+  .pot-bnb {
+    --pot-ink: 196 205 220;
+    --pot-ink-bright: 232 238 248;
+  }
+
+  .pot-card {
+    position: relative;
+    overflow: hidden;
+    border-color: rgb(var(--pot-ink) / 0.24);
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.3), 0 12px 34px -22px rgb(var(--pot-ink) / 0.5);
+  }
+  .pot-card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    z-index: 2;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgb(var(--pot-ink)),
+      rgb(var(--pot-ink-bright)),
+      rgb(var(--pot-ink)),
+      transparent
+    );
+  }
+  .pot-card::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background: radial-gradient(120% 65% at 50% 0%, rgb(var(--pot-ink) / 0.09), transparent 68%);
+  }
+  .pot-card > * {
+    position: relative;
+    z-index: 1;
+  }
+  .pot-card:hover {
+    border-color: rgb(var(--pot-ink));
+  }
+
+  /* The prize plate: the headline number's own frame. */
+  .pot-plate {
+    position: relative;
+    overflow: hidden;
+    width: 100%;
+    text-align: left;
+    border: 1px solid rgb(var(--pot-ink) / 0.24);
+    border-radius: 0.25rem;
+    background: radial-gradient(95% 130% at 50% 125%, rgb(var(--pot-ink) / 0.09), transparent 72%),
+      rgba(0, 0, 0, 0.26);
+    box-shadow: inset 0 0 30px -14px rgb(var(--pot-ink) / 0.5);
+  }
+
+  /* The headline figure. Big, inked, breathing very slowly. */
+  @keyframes pot-figure-breathe {
+    0%,
+    100% {
+      text-shadow: 0 0 16px rgb(var(--pot-ink) / 0.24), 0 2px 0 rgba(0, 0, 0, 0.5);
+    }
+    50% {
+      text-shadow: 0 0 32px rgb(var(--pot-ink) / 0.5), 0 2px 0 rgba(0, 0, 0, 0.5);
+    }
+  }
+  .pot-figure {
+    color: rgb(var(--pot-ink));
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    font-size: clamp(1.9rem, 8.5vw, 3rem);
+    animation: pot-figure-breathe 3.8s ease-in-out infinite;
+  }
+
+  .pot-chip {
+    display: inline-flex;
+    align-items: center;
+    color: rgb(var(--pot-ink));
+    border: 1px solid rgb(var(--pot-ink) / 0.24);
+    background: rgb(var(--pot-ink) / 0.09);
+    border-radius: 9999px;
+    padding: 0.1rem 0.5rem;
+    white-space: nowrap;
+  }
+
+  /* The ticker strip's chips pick up the same inks. */
+  .pot-ticker-chip {
+    border: 1px solid rgb(var(--pot-ink) / 0.24);
+    background: rgb(var(--pot-ink) / 0.09);
+    border-radius: 9999px;
+    transition: border-color 140ms ease, background-color 140ms ease;
+  }
+  .pot-ticker-chip:hover {
+    border-color: rgb(var(--pot-ink));
+    background: rgb(var(--pot-ink) / 0.24);
+  }
+  .pot-ticker-value {
+    color: rgb(var(--pot-ink));
+    text-shadow: 0 0 10px rgb(var(--pot-ink) / 0.5);
+  }
+
+  @keyframes pot-shimmer {
+    0%,
+    100% {
+      filter: brightness(1);
+    }
+    50% {
+      filter: brightness(1.45);
+    }
+  }
+  .pot-shimmer {
+    animation: pot-shimmer 2.8s ease-in-out infinite;
+  }
+
+  @keyframes pot-coin-nudge {
+    0%,
+    92%,
+    100% {
+      transform: translateY(0) rotate(0deg);
+    }
+    95% {
+      transform: translateY(-2px) rotate(-12deg);
+    }
+    98% {
+      transform: translateY(-1px) rotate(9deg);
+    }
+  }
+  .pot-coin {
+    display: inline-block;
+    animation: pot-coin-nudge 4.5s ease-in-out infinite;
+  }
+
+  /* Decoration only. Under reduced-motion every pot surface renders at its
+     resting state: the figures are all still exactly there, they just stop
+     moving. */
+  @media (prefers-reduced-motion: reduce) {
+    .pot-figure,
+    .pot-shimmer,
+    .pot-coin {
+      animation: none;
+    }
+    .pot-figure {
+      text-shadow: 0 0 22px rgb(var(--pot-ink) / 0.24), 0 2px 0 rgba(0, 0, 0, 0.5);
+    }
+    .pot-ticker-chip {
+      transition: none;
+    }
+  }
+}
+
+/* Global brake. Anything not caught above still collapses here. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

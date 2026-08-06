@@ -1,0 +1,56 @@
+[profile.default]
+src = "contracts"
+out = "out"
+libs = ["lib"]
+test = "test"
+script = "script"
+solc_version = "0.8.24"
+optimizer = true
+optimizer_runs = 200
+via_ir = false
+# The BSC mainnet-fork E2E package (`test/fork/`) is EXCLUDED from the default
+# run on purpose: the mock suite must stay fast and OFFLINE. Fork tests need an
+# archive RPC and take minutes, not milliseconds.
+#   run them with:  FOUNDRY_PROFILE=fork forge test
+# The how and the why are in `test/fork/ForkBase.t.sol`'s header. ⚠ the RPC
+# must be an ARCHIVE endpoint: publicnode answers a pinned-block state read
+# with HTTP 403, so `RPC_URL` from `.env.example` cannot serve a pinned fork.
+no_match_path = "test/fork/**"
+# Read everywhere; write ONLY into the two deployment-record directories.
+# ⚠ `deployments/` (real chains, committed) and `.state/` (anvil, gitignored)
+# are SEPARATE PATHS ON PURPOSE. The $154 loss in DEPLOY-SAFETY-PREFLIGHT §1
+# happened because a fork rehearsal wrote its throwaway addresses into the
+# mainnet env file. No script here writes an env file at all, and a local run
+# cannot reach the mainnet record.
+fs_permissions = [
+    { access = "read", path = "./" },
+    { access = "read-write", path = "./deployments" },
+    { access = "read-write", path = "./.state" },
+]
+
+# The fork profile: the SAME compiler settings, pointed at test/fork only.
+# `no_match_path` is cleared to a pattern that matches nothing, because
+# profiles inherit `[profile.default]` and would otherwise exclude the very
+# directory they exist to run.
+[profile.fork]
+test = "test/fork"
+no_match_path = "test/fork/__nothing_matches_this__/*"
+
+# BNB Chain is chain 56. Fork tests run against a real mainnet fork so the
+# pancakeswap router, the chainlink BNB/USD feed and the VRF coordinator are
+# the live contracts, not mocks — the whole point of the money-layer rewrite is
+# that the fefers "native == USDT == the dollar" identity is false here, and
+# only a fork proves it.
+[rpc_endpoints]
+bsc = "${RPC_URL}"
+bsc_testnet = "${RPC_URL_TESTNET}"
+
+# etherscan v2: one key works across chains, v1 per-chain endpoints are
+# deprecated. VERIFY the exact incantation with a real key at deploy.
+[etherscan]
+bsc = { key = "${ETHERSCAN_API_KEY}", chain = 56, url = "https://api.etherscan.io/v2/api?chainid=56" }
+
+[fmt]
+line_length = 100
+tab_width = 4
+bracket_spacing = true

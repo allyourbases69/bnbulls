@@ -1,0 +1,957 @@
+<title>BNBULLS — sprite pass 01</title>
+<style>
+  :root {
+    --ground: #E9EBF0;
+    --panel: #FDFDFE;
+    --panel-2: #DFE3EB;
+    --ink: #161A22;
+    --ink-2: #4A5262;
+    --ink-3: #79808F;
+    --rule: #C7CCD6;
+    --gold: #C98F05;
+    --gold-ink: #12151C;
+    --grid: rgba(22, 26, 34, 0.055);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground: #12151C;
+      --panel: #1A1F29;
+      --panel-2: #232936;
+      --ink: #E6E9F0;
+      --ink-2: #A2AAB9;
+      --ink-3: #6E7686;
+      --rule: #2C333F;
+      --gold: #F0B90B;
+      --gold-ink: #12151C;
+      --grid: rgba(230, 233, 240, 0.045);
+    }
+  }
+  :root[data-theme="light"] {
+    --ground: #E9EBF0; --panel: #FDFDFE; --panel-2: #DFE3EB;
+    --ink: #161A22; --ink-2: #4A5262; --ink-3: #79808F;
+    --rule: #C7CCD6; --gold: #C98F05; --gold-ink: #12151C;
+    --grid: rgba(22, 26, 34, 0.055);
+  }
+  :root[data-theme="dark"] {
+    --ground: #12151C; --panel: #1A1F29; --panel-2: #232936;
+    --ink: #E6E9F0; --ink-2: #A2AAB9; --ink-3: #6E7686;
+    --rule: #2C333F; --gold: #F0B90B; --gold-ink: #12151C;
+    --grid: rgba(230, 233, 240, 0.045);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background:
+      linear-gradient(var(--grid) 1px, transparent 1px) 0 0 / 100% 8px,
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px) 0 0 / 8px 100%,
+      var(--ground);
+    color: var(--ink);
+    font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+.wrap { max-width: 1180px; margin: 0 auto; padding: 0 24px 96px; }
+
+.mono {
+    font-family: ui-monospace, "Cascadia Code", "SF Mono", Consolas, "Liberation Mono", monospace;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ---------- masthead ---------- */
+  header { padding: 64px 0 40px; border-bottom: 2px solid var(--ink); }
+.eyebrow {
+    font-family: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+    font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--ink-3); margin: 0 0 18px;
+  }
+  h1 {
+    font-size: clamp(38px, 7vw, 74px); line-height: 0.92; margin: 0 0 20px;
+    font-weight: 800; letter-spacing: -0.045em; text-wrap: balance;
+  }
+  h1 .legendary { color: var(--gold); }
+.standfirst {
+    max-width: 62ch; margin: 0; color: var(--ink-2); font-size: 18px;
+  }
+.facts {
+    display: flex; flex-wrap: wrap; gap: 8px; margin-top: 28px; padding: 0; list-style: none;
+  }
+.facts li {
+    font-family: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+    font-size: 12px; letter-spacing: 0.04em; color: var(--ink-2);
+    border: 1px solid var(--rule); border-radius: 2px;
+    padding: 5px 10px; background: var(--panel);
+  }
+.facts li b { color: var(--ink); font-weight: 700; }
+
+  /* ---------- sections ---------- */
+  section { padding-top: 72px; }
+.sec-head { display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; margin-bottom: 8px; }
+.sec-num {
+    font-family: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+    font-size: 12px; color: var(--gold); letter-spacing: 0.14em;
+  }
+  h2 {
+    font-size: clamp(24px, 3.4vw, 34px); margin: 0; font-weight: 800;
+    letter-spacing: -0.03em; text-wrap: balance;
+  }
+.sec-note { max-width: 68ch; color: var(--ink-2); margin: 0 0 32px; }
+
+  /* ---------- sprites ---------- */
+  canvas { image-rendering: pixelated; display: block; }
+
+.heroes { display: grid; gap: 14px; }
+.tier-row {
+    background: var(--panel); border: 1px solid var(--rule); border-radius: 3px;
+    border-left: 3px solid var(--gold);
+    padding: 16px; display: grid; gap: 18px;
+    grid-template-columns: 208px 1fr; align-items: start;
+  }
+.tier-head { display: flex; flex-direction: column; gap: 6px; }
+.tier-name {
+    display: flex; align-items: center; gap: 8px;
+    color: var(--ink); font-weight: 800; letter-spacing: 0.1em;
+    text-transform: uppercase; font-size: 14px;
+  }
+.tier-stat { font-size: 11.5px; color: var(--gold); letter-spacing: 0.04em; }
+.tier-note { margin: 2px 0 6px; font-size: 13px; color: var(--ink-2); }
+.swatch { width: 11px; height: 11px; border-radius: 1px; border: 1px solid var(--rule); flex: none; }
+.tier-tells {
+    display: grid; grid-template-columns: auto 1fr; gap: 1px 10px; margin: 0;
+    font-family: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+    font-size: 11px; line-height: 1.6;
+  }
+.tier-tells dt { color: var(--ink-3); }
+.tier-tells dd { margin: 0; color: var(--ink-2); }
+.tier-strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.tier-strip figure { margin: 0; }
+.tier-strip canvas { width: 100%; height: auto; border-radius: 2px; }
+.tier-strip figcaption {
+    font-size: 10.5px; color: var(--ink-3); margin-top: 5px; text-align: center;
+  }
+  @media (max-width: 700px) { .tier-row { grid-template-columns: 1fr; } }
+
+  /* ---------- inspector ---------- */
+.inspect {
+    display: grid; gap: 22px; grid-template-columns: 190px 1fr;
+    background: var(--panel); border: 1px solid var(--rule); border-radius: 3px;
+    padding: 18px; margin-bottom: 22px; align-items: start;
+  }
+.inspect canvas { width: 100%; height: auto; border-radius: 2px; }
+.inspect table { border-collapse: collapse; width: 100%; font-size: 13px; }
+.inspect th, .inspect td {
+    text-align: left; padding: 5px 0; border-bottom: 1px solid var(--rule); vertical-align: top;
+  }
+.inspect th {
+    color: var(--ink-3); font-weight: 400; width: 116px; letter-spacing: 0.08em;
+    text-transform: uppercase; font-size: 11px; padding-top: 8px;
+  }
+.inspect td { color: var(--ink); }
+.ramp { display: flex; gap: 3px; margin-top: 4px; }
+.ramp span {
+    width: 30px; height: 20px; border: 1px solid var(--rule); border-radius: 1px;
+    font-size: 9px; display: grid; place-items: center; color: rgba(0,0,0,0.55); font-weight: 700;
+  }
+
+.grid {
+    display: grid; gap: 6px;
+    grid-template-columns: repeat(auto-fill, minmax(74px, 1fr));
+  }
+.grid button {
+    padding: 0; border: 1px solid var(--rule); background: var(--panel);
+    border-radius: 2px; cursor: pointer; overflow: hidden; display: block;
+    transition: transform 120ms ease, border-color 120ms ease;
+  }
+.grid button canvas { width: 100%; height: auto; }
+.grid button:hover { transform: translateY(-2px); border-color: var(--gold); }
+.grid button:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.grid button[aria-pressed="true"] { border-color: var(--gold); box-shadow: inset 0 0 0 2px var(--gold); }
+
+.weapons { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); }
+.wep {
+    background: var(--panel); border: 1px solid var(--rule); border-radius: 3px; padding: 8px;
+  }
+.wep canvas { width: 100%; height: auto; }
+.wep-name {
+    font-family: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+    font-size: 11px; color: var(--ink-2); margin-top: 7px; display: flex; justify-content: space-between;
+  }
+.wep-name b { color: var(--ink); font-weight: 700; }
+
+  /* ---------- tables + prose ---------- */
+.scroller { overflow-x: auto; }
+  table.data { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 14px; }
+  table.data th, table.data td { text-align: left; padding: 9px 14px 9px 0; border-bottom: 1px solid var(--rule); }
+  table.data th {
+    font-family: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+    font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); font-weight: 400;
+  }
+  table.data td.num {
+    font-family: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+
+.cmp {
+    background: var(--panel); border: 1px solid var(--rule); border-radius: 3px;
+    padding: 16px; overflow-x: auto;
+  }
+.cmp img { image-rendering: pixelated; display: block; max-width: 100%; height: auto; }
+
+.calls { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }
+.calls li {
+    background: var(--panel); border: 1px solid var(--rule); border-left: 3px solid var(--gold);
+    border-radius: 2px; padding: 14px 16px;
+  }
+.calls b { display: block; margin-bottom: 3px; }
+.calls span { color: var(--ink-2); font-size: 15px; }
+
+  code {
+    font-family: ui-monospace, "Cascadia Code", "SF Mono", Consolas, monospace;
+    font-size: 0.88em; background: var(--panel-2); padding: 1px 5px; border-radius: 2px;
+  }
+
+  @media (max-width: 620px) {
+.inspect { grid-template-columns: 1fr; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+</style>
+
+<div class="wrap">
+
+<!--
+  ⚠ SUPERSEDED SNAPSHOT — DO NOT READ TIERS OR WEAPONS OFF THIS PAGE.
+
+  This file carries its OWN inlined copy of the art engine, frozen at "pass 01".
+  It has since diverged from `generator/bull.mjs` in ways that matter:
+
+    • its `assignBands()` is the deleted LCG shuffle. The chain shuffles the
+      TIER ARRAY with Xorshift128+ (`Bulls._initializeRarity()`), and the two
+      disagree on 377 of the 500 tokens. `DECISIONS.md §27`.
+    • its `WEAPONS` array is in the OLD order and it picks uniformly. The chain
+      draws weighted, from the token's own tier slice only.
+    • it predates capes, tiered weapon metal and the legendary BNB diamond —
+      three of the rarity tells.
+
+  It is left in place because it is a design artefact, not a renderer: nothing
+  imports it and nothing ships it. The live renderers are `generator/build.mjs`
+  (contact sheets) and `frontend/src/lib/art/` (the site), which share ONE
+  engine and are gated by `npm run verify:art` and `npm run verify:rarity`.
+  If this page is ever wanted again, re-port it from `bull.mjs` wholesale —
+  do not patch it piecemeal, that is how a fourth divergent copy is born.
+-->
+<header>
+  <p class="eyebrow">bnbulls · art engine · pass 01 · 48 × 56</p>
+  <div style="border:2px solid #C0392B;background:rgba(192,57,43,.10);
+              border-radius:10px;padding:14px 16px;margin:0 0 22px;
+              font:600 14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
+              color:var(--ink)">
+    ⚠ SUPERSEDED SNAPSHOT (pass 01). The tiers and weapons shown below are
+    <strong>not</strong> the ones the contract assigns — this page still uses the
+    deleted <code>assignBands()</code> shuffle and a uniform weapon pick. Hides,
+    horns and armour are pre-cape, pre-metal-tier. Use
+    <code>generator/build.mjs</code> or the site for anything real.
+  </div>
+  <h1>Bull sprites,<br>generated on the <span class="legendary">real engine</span>.</h1>
+  <p class="standfirst">
+    Every bull on this page is drawn live in your browser by the same deterministic
+    code that would run in the node build and on the site — seeded LCG, one skin
+    colour driving a five-step ramp, an automatic outline pass. Nothing here is a
+    mockup. Token #n renders identically everywhere, forever.
+  </p>
+  <ul class="facts">
+    <li><b>500</b> supply + king #501</li>
+    <li><b>5</b> bands</li>
+    <li><b>12</b> weapon slots</li>
+    <li><b>6</b> hides per band</li>
+    <li>canvas <b>48×56</b></li>
+    <li>seed <b class="mono">0x0B17B011</b></li>
+  </ul>
+</header>
+
+<section>
+  <div class="sec-head"><span class="sec-num">01</span><h2>Common to legendary</h2></div>
+  <p class="sec-note">
+    Four real rolled tokens per tier, taken straight off the shuffle — no
+    cherry-picking, so this is what each tier actually looks like. Three tells
+    escalate together: the <b>hide family</b>, the <b>horn colour</b> (common is
+    always plain bone; legendary rolls gilt or ivory), and <b>boots</b> (never on
+    common, sometimes on uncommon, common above that). Armour contrasts the hide
+    rather than tinting it — that single change is what separates a 
+    from livestock in a poncho. Legendary is gold because <code>#F0B90B</code> is
+    BNB Chain's own colour.
+  </p>
+  <div class="heroes" id="heroes"></div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">02</span><h2>A straight roll</h2></div>
+  <p class="sec-note">
+    Forty-eight consecutive token ids with no overrides — band, hide, eye, weapon
+    and accessories all fall out of the seed. This is what a mint actually looks
+    like. Click any bull to inspect its traits and its derived palette ramp.
+  </p>
+  <div class="inspect">
+    <canvas id="inspectCanvas" width="56" height="64"></canvas>
+    <table>
+      <tbody id="inspectBody"></tbody>
+    </table>
+  </div>
+  <div class="grid" id="grid"></div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">03</span><h2>The twelve weapons</h2></div>
+  <p class="sec-note">
+    The catalogue count is locked at twelve because the combat stats and matchup
+    weights are keyed to it — these are sprite and name changes only, nothing in
+    the sim moves. Each is held vertically through the fist so the grip always
+    reads, and mirrors cleanly when a bull is flipped to face its opponent.
+    The right horn tip reaches <code>x 32</code>, and the outline pass adds a
+    pixel to <em>both</em> it and the weapon — so a single pixel of shape
+    clearance still reads as a collision. The shaft sits at <code>x 38</code>
+    and no weapon head may extend left of <code>SX−2</code>, leaving two clear
+    pixels between the outlines at the tightest point. That's a hard rule of the
+    engine, not a per-weapon tweak; the reaper's blade sweeps outward for the
+    same reason.
+  </p>
+  <div class="weapons" id="weapons"></div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">04</span><h2>32×44 vs 48×56, actual size</h2></div>
+  <p class="sec-note">
+    A live fefer on the left, rendered by the fighting fefers generator itself; a
+    bnbull on the right from this one. Same zoom, no scaling tricks. The fefer is
+    a side-on silhouette with one readable feature — the jaw. The bull has to
+    carry horns, a brow, a muzzle, armour with contrast trim and a held weapon,
+    front-on. That is what the extra <b>16 × 12</b> pixels buy, and it is also why
+    the pitchfork tines had to move: at 48 wide the horn sweep and the weapon
+    column are close enough that a symmetric three-tine head only just fits.
+  </p>
+  <div class="cmp"><img src="data:image/png;base64,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" alt="A 32x44 fighting fefers sprite beside a 48x56 bnbulls sprite at identical zoom"></div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">05</span><h2>How a bull gets its colours</h2></div>
+  <p class="sec-note">
+    Each hide is a single RGB value. Everything else is derived from it by fixed
+    multipliers, so a new hide is one line of config and can never produce a
+    clashing sprite. This is the fefers ramp, carried over unchanged.
+  </p>
+  <div class="scroller">
+    <table class="data">
+      <thead>
+        <tr><th>Tier</th><th>Count</th><th>Hides</th><th>Armour</th><th>Clean</th><th>Note</th></tr>
+      </thead>
+      <tbody id="bandTable"></tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <div class="sec-head"><span class="sec-num">06</span><h2>Settled</h2></div>
+  <p class="sec-note">Locked in as of this pass — recorded in the project docs.</p>
+  <ul class="calls">
+    <li>
+      <b>Pricing: chainlink BNB/USD, with BNBULL always the discounted leg.</b>
+      <span>Dollar stickers convert at pay time. The 10% discount is BNBULL and only BNBULL — implemented as an owner-settable <code>discountBpsOf[asset]</code> mapping under a hard <code>MAX_DISCOUNT_BPS</code> cap, so the rate is retunable without a redeploy.</span>
+    </li>
+    <li>
+      <b>Currency translation from fefers: $FEFER → $BNBULL, $USDT0 → $BNB.</b>
+      <span>The rule for reading every line of the old codebase. Anywhere fefers bought or held $FEFER, bnbulls does the same for $BNBULL; anywhere it treated USDT0 as the native gas token, that's BNB — except BNB is volatile, so those sites need the oracle.</span>
+    </li>
+    <li>
+      <b>Socials, on every contract we deploy.</b>
+      <span class="mono">x.com/WeAreBNBulls · t.me/WeAreBNBullsBulls</span>
+      <span>Owner-settable strings plus <code>@custom:</code> natspec in each header. Not on the BNBULL token itself — four.meme owns that one, so it goes in bscscan token info instead.</span>
+    </li>
+    <li>
+      <b>Weapon clearance rule.</b>
+      <span>Shaft at <code>x 38</code>, nothing left of <code>SX−2</code> — two clear pixels between outlines. Fixed the horn tangle across all twelve.</span>
+    </li>
+    <li>
+      <b>The outline pass is 8-connected, runs twice, and the grid edge is off limits.</b>
+      <span>Three separate holes in the silhouette, all now closed. Checking only the four orthogonal neighbours left every 45° edge unoutlined; running the pass once left accessories bare; and anything drawn on column 0 or 47 had <em>nowhere</em> to put an outline, which is what kept the horn tip raw. The composition is inset by a pixel and the build now sweeps all <span class="mono">3,960</span> band × hide × weapon × accessory × horn combinations, failing if any pixel lands on the border ring.</span>
+    </li>
+    <li>
+      <b>Onyx shades are inverted.</b>
+      <span>Default dark-framed shades vanish on a near-black hide, so the onyx band gets a pale steel frame with a dark glint. Same object, flipped for contrast — the accessory palette is per-band already, so this needed no new mechanism.</span>
+    </li>
+  </ul>
+
+  <div class="sec-head" style="margin-top:48px"><span class="sec-num">07</span><h2>Still yours to call</h2></div>
+  <p class="sec-note">Four defaults I picked that you can still overrule.</p>
+  <ul class="calls">
+    <li>
+      <b>Canvas size — 48×56, up from fefers' 32×44.</b>
+      <span>The horns, armour and a readable angry brow don't fit in 32×44. Bigger canvas costs nothing on-chain (art is rendered off-chain from stats) but it is more art authoring. Say the word and I'll take it back down.</span>
+    </li>
+    <li>
+      <b>Gold as the top band, not blue.</b>
+      <span>On fefers blue was the flex. Here the equivalent is BNB gold — it ties the rarest bulls to the chain's own brand colour. Blue means nothing on BNB.</span>
+    </li>
+    <li>
+      <b>Band names: dust / ember / venom / onyx / gold.</b>
+      <span>Straight retheme of dusty / burnt / weird / golden / blue. Counts and clean-chances are carried over 1:1 so the rarity maths is unchanged.</span>
+    </li>
+    <li>
+      <b>No ears.</b>
+      <span>At this size they land on the same rows as the eyes and turn the skull into a mushroom. The horns carry the silhouette. Reversible if you hate it.</span>
+    </li>
+  </ul>
+</section>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ===== engine: identical maths to generator/bull.mjs =====
+  var W = 48, H = 56, TILE_W = 56, TILE_H = 64, MARGIN = 4;
+  var MASTER_SEED = 0x0B17B011;
+
+  function lcg(seed) {
+    var s = seed >>> 0;
+    return function () {
+      s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+      return s / 4294967296;
+    };
+  }
+  function tokenSeed(id) {
+    var h = (MASTER_SEED ^ Math.imul(id, 2654435761)) >>> 0;
+    h = Math.imul(h ^ (h >>> 16), 2246822519) >>> 0;
+    return (h ^ (h >>> 13)) >>> 0;
+  }
+
+  var SUPPLY = 500;
+  var BANDS = ["common", "uncommon", "rare", "epic", "legendary"];
+  var BAND_COUNTS = { common: 200, uncommon: 130, rare: 90, epic: 50, legendary: 30 };
+  var CLEAN_CHANCE = { common: 0.70, uncommon: 0.60, rare: 0.50, epic: 0.40, legendary: 0.35 };
+  var BAND_INFO = {
+    common:    { tier:1, family:"dust",  note: "greys and browns. hide and hard yakka.", bg: [229,222,208], floor: [201,191,171] },
+    uncommon:  { tier:2, family:"ember", note: "the warm one. rust, ember, blood.",  bg: [238,214,190], floor: [212,178,146] },
+    rare:      { tier:3, family:"venom", note: "greens and purples. the wrong ones.", bg: [212,222,204], floor: [178,192,166] },
+    epic:      { tier:4, family:"onyx",  note: "black hide, cold steel.",             bg: [206,212,220], floor: [168,176,190] },
+    legendary: { tier:5, family:"gold",  note: "bnb gold. the top of the ladder.",             bg: [246,232,188], floor: [222,198,136] }
+  };
+  var SKINS = {
+    common:  [["ash",[128,126,120]],["slate",[108,104,98]],["bone",[148,142,132]],["dirt",[139,105,72]],["mud",[117,88,60]],["tan",[158,124,88]]],
+    uncommon: [["rust",[198,88,52]],["blood",[172,54,44]],["ochre",[214,120,48]],["clay",[166,84,40]],["amber",[222,148,62]],["brick",[188,96,70]]],
+    rare: [["swamp",[96,148,72]],["moss",[72,124,88]],["slime",[122,164,60]],["grape",[128,88,168]],["midnight",[98,72,142]],["orchid",[156,102,180]]],
+    epic:  [["pitch",[58,58,66]],["charcoal",[76,78,88]],["iron",[92,96,108]],["obsidian",[44,46,56]],["gunmetal",[104,110,124]],["soot",[66,64,62]]],
+    legendary:  [["bnb gold",[240,185,11]],["honey",[226,178,58]],["bronze",[192,140,36]],["butter",[234,198,96]],["tarnish",[176,128,40]],["brass",[214,166,70]]]
+  };
+  var EYES = [["yellow-green",[196,214,74]],["amber",[232,180,60]],["red",[222,74,52]],
+              ["lime",[150,220,90]],["pale",[240,240,230]],["icy",[110,200,220]]];
+  var BAND_EYES = { common:[0,1,2,3,5], uncommon:[0,3,4,5], rare:[0,1,2,3,5], epic:[1,2,4,5], legendary:[2,3,4,5] };
+  var WEAPONS = ["maul","pitchfork","sledge","cleaver","pike","hornbow",
+                 "shiv","morningstar","reaper","prod","ring","bolter"];
+  var WEAPON_KIND = { maul:"club", pitchfork:"trident", sledge:"axe", cleaver:"sword",
+    pike:"spear", hornbow:"bow", shiv:"dagger", morningstar:"flail", reaper:"scythe",
+    prod:"staff", ring:"boomerang", bolter:"crossbow" };
+  var ACC_POOLS = {
+    common:  [["ringnose"],["bandana"],["horncaps"],["ringnose","bandana"]],
+    uncommon: [["bandana"],["shades"],["horncaps"],["ringnose"],["boots"]],
+    rare: [["shades"],["horncaps"],["boots"],["bandana"],["boots","shades"]],
+    epic:  [["shades"],["boots"],["horncaps"],["shades","ringnose"],["boots","shades"]],
+    legendary:  [["crown"],["boots"],["horncaps"],["crown","boots"],["crown","shades"],["boots","shades"]]
+  };
+  var ACC_LABEL = { ringnose:"nose ring", bandana:"bandana", horncaps:"horn caps",
+                    shades:"shades", crown:"crown", boots:"boots" };
+  // horn colour — the second rarity tell. dust is always plain bone.
+  var HORN_POOLS = {
+    common:  [["bone",[228,224,208],[176,170,152]]],
+    uncommon: [["bone",[228,224,208],[176,170,152]],["ash",[198,192,180],[148,142,130]]],
+    rare: [["bone",[228,224,208],[176,170,152]],["jade",[186,222,196],[124,166,138]]],
+    epic:  [["obsidian",[96,98,110],[56,58,68]],["steel",[198,208,224],[134,144,162]]],
+    legendary:  [["gilt",[246,208,96],[196,150,32]],["ivory",[248,244,228],[198,190,166]]]
+  };
+  var ARMOUR = {
+    common:  [[44,106,106],[226,184,72]],
+    uncommon: [[32,70,92],[216,208,182]],
+    rare: [[128,72,36],[234,182,92]],
+    epic:  [[96,116,146],[206,218,234]],
+    legendary:  [[36,40,60],[240,185,11]]
+  };
+  var ARMOUR_LABEL = { common:"teal + brass", uncommon:"cold blue + bone",
+    rare:"bronze", epic:"pale steel", legendary:"navy + BNB gold" };
+  var FIXED_PALETTE = {
+    O:[22,26,34], P:[16,16,20], T:[246,246,240], C:[228,224,208], c:[176,170,152],
+    W:[146,100,58], M:[192,199,209], m:[120,128,140], G:[232,188,62],
+    H:[178,60,48], h:[232,220,196]
+  };
+  var ACC_COLOURS = {
+    def: { bandana:[[52,118,122],[96,168,170]], shades:[[38,40,48],[104,110,124]],
+           crown:[[232,188,62],[252,228,142]], ringnose:[[214,176,66],[246,220,132]],
+           horncaps:[[190,197,207],[120,128,140]], boots:[[62,48,38],[188,150,96]] },
+    uncommon: { bandana:[[236,224,200],[196,182,156]], boots:[[58,44,46],[206,132,74]] },
+    rare: { boots:[[46,58,44],[186,214,150]] },
+    legendary:  { horncaps:[[240,185,11],[255,228,122]], boots:[[46,40,26],[240,185,11]] },
+    // on a near-black hide the default dark shades vanish — onyx flips them to
+    // a pale steel frame with a dark glint. same object, inverted for contrast.
+    epic:  { shades:[[198,212,232],[48,54,68]], boots:[[44,48,60],[176,190,214]] }
+  };
+
+  function blank() {
+    var g = [], y, x, row;
+    for (y = 0; y < H; y++) { row = []; for (x = 0; x < W; x++) row.push("."); g.push(row); }
+    return g;
+  }
+  function put(g, x, y, ch) {
+    x = Math.round(x); y = Math.round(y);
+    if (x >= 0 && x < W && y >= 0 && y < H) g[y][x] = ch;
+  }
+  function rect(g, x0, y0, x1, y1, ch) {
+    for (var y = y0; y <= y1; y++) for (var x = x0; x <= x1; x++) put(g, x, y, ch);
+  }
+  function ell(g, cx, cy, rx, ry, ch) {
+    for (var y = Math.ceil(cy - ry); y <= Math.floor(cy + ry); y++)
+      for (var x = Math.ceil(cx - rx); x <= Math.floor(cx + rx); x++) {
+        var dx = (x - cx) / rx, dy = (y - cy) / ry;
+        if (dx * dx + dy * dy <= 1.0) put(g, x, y, ch);
+      }
+  }
+  function stroke(g, pts, r, ch) {
+    for (var i = 0; i < pts.length - 1; i++) {
+      var a = pts[i], b = pts[i + 1];
+      var n = Math.max(Math.abs(b[0] - a[0]), Math.abs(b[1] - a[1])) * 4 + 1;
+      for (var k = 0; k <= n; k++) {
+        var t = k / n;
+        var rr = Array.isArray(r) ? r[0] + (r[1] - r[0]) * ((i + t) / (pts.length - 1)) : r;
+        ell(g, a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, rr, rr, ch);
+      }
+    }
+  }
+  // 8-CONNECTED, not 4. with only the orthogonal neighbours, a transparent
+  // pixel touching the body diagonally is left blank — so every 45° edge (the
+  // horn sweep worst of all) renders with holes in its outline.
+  var N8 = [[1,0],[-1,0],[0,1],[0,-1],[1,1],[1,-1],[-1,1],[-1,-1]];
+  function outlinePass(g) {
+    var out = g.map(function (r) { return r.slice(); });
+    for (var y = 0; y < H; y++) for (var x = 0; x < W; x++) {
+      if (g[y][x] !== ".") continue;
+      for (var i = 0; i < N8.length; i++) {
+        var nx = x + N8[i][0], ny = y + N8[i][1];
+        if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
+        if (g[ny][nx] !== "." && g[ny][nx] !== "O") { out[y][x] = "O"; break; }
+      }
+    }
+    return out;
+  }
+
+  // right horn tip reaches x ~32 and the outline pass adds a pixel to BOTH it
+  // and the weapon, so 1px of shape clearance still reads as a collision.
+  // shaft at 38, nothing left of SX-2 = two clear pixels between outlines.
+  // ⚠ the outline pass cannot write outside the grid, so anything on column 0
+  // or W-1 renders with a raw unoutlined edge. the composition is inset by one
+  // pixel; assertBorderClear() in the node build fails on any regression.
+  var CX = 17, HY = 15, SX = 38, FIST = [36, 36];
+
+  function drawHorns(g) {
+    [-1, 1].forEach(function (dir) {
+      var p = function (dx, y) { return [CX + dir * dx, y]; };
+      stroke(g, [p(6,14), p(10,12), p(13,9.5), p(14,6), p(13.6,3)], [3.6, 1.2], "C");
+      stroke(g, [p(7,15.5), p(10.5,13.5), p(12.5,11.5)], [1.6, 0.7], "c");
+    });
+  }
+  function drawBody(g) {
+    [-1, 1].forEach(function (dir) {
+      var x0 = dir < 0 ? CX - 9 : CX + 3;
+      rect(g, x0, 41, x0 + 6, 51, "S");
+      rect(g, x0, 47, x0 + 6, 51, "D");
+      rect(g, x0 - 1, 51, x0 + 7, 54, "C");
+      rect(g, x0 - 1, 54, x0 + 7, 54, "c");
+    });
+    ell(g, CX, 34, 9, 8, "S");
+    rect(g, CX - 9, 34, CX + 9, 41, "S");
+    ell(g, CX, 37, 5.5, 4.5, "B");
+    ell(g, CX - 9, 36, 2.6, 5.5, "D");
+    ell(g, CX + 9, 36, 2.6, 5.5, "D");
+    stroke(g, [[CX-9,29],[CX-11,34],[CX-11,39]], [3.8, 2.8], "S");
+    ell(g, CX - 11, 40, 3.2, 2.8, "S");
+    stroke(g, [[CX+9,29],[CX+13,32],[FIST[0],FIST[1]-3]], [3.8, 2.6], "S");
+    rect(g, CX - 9, 31, CX - 9, 39, "D");
+    rect(g, CX + 9, 31, CX + 9, 37, "D");
+    [-1, 1].forEach(function (dir) { rect(g, CX + dir * 10, 32, CX + dir * 10, 40, "."); });
+    rect(g, CX - 5, 24, CX + 5, 29, "D");
+    rect(g, CX - 4, 24, CX + 4, 28, "S");
+    ell(g, CX, HY, 9, 7.5, "S");
+    ell(g, CX, HY - 4, 6.5, 2.8, "L");
+    ell(g, CX, HY + 5, 5.4, 3.2, "B");
+    ell(g, CX, HY + 6, 4.4, 2.0, "L");
+    rect(g, CX - 5, HY + 2, CX + 5, HY + 2, "D");
+    rect(g, CX - 2, HY + 1, CX + 2, HY + 2, "D");
+  }
+  function drawFace(g) {
+    for (var i = 0; i <= 7; i++) {
+      var drop = Math.floor(i / 2);
+      [-1, 1].forEach(function (dir) {
+        var x = CX + dir * (9 - i);
+        rect(g, x, HY - 5 + drop, x, HY - 2 + drop, "R");
+        put(g, x, HY - 1 + drop, "O");
+      });
+    }
+    [-1, 1].forEach(function (dir) { rect(g, CX + dir, HY - 3, CX + dir, HY - 1, "O"); });
+    [-1, 1].forEach(function (dir) {
+      var ex = CX + dir * 6;
+      rect(g, ex - 2, HY - 1, ex + 2, HY + 1, "P");
+      rect(g, ex - 1, HY, ex + 1, HY, "E");
+      put(g, ex - dir * 1, HY, "P");
+    });
+    [-1, 1].forEach(function (dir) { rect(g, CX + dir*3, HY + 4, CX + dir*3 + dir, HY + 5, "P"); });
+    rect(g, CX - 3, HY + 7, CX + 3, HY + 7, "O");
+    [-1, 1].forEach(function (dir) {
+      put(g, CX + dir*4, HY + 7, "O");
+      put(g, CX + dir*5, HY + 6, "T");
+      put(g, CX + dir*5, HY + 5, "T");
+    });
+  }
+  function drawArmour(g) {
+    [-1, 1].forEach(function (dir) {
+      ell(g, CX + dir*10, 29, 4.4, 2.9, "A");
+      ell(g, CX + dir*10, 28, 3.2, 1.5, "a");
+      rect(g, CX + dir*13, 31, CX + dir*13, 32, "O");
+    });
+    rect(g, CX - 7, 31, CX + 7, 37, "A");
+    rect(g, CX - 6, 38, CX + 6, 38, "A");
+    rect(g, CX - 7, 31, CX + 7, 31, "a");
+    ell(g, CX, 34, 2.6, 2.4, "a");
+    rect(g, CX - 9, 39, CX + 9, 41, "A");
+    rect(g, CX - 3, 38, CX + 3, 41, "G");
+    ell(g, CX - 11, 37, 3.4, 1.7, "a");
+    ell(g, FIST[0], FIST[1] - 3, 3.2, 1.7, "a");
+  }
+  function drawWeapon(g, display) {
+    var kind = WEAPON_KIND[display] || display;
+    function shaft(top, bot, ch) {
+      rect(g, SX - 1, top, SX, bot === undefined ? 48 : bot, ch === undefined ? "W" : ch);
+    }
+    var dx, i;
+    if (kind === "club") {
+      shaft(19);
+      rect(g, SX - 2, 7, SX + 4, 19, "W");
+      [[SX,10],[SX+2,14],[SX,17]].forEach(function (p) { ell(g, p[0], p[1], 1.3, 1.3, "m"); });
+    } else if (kind === "trident") {
+      // 1px haft, uniquely — a 2px haft's centre falls on a pixel BOUNDARY, so
+      // an odd-tine head can never sit centred on it.
+      rect(g, SX, 13, SX, 48, "M");
+      rect(g, SX - 2, 11, SX + 2, 12, "M");
+      [-2,0,2].forEach(function (d) { rect(g, SX + d, 4, SX + d, 11, "M"); put(g, SX + d, 4, "m"); });
+    } else if (kind === "axe") {
+      shaft(12);
+      ell(g, SX + 3, 14, 5.4, 6.2, "M");
+      ell(g, SX - 1, 14, 4.2, 5.2, ".");
+      ell(g, SX + 4, 14, 3.4, 4.0, "m");
+    } else if (kind === "sword") {
+      rect(g, SX - 4, 33, SX + 3, 34, "G");
+      rect(g, SX - 1, 9, SX, 32, "M");
+      rect(g, SX - 1, 10, SX - 1, 32, "m");
+      put(g, SX - 1, 8, "M"); put(g, SX, 8, "M");
+      rect(g, SX - 1, 35, SX, 38, "G");
+    } else if (kind === "spear") {
+      shaft(9);
+      rect(g, SX - 2, 7, SX + 1, 10, "M");
+      rect(g, SX - 1, 4, SX, 7, "M");
+      put(g, SX, 5, "m");
+    } else if (kind === "bow") {
+      stroke(g, [[SX-1,9],[SX+4,19],[SX+4,35],[SX-1,45]], 1.6, "W");
+      stroke(g, [[SX-1,9],[SX-2,27],[SX-1,45]], 0.6, "m");
+    } else if (kind === "dagger") {
+      rect(g, SX - 3, 33, SX + 2, 34, "G");
+      rect(g, SX - 1, 23, SX, 32, "M");
+      put(g, SX - 1, 22, "m"); put(g, SX, 22, "m");
+    } else if (kind === "flail") {
+      shaft(26);
+      stroke(g, [[SX,25],[SX+2,19]], 0.6, "m");
+      ell(g, SX + 2, 14, 3.8, 3.8, "m");
+      [[0,-5],[5,0],[0,5],[-5,0]].forEach(function (d) { put(g, SX + 2 + d[0], 14 + d[1], "M"); });
+    } else if (kind === "scythe") {
+      shaft(9);
+      stroke(g, [[SX+1,10],[SX+5,6],[SX+7,10]], [1.9, 0.7], "M");
+    } else if (kind === "staff") {
+      shaft(11);
+      ell(g, SX, 8, 3.2, 3.2, "G");
+      ell(g, SX, 8, 1.6, 1.6, "m");
+    } else if (kind === "boomerang") {
+      stroke(g, [[SX-1,11],[SX+4,19],[SX-1,27]], 1.8, "W");
+      put(g, SX - 1, 11, "G"); put(g, SX - 1, 27, "G");
+      shaft(29);
+    } else if (kind === "crossbow") {
+      shaft(17, 42, "W");
+      rect(g, SX - 2, 17, SX + 5, 18, "M");
+      stroke(g, [[SX-2,16],[SX+1,22],[SX+5,16]], 0.5, "m");
+      rect(g, SX - 1, 9, SX, 17, "M");
+      put(g, SX - 1, 8, "m"); put(g, SX, 8, "m");
+    }
+  }
+  function drawAccessories(g, kinds) {
+    kinds.forEach(function (k) {
+      if (k === "horncaps") {
+        [-1, 1].forEach(function (dir) {
+          ell(g, CX + dir*13.6, 3.6, 2.4, 2.8, "H");
+          ell(g, CX + dir*13.6, 2.8, 1.4, 1.5, "h");
+        });
+      } else if (k === "ringnose") {
+        ell(g, CX, HY + 12, 3.2, 2.8, "H");
+        ell(g, CX, HY + 12, 1.8, 1.5, ".");
+        put(g, CX, HY + 9, "h");
+      } else if (k === "bandana") {
+        rect(g, CX - 9, HY - 8, CX + 9, HY - 6, "H");
+        rect(g, CX - 9, HY - 6, CX + 9, HY - 6, "h");
+        rect(g, CX + 9, HY - 7, CX + 13, HY - 6, "H");
+        put(g, CX + 13, HY - 5, "h");
+      } else if (k === "shades") {
+        rect(g, CX - 9, HY - 2, CX + 9, HY - 2, "H");
+        rect(g, CX - 9, HY - 1, CX - 3, HY + 2, "H");
+        rect(g, CX + 3, HY - 1, CX + 9, HY + 2, "H");
+        put(g, CX - 8, HY, "h"); put(g, CX + 4, HY, "h");
+      } else if (k === "boots") {
+        [-1,1].forEach(function (dir) {
+          var x0 = dir < 0 ? CX - 10 : CX + 2;
+          rect(g, x0, 48, x0 + 8, 54, "H");
+          rect(g, x0, 46, x0 + 8, 47, "h");
+          rect(g, x0 + 1, 52, x0 + 7, 52, "h");
+        });
+      } else if (k === "crown") {
+        [-5,-2,1,4].forEach(function (d) { rect(g, CX + d, HY - 11, CX + d + 1, HY - 9, "H"); });
+        rect(g, CX - 6, HY - 9, CX + 5, HY - 7, "H");
+        rect(g, CX - 6, HY - 7, CX + 5, HY - 7, "h");
+        put(g, CX, HY - 11, "h");
+      }
+    });
+  }
+  function tokenGrid(token) {
+    var g = blank();
+    drawHorns(g);
+    drawBody(g);
+    drawWeapon(g, token.weapon);
+    ell(g, FIST[0], FIST[1], 3.4, 3.0, "S");
+    drawArmour(g);
+    g = outlinePass(g);
+    drawFace(g);
+    drawAccessories(g, token.accessories);
+    // second pass so accessories that break the silhouette — boots, horn caps,
+    // crown points — get the same outline. only fills transparent pixels.
+    g = outlinePass(g);
+    return g;
+  }
+
+  function clampC(v) { return Math.max(0, Math.min(255, Math.round(v))); }
+  function derivePalette(token) {
+    var skin = token.skin[1], pal = {}, k;
+    for (k in FIXED_PALETTE) pal[k] = FIXED_PALETTE[k];
+    pal.S = skin.map(clampC);
+    pal.D = skin.map(function (v) { return clampC(v * 0.68); });
+    pal.L = skin.map(function (v) { return clampC(v * 1.3 + 12); });
+    pal.B = skin.map(function (v) { return clampC(Math.min(255, v * 1.3 + 12) * 0.45 + 255 * 0.45); });
+    pal.R = skin.map(function (v) { return clampC(v * 0.5); });
+    pal.E = token.eye[1];
+    pal.A = ARMOUR[token.band][0];
+    pal.a = ARMOUR[token.band][1];
+    if (token.horn) { pal.C = token.horn[1]; pal.c = token.horn[2]; }
+    if (token.accessories.length) {
+      var over = ACC_COLOURS[token.band] || {};
+      var key = token.accessories[0];
+      var pair = over[key] || ACC_COLOURS.def[key];
+      pal.H = pair[0]; pal.h = pair[1];
+    }
+    return pal;
+  }
+
+  function assignBands() {
+    var ids = [], i;
+    for (i = 0; i < SUPPLY; i++) ids.push(i + 1);
+    var rng = lcg(MASTER_SEED);
+    for (i = ids.length - 1; i > 0; i--) {
+      var j = Math.floor(rng() * (i + 1));
+      var t = ids[i]; ids[i] = ids[j]; ids[j] = t;
+    }
+    var map = {}, cursor = 0;
+    BANDS.forEach(function (band) {
+      for (var k = 0; k < BAND_COUNTS[band]; k++) map[ids[cursor++]] = band;
+    });
+    return map;
+  }
+  function pick(rng, arr) { return arr[Math.floor(rng() * arr.length)]; }
+
+  var bandMap = assignBands();
+
+  function rollToken(id, o) {
+    o = o || {};
+    var band = o.band || bandMap[id];
+    var rng = lcg(tokenSeed(id));
+    var skin = o.skin || pick(rng, SKINS[band]);
+    var eye = o.eye || EYES[pick(rng, BAND_EYES[band])];
+    var weapon = o.weapon || pick(rng, WEAPONS);
+    var horn = o.horn || pick(rng, HORN_POOLS[band]);
+    var clean = rng() < CLEAN_CHANCE[band];
+    var accessories = o.accessories || (clean ? [] : pick(rng, ACC_POOLS[band]));
+    return { id: id, band: band, skin: skin, eye: eye, weapon: weapon, horn: horn,
+             accessories: accessories, bg: BAND_INFO[band].bg, floor: BAND_INFO[band].floor };
+  }
+
+  function paint(canvas, token) {
+    canvas.width = TILE_W; canvas.height = TILE_H;
+    var ctx = canvas.getContext("2d");
+    var img = ctx.createImageData(TILE_W, TILE_H);
+    var px = img.data;
+    var g = tokenGrid(token), pal = derivePalette(token);
+    var floorY = MARGIN + H - 2, x, y, o, c;
+    for (y = 0; y < TILE_H; y++) for (x = 0; x < TILE_W; x++) {
+      c = y >= floorY ? token.floor : token.bg;
+      o = (y * TILE_W + x) * 4;
+      px[o] = c[0]; px[o+1] = c[1]; px[o+2] = c[2]; px[o+3] = 255;
+    }
+    for (y = 0; y < H; y++) for (x = 0; x < W; x++) {
+      c = pal[g[y][x]];
+      if (!c) continue;
+      o = ((y + MARGIN) * TILE_W + (x + MARGIN)) * 4;
+      px[o] = c[0]; px[o+1] = c[1]; px[o+2] = c[2]; px[o+3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+
+  var rgb = function (c) { return "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")"; };
+  var hex = function (c) {
+    return "#" + c.map(function (v) { return ("0" + v.toString(16)).slice(-2); }).join("").toUpperCase();
+  };
+  var accText = function (a) {
+    return a.length ? a.map(function (k) { return ACC_LABEL[k]; }).join(" + ") : "clean";
+  };
+
+  // ===== 01 heroes =====
+  // the ladder: four REAL rolled tokens per tier, taken straight off the
+  // shuffle. no cherry-picking — this is what the tier actually looks like.
+  var heroesEl = document.getElementById("heroes");
+  BANDS.forEach(function (tier) {
+    var info = BAND_INFO[tier];
+    var picks = [];
+    for (var id = 1; id <= 500 && picks.length < 4; id++) {
+      if (bandMap[id] === tier) picks.push(rollToken(id));
+    }
+    var row = document.createElement("div");
+    row.className = "tier-row";
+    var head = document.createElement("div");
+    head.className = "tier-head";
+    head.innerHTML =
+      '<div class="tier-name"><span class="swatch" style="background:' +
+        rgb(SKINS[tier][0][1]) + '"></span>' + tier + "</div>" +
+      '<div class="tier-stat mono">' + BAND_COUNTS[tier] + " of 500 · " +
+        Math.round(BAND_COUNTS[tier] / 5) + "%</div>" +
+      '<p class="tier-note">' + info.note + "</p>" +
+      '<dl class="tier-tells">' +
+        "<dt>hides</dt><dd>" + info.family + "</dd>" +
+        "<dt>armour</dt><dd>" + ARMOUR_LABEL[tier] + "</dd>" +
+        "<dt>horns</dt><dd>" + HORN_POOLS[tier].map(function (h) { return h[0]; }).join(" / ") + "</dd>" +
+        "<dt>boots</dt><dd>" + (tier === "common" ? "never" :
+          tier === "uncommon" ? "sometimes" : "often") + "</dd>" +
+      "</dl>";
+    row.appendChild(head);
+    var strip = document.createElement("div");
+    strip.className = "tier-strip";
+    picks.forEach(function (t) {
+      var fig = document.createElement("figure");
+      var cv = document.createElement("canvas");
+      fig.appendChild(cv);
+      paint(cv, t);
+      var cap = document.createElement("figcaption");
+      cap.className = "mono";
+      cap.textContent = "#" + t.id + " · " + t.skin[0];
+      fig.appendChild(cap);
+      strip.appendChild(fig);
+    });
+    row.appendChild(strip);
+    heroesEl.appendChild(row);
+  });
+
+  // ===== 02 roll + inspector =====
+  var gridEl = document.getElementById("grid");
+  var inspectCanvas = document.getElementById("inspectCanvas");
+  var inspectBody = document.getElementById("inspectBody");
+  var buttons = [];
+
+  function inspect(token, btn) {
+    paint(inspectCanvas, token);
+    var pal = derivePalette(token);
+    var ramp = ["R", "D", "S", "L", "B"].map(function (k) {
+      return '<span style="background:' + rgb(pal[k]) + '">' + k + "</span>";
+    }).join("");
+    inspectBody.innerHTML =
+      "<tr><th>token</th><td class='mono'>bnbull #" + token.id + "</td></tr>" +
+      "<tr><th>tier</th><td>" + token.band + " · " + BAND_INFO[token.band].note + "</td></tr>" +
+      "<tr><th>hide</th><td>" + token.skin[0] + " <span class='mono' style='color:var(--ink-3)'>" +
+        hex(token.skin[1]) + "</span></td></tr>" +
+      "<tr><th>eye</th><td>" + token.eye[0] + "</td></tr>" +
+      "<tr><th>horns</th><td>" + token.horn[0] + " <span class='mono' style='color:var(--ink-3)'>" +
+        hex(token.horn[1]) + "</span></td></tr>" +
+      "<tr><th>weapon</th><td>" + token.weapon + "</td></tr>" +
+      "<tr><th>worn</th><td>" + accText(token.accessories) + "</td></tr>" +
+      "<tr><th>seed</th><td class='mono'>0x" + tokenSeed(token.id).toString(16).toUpperCase() + "</td></tr>" +
+      "<tr><th>ramp</th><td><div class='ramp'>" + ramp + "</div></td></tr>";
+    buttons.forEach(function (b) { b.setAttribute("aria-pressed", b === btn ? "true" : "false"); });
+  }
+
+  var firstToken = null, firstBtn = null;
+  for (var id = 1; id <= 48; id++) {
+    (function (id) {
+      var t = rollToken(id);
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.setAttribute("aria-pressed", "false");
+      btn.title = "bnbull #" + id + " — " + t.band + " · " + t.skin[0] + " · " + t.weapon;
+      var cv = document.createElement("canvas");
+      btn.appendChild(cv);
+      paint(cv, t);
+      btn.addEventListener("click", function () { inspect(t, btn); });
+      gridEl.appendChild(btn);
+      buttons.push(btn);
+      if (id === 1) { firstToken = t; firstBtn = btn; }
+    })(id);
+  }
+  inspect(firstToken, firstBtn);
+
+  // ===== 03 weapons =====
+  var wepEl = document.getElementById("weapons");
+  WEAPONS.forEach(function (w, i) {
+    var t = rollToken(200 + i, { band: "uncommon", skin: SKINS.uncommon[0], weapon: w, accessories: [] });
+    var card = document.createElement("div");
+    card.className = "wep";
+    var cv = document.createElement("canvas");
+    card.appendChild(cv);
+    paint(cv, t);
+    var nm = document.createElement("div");
+    nm.className = "wep-name";
+    nm.innerHTML = "<b>" + w + "</b><span>" + WEAPON_KIND[w] + "</span>";
+    card.appendChild(nm);
+    wepEl.appendChild(card);
+  });
+
+  // ===== 04 band table =====
+  var tbody = document.getElementById("bandTable");
+  BANDS.forEach(function (band, i) {
+    var tr = document.createElement("tr");
+    var chips = SKINS[band].map(function (s) {
+      return '<span class="swatch" style="display:inline-block;background:' + rgb(s[1]) +
+             ';margin-right:3px" title="' + s[0] + " " + hex(s[1]) + '"></span>';
+    }).join("");
+    var arm = ARMOUR[band].map(function (c) {
+      return '<span class="swatch" style="display:inline-block;background:' + rgb(c) +
+             ';margin-right:3px" title="' + hex(c) + '"></span>';
+    }).join("");
+    tr.innerHTML =
+      "<td><b>" + band + "</b> <span class='mono' style='color:var(--ink-3)'>band " + (i + 1) + "</span></td>" +
+      "<td class='num'>" + BAND_COUNTS[band] + "</td>" +
+      "<td>" + chips + "</td>" +
+      "<td>" + arm + " <span style='color:var(--ink-2)'>" + ARMOUR_LABEL[band] + "</span></td>" +
+      "<td class='num'>" + Math.round(CLEAN_CHANCE[band] * 100) + "%</td>" +
+      "<td style='color:var(--ink-2)'>" + BAND_INFO[band].note + "</td>";
+    tbody.appendChild(tr);
+  });
+})();
+</script>

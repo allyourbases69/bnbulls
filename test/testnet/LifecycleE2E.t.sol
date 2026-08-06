@@ -42,6 +42,15 @@ import {MockVRFCoordinator} from "../mocks/MockVRFCoordinator.sol";
  *      swapping through the real router is NOT asserted here. It cannot be until
  *      the v2 migration lands. That belongs in the report's gap list.
  *
+ *      ✅ RESOLVED — the v2 migration has since landed (`PotSplitter` now calls
+ *      `swapExactTokensForTokensSupportingFeeOnTransferTokens` on
+ *      `IPancakeRouter02`; the v3 dialect is gone with §28), and that gap is
+ *      closed in `GraduationBoundary.t.sol`, which wires `Wire.Router` on the
+ *      splitter and sweeps its own bucket through the real book. This file is
+ *      left as-is on purpose: an UNWIRED route is still the honest launch-day
+ *      state, and it is what makes the §29 deferral assertions above mean
+ *      anything. See `DECISIONS.md §49`.
+ *
  *      ⚠ The oracle and VRF are mocked (`test/mocks`). Neither is on the four.meme
  *      lifecycle path; standing up a real Chainlink feed would test Chainlink,
  *      not this.

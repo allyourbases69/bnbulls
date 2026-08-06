@@ -1,0 +1,146 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# bnbulls CI
+#
+# Two things this exists to stop, both of which have already happened once:
+#
+#   1. A SILENTLY SKIPPED TEST SUITE. `test/fork/**` is excluded from the
+#      default `forge test` by `no_match_path` in foundry.toml, so a plain
+#      `forge test` reports a confident green while 61 mainnet-fork tests never
+#      run. That is not a hypothetical — it went unnoticed for a whole working
+#      session. The `fork` job below runs them explicitly and FAILS LOUDLY if
+#      its RPC secret is missing, rather than skipping.
+#
+#   2. AN ART CHANGE THAT BREAKS THE SILHOUETTE. `generator/build.mjs` runs a
+#      3,961-combination border sweep and a 2,377-combination centring sweep and
+#      exits non-zero on any failure. BUILD-PLAN.md asked for it in CI; this is
+#      that. DECISIONS §27 is what the class of bug costs — the generator and
+#      the chain disagreed on 377 of 500 tiers, caught with hours to spare.
+#
+# ⚠ NOT COVERED HERE, STATED SO NOBODY READS A GREEN TICK AS "EVERYTHING":
+#   the ~20 keeper bots and their 10 selftests live in `marketing/`, which is
+#   deliberately gitignored as internal ops tooling. They are NOT in this repo
+#   and therefore cannot run here. Run them locally before a deploy.
+# ─────────────────────────────────────────────────────────────────────────────
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  FOUNDRY_PROFILE: default
+
+jobs:
+  contracts:
+    name: contracts (686 tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # ⚠ REQUIRED. The foundry deps are submodules; without this the
+          #   checkout has no lib/ and nothing compiles. A fresh clone that
+          #   could not build is the bug this repo shipped with until 2026-08-07.
+          submodules: recursive
+
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Forge build
+        run: forge build --sizes
+
+      - name: Forge test
+        run: forge test -vv
+
+      # NOTE: deliberately no `forge fmt --check`. This codebase is not
+      # forge-fmt clean by choice — the formatter rewraps constructor modifier
+      # lists and long signatures, walking over comment alignment that is
+      # intentional in Duel.sol and Bulls.sol. See the [fmt] note in
+      # foundry.toml. CI gates on correctness, not on style.
+
+  fork:
+    name: mainnet-fork (61 tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      # An absent RPC must be a LOUD failure, never a quiet skip. A skipped
+      # fork suite is indistinguishable from a passing one in the summary, and
+      # that is exactly how these 61 tests went unrun.
+      - name: Require an archive RPC
+        env:
+          BSC_FORK_RPC_URL: ${{ secrets.BSC_FORK_RPC_URL }}
+        run: |
+          if [ -z "$BSC_FORK_RPC_URL" ]; then
+            echo "::error::BSC_FORK_RPC_URL is not set. test/fork/** needs an ARCHIVE"
+            echo "::error::BSC endpoint (the public ones 403 on pinned forks)."
+            echo "::error::Add it under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
+      - name: Forge test (fork profile)
+        env:
+          FOUNDRY_PROFILE: fork
+          BSC_FORK_RPC_URL: ${{ secrets.BSC_FORK_RPC_URL }}
+        run: forge test -vv
+
+  art:
+    name: art border sweep
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # Exits non-zero if any combination puts a body pixel on the outermost
+      # ring, or if the bull's axis drifts off the frame centre column.
+      - name: Border + centring sweep
+        run: npm run art
+
+  frontend:
+    name: frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      # The port verifiers. §27: the art engine and the chain disagreeing on
+      # rarity is the most expensive bug this project has had, and these are
+      # what prove the frontend's copies still match the contracts.
+      - name: Verify art port
+        run: npm run verify:art
+
+      - name: Verify rarity port
+        run: npm run verify:rarity
+
+      - name: Verify combat port
+        run: npm run verify:combat

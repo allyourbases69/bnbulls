@@ -53,4 +53,15 @@ bsc = { key = "${ETHERSCAN_API_KEY}", chain = 56, url = "https://api.etherscan.i
 [fmt]
 line_length = 100
 tab_width = 4
-bracket_spacing = true
+# ⚠ false, and it must stay false. It was `true` while every one of the ~90
+# solidity files here is written `{Ownable}` with no inner spaces, so the
+# setting was simply never exercised. Flipping it back to `true` does not tidy
+# anything -- it rewrites every import in the project and buries the next real
+# diff.
+#
+# ⚠ AND THE WIDER POINT: this codebase is NOT `forge fmt` clean, by choice.
+# `forge fmt` also rewraps constructor modifier lists and long signatures onto
+# single lines, which walks over comment alignment that is deliberate in
+# Duel.sol and Bulls.sol. So CI does NOT gate on `forge fmt --check` -- see
+# .github/workflows/ci.yml. Run `npm run fmt` only when you mean to reformat.
+bracket_spacing = false

@@ -303,13 +303,33 @@ abstract contract VerifyCore is BnbullsConfig {
         // a thin or absent pool is a WARNING rather than a failure. It is loud
         // so nobody mistakes months of correct deferral for a working buy leg.
         _okUint(m.minPoolLiquidity(), c.params.minPoolLiquidity, "MintDrop.minPoolLiquidity");
+
+        // ⚠ THE DORMANT BACKUP ROUTE (`DECISIONS.md §30`). Expected to read
+        // ZERO forever. A non-zero is an operator decision (a warning); the
+        // quote-denominated floor that must accompany it is a hard failure,
+        // because without it every swap defers silently.
+        address mdMid = m.swapIntermediate();
+        _warn(mdMid == address(0), "MintDrop.swapIntermediate is UNWIRED (expected)");
+        if (mdMid != address(0)) {
+            console2.log("      ROUTE: WBNB ->", mdMid, "-> BNBULL");
+            _ok(
+                m.minPoolLiquidityAlt() != 0,
+                "MintDrop.minPoolLiquidityAlt SET (else EVERY swap defers)"
+            );
+            _hasCode(mdMid, "MintDrop.swapIntermediate");
+        }
+
+        // ⚠ The pool FOLLOWS the route, so with an intermediate wired this
+        // reserve is denominated in that token and not in BNB. Pick the floor
+        // the same way the contract does.
         (address mdPair, uint256 mdReserve) = m.wbnbPoolLiquidity();
+        uint256 mdFloor = mdMid == address(0) ? m.minPoolLiquidity() : m.minPoolLiquidityAlt();
         if (mdPair == address(0)) {
             _warn(false, "MintDrop: NO v2 pair yet - the mint BNBULL buy will DEFER (DECISIONS 29)");
         } else {
             _warn(
-                mdReserve >= m.minPoolLiquidity(),
-                "MintDrop: v2 pair is under minPoolLiquidity - the mint buy will DEFER"
+                mdReserve >= mdFloor,
+                "MintDrop: v2 pair is under its liquidity floor - the mint buy will DEFER"
             );
         }
 
@@ -718,15 +738,7 @@ abstract contract VerifyCore is BnbullsConfig {
             s.minPoolLiquidity(), c.params.minPoolLiquidity,
             string.concat(tag, ".minPoolLiquidity")
         );
-        (address pair, uint256 wbnbReserve) = s.wbnbPoolLiquidity();
-        if (pair == address(0)) {
-            _warn(false, string.concat(tag, ": NO v2 pair yet - every BNBULL buy will DEFER (DECISIONS 29)"));
-        } else {
-            _warn(
-                wbnbReserve >= s.minPoolLiquidity(),
-                string.concat(tag, ": v2 pair is under minPoolLiquidity - buys will DEFER")
-            );
-        }
+        _verifySplitterRoute(s, tag);
 
         _okUint(
             s.bnbullDecimals(), IERC20Metadata(bull).decimals(),
@@ -758,6 +770,51 @@ abstract contract VerifyCore is BnbullsConfig {
         if (!vm.envOr("ALLOW_DEFERRALS", false)) {
             _ok(s.pendingBnbullBuyNative() == 0, string.concat(tag, " has no deferred BNB->BNBULL"));
             _ok(s.pendingBnbPotNative() == 0, string.concat(tag, " has no deferred BNB pot slice"));
+        }
+    }
+
+    /**
+     * @dev The swap route and the pool the liquidity floor actually guards.
+     *
+     *      ⚠ A SEPARATE FUNCTION FOR A DULL REASON — `_verifySplitter` is one
+     *      stack slot from "Stack too deep" and these reads are what tipped it
+     *      over. It is also the right seam: route and pool belong together,
+     *      because the pool FOLLOWS the route.
+     *
+     *      ⚠ `Wire.SwapIntermediate` is the dormant backup for `DECISIONS.md
+     *      §30` (19 of four.meme's 20 templates graduate into a NON-BNB pool).
+     *      It is expected to read ZERO forever, so a non-zero is a WARNING —
+     *      an operator decision, not a defect. The floor that must accompany it
+     *      is a hard FAILURE: an intermediate with no quote-denominated floor
+     *      defers every swap silently and looks exactly like a healthy config.
+     */
+    function _verifySplitterRoute(PotSplitter s, string memory tag) private {
+        address mid = s.swapIntermediate();
+        _warn(mid == address(0), string.concat(tag, ".swapIntermediate is UNWIRED (expected)"));
+        if (mid != address(0)) {
+            console2.log("      ROUTE: WBNB ->", mid, "-> BNBULL");
+            _ok(
+                s.minPoolLiquidityAlt() != 0,
+                string.concat(tag, ".minPoolLiquidityAlt SET (else EVERY swap defers)")
+            );
+            _hasCode(mid, string.concat(tag, ".swapIntermediate"));
+        }
+
+        // ⚠ THE RESERVE IS DENOMINATED IN THE ROUTE'S QUOTE ASSET — WBNB
+        // normally, the intermediate otherwise — so the floor is picked the
+        // same way the contract picks it. Comparing the BNB floor to a USDT
+        // reserve is exactly the mismatch the second variable exists to stop.
+        (address pair, uint256 reserve) = s.wbnbPoolLiquidity();
+        if (pair == address(0)) {
+            _warn(
+                false,
+                string.concat(tag, ": NO v2 pair yet - every BNBULL buy will DEFER (DECISIONS 29)")
+            );
+        } else {
+            _warn(
+                reserve >= (mid == address(0) ? s.minPoolLiquidity() : s.minPoolLiquidityAlt()),
+                string.concat(tag, ": v2 pair is under its liquidity floor - buys will DEFER")
+            );
         }
     }
 

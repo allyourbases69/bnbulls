@@ -165,6 +165,11 @@ abstract contract WireCore is BnbullsConfig {
         _dropWire(m, MintDrop.Wire.Router, c.ext.routerV2, "MintDrop.Router(v2)");
         _dropWire(m, MintDrop.Wire.JackpotBnbull, d.jackpotBnbull, "MintDrop.JackpotBnbull");
         _dropWire(m, MintDrop.Wire.JackpotBnb, d.jackpotBnb, "MintDrop.JackpotBnb");
+        // ⚠ `Wire.SwapIntermediate` IS DELIBERATELY NOT WIRED, AND MUST NOT BE
+        // ADDED HERE. Dormant backup for `DECISIONS.md §30`; see the identical
+        // note in `_wireSplitter`. Recovery is two owner transactions by hand:
+        // `setMinPoolLiquidityAlt` first, then `bootstrapWire`.
+        console2.log("  [info] SwapIntermediate LEFT UNWIRED (one hop, WBNB - DECISIONS 28)");
 
         if (m.keeper() != c.roles.keeper) {
             m.setKeeper(c.roles.keeper);
@@ -601,6 +606,17 @@ abstract contract WireCore is BnbullsConfig {
         } else {
             console2.log("  [info] MintDrop policy slot LEFT UNWIRED on purpose (100% BNBULL)");
         }
+        // ⚠ `Wire.SwapIntermediate` IS DELIBERATELY NOT WIRED HERE, AND MUST
+        // NOT BE ADDED TO THIS SCRIPT. It is the dormant backup for
+        // `DECISIONS.md §30` — 19 of four.meme's 20 templates graduate into a
+        // NON-BNB pool — and BNBULL is expected to graduate against WBNB, which
+        // is the one-hop route this whole file assumes. Wiring it turns every
+        // swap into two hops. If a graduation ever lands somewhere else, the
+        // recovery is TWO owner transactions, in this order and by hand:
+        //   1. setMinPoolLiquidityAlt(<floor in X's own smallest unit>)
+        //   2. bootstrapWire(Wire.SwapIntermediate, X)   (timelocked after)
+        // Doing (2) first is safe but stops every swap until (1) lands.
+        console2.log("  [info] SwapIntermediate LEFT UNWIRED (one hop, WBNB - DECISIONS 28)");
 
         if (s.keeper() != c.roles.keeper) {
             s.setKeeper(c.roles.keeper);

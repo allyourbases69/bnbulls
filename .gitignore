@@ -92,5 +92,16 @@ images*.png
 # Vendored third-party source (OpenZeppelin, forge-std, chainlink). Restored
 # with `forge install`; see the README. No reason to republish someone else's
 # library, and it keeps the diff to code we actually wrote.
-lib/
+#
+# ⚠ ANCHORED WITH A LEADING SLASH ON PURPOSE. A bare `lib/` matches at EVERY
+# depth, so it silently swallowed `contracts/lib/` too — and that is 78KB of
+# PotSplitter plus TimelockedAddress, Stats and Xorshift, i.e. most of the
+# money layer, missing from a repo whose entire purpose is letting someone
+# verify the money layer. Caught after the first push. Do not un-anchor it.
+/lib/
 *.webp
+
+# ── scratch + unpublished marketing copy ────────────────────────────────────
+.scratch/
+TG-ANNOUNCEMENT.md
+X-ANNOUNCEMENT.md

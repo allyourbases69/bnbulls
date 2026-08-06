@@ -104,6 +104,11 @@ contract SplitterV2Router {
     /// @notice The last deadline the caller passed. A v2 router reverts on a
     ///         stale one, so it has to be a real value.
     uint256 public lastDeadline;
+    /// @notice The exact `path` of the last swap. Recorded so a test can assert
+    ///         the ROUTE and not merely the outcome — "the default is still two
+    ///         elements, WBNB then BNBULL" is a claim about this array, and
+    ///         nothing else can prove it.
+    address[] private _lastPath;
 
     constructor(address weth) {
         v2Pair = new MockV2Pair();
@@ -151,6 +156,11 @@ contract SplitterV2Router {
     function resetSwapCalls() external {
         swapCalls = 0;
         legacyCalls = 0;
+        delete _lastPath;
+    }
+
+    function lastPath() external view returns (address[] memory) {
+        return _lastPath;
     }
 
     /// @notice Drive the pair under the floor — the dust-pair case.
@@ -221,6 +231,7 @@ contract SplitterV2Router {
         require(path.length >= 2, "SplitterV2Router: bad path");
         swapCalls += 1;
         lastMinOut = minOut;
+        _lastPath = path;
 
         address tokenIn = path[0];
         address tokenOut = path[path.length - 1];

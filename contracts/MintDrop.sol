@@ -264,7 +264,12 @@ contract MintDrop is Ownable, Pausable, ReentrancyGuard {
         /// The BNBULL-prize Jackpot (1 in 50).
         JackpotBnbull,
         /// The WBNB-prize Jackpot (1 in 100).
-        JackpotBnb
+        JackpotBnb,
+        /// ⚠ THE DORMANT ONE. Optional middle hop for every swap, so a BNBULL
+        /// that graduates against something other than WBNB is still
+        /// reachable. **Zero at deploy and expected to stay zero forever** —
+        /// see `swapIntermediate`. APPENDED, so slots 0..3 keep their numbers.
+        SwapIntermediate
     }
 
     mapping(uint8 => TimelockedAddress.Slot) private _wires;
@@ -401,6 +406,29 @@ contract MintDrop is Ownable, Pausable, ReentrancyGuard {
      */
     uint256 public minPoolLiquidity = 1 ether;
 
+    /**
+     * @notice The SAME floor for the case where BNBULL is **not** paired
+     *         against WBNB — denominated in whatever `swapIntermediate` is.
+     *
+     * @dev ⚠⚠ A SECOND VARIABLE BECAUSE OF A UNIT MISMATCH, NOT FOR
+     *      CONVENIENCE. `minPoolLiquidity` is 1 ether meaning **1 BNB**. The
+     *      pool the floor guards is always the BNBULL pair, and its reserve is
+     *      denominated in whatever BNBULL is paired against. Wire a USDT
+     *      intermediate and comparing that pair's USDT reserve to a number
+     *      meaning "1 BNB" is the fefers decimals trap wearing a new coat.
+     *
+     *      So: no intermediate -> WBNB/BNBULL, reserve in WBNB,
+     *      `minPoolLiquidity`, exactly as shipped. An intermediate X ->
+     *      X/BNBULL, reserve in X, **this** number, in X's own smallest unit.
+     *      ⚠ Read X's `decimals()` yourself; nothing here divides by them.
+     *
+     *      ⚠ ZERO MEANS "REFUSE TO TRADE", not "no floor". A wired intermediate
+     *      with this at zero makes every swap revert `InvalidMinLiquidity(0)` —
+     *      caught inline as an accrual, loud in a sweep. Forgetting to set it
+     *      defers; it never trades an unmeasured pool.
+     */
+    uint256 public minPoolLiquidityAlt;
+
     /// @notice May call the sweeps in addition to the owner.
     address public keeper;
 
@@ -475,6 +503,7 @@ contract MintDrop is Ownable, Pausable, ReentrancyGuard {
     event BnbullPaymentSellPolicyChanged(bool sellsForBnbLeg);
     event InlineSlippageChanged(uint256 newBps);
     event MinPoolLiquidityChanged(uint256 minWbnbReserve);
+    event MinPoolLiquidityAltChanged(uint256 minQuoteReserve);
     event KeeperChanged(address indexed previous, address indexed next);
     event AirdropChanged(uint256 newAirdropPerMint);
     event OraclePolicyChanged(uint256 maxAge, uint256 minPrice, uint256 maxPrice);
@@ -525,11 +554,14 @@ contract MintDrop is Ownable, Pausable, ReentrancyGuard {
     error BadSource();
     error BlindSwapRefused();
     error SwapOutBelowMin(uint256 received, uint256 minimum);
-    /// @notice The canonical WBNB/BNBULL pair holds less WBNB than
-    ///         `minPoolLiquidity`, or does not exist at all. Caught on every
+    /// @notice The BNBULL pair holds less of its quote asset than the floor for
+    ///         that quote asset, or does not exist at all. Caught on every
     ///         inline path, where it becomes an accrual.
     error PoolTooThin(uint256 wbnbReserve, uint256 minimum);
     error InvalidMinLiquidity(uint256 requested);
+    /// @dev The wired `SwapIntermediate` is BNBULL itself, which would build a
+    ///      path containing a self-pair hop.
+    error BadIntermediate(address target);
     error InsufficientPending(uint256 requested, uint256 available);
     error NothingToSweep();
     error AirdropTooHigh(uint256 requested, uint256 cap);
@@ -973,10 +1005,10 @@ contract MintDrop is Ownable, Pausable, ReentrancyGuard {
             funded = amount;
         } else {
             // ONE hop. The three-address stablecoin path went with
-            // `DECISIONS.md §26`; WBNB -> BNBULL is the only route left.
-            address[] memory path = new address[](2);
-            path[0] = address(wbnb);
-            path[1] = address(bnbull);
+            // `DECISIONS.md §26`; WBNB -> BNBULL is the only route left —
+            // unless `swapIntermediate()` is wired, which is the dormant
+            // backup for a token that graduates against something else.
+            address[] memory path = _path(address(wbnb), address(bnbull));
             funded = _swapNativeAndMeasure(amount, _floor(amount, path, minOutOverride), path);
         }
 
@@ -1000,9 +1032,7 @@ contract MintDrop is Ownable, Pausable, ReentrancyGuard {
             wbnb.deposit{value: amount}();
             funded = wbnb.balanceOf(address(this)) - before;
         } else {
-            address[] memory path = new address[](2);
-            path[0] = address(bnbull);
-            path[1] = address(wbnb);
+            address[] memory path = _path(address(bnbull), address(wbnb));
             funded = _swapTokensAndMeasure(
                 bnbull, amount, _floor(amount, path, minOutOverride), path, IERC20(address(wbnb))
             );
@@ -1073,8 +1103,79 @@ contract MintDrop is Ownable, Pausable, ReentrancyGuard {
     }
 
     /**
-     * @dev Refuse to trade against a pair that does not exist, or holds less
-     *      WBNB than `minPoolLiquidity`.
+     * @notice ⚠ THE DORMANT BACKUP ROUTE. Zero means the swap is the ONE hop it
+     *         has always been; anything else inserts it as a middle hop.
+     *
+     * @dev `DECISIONS.md §30`: four.meme lists **20 templates and 19 graduate
+     *      into a NON-BNB pool** (USDT, USDC, CAKE…). The dominant flow, and a
+     *      live mainnet graduate re-confirmed 2026-08-06, lands in v2 against
+     *      **WBNB** (`§28`) — but the LP is burned and the token immutable, so a
+     *      wrong answer on the launch form would otherwise point every buy leg
+     *      at a pool that does not exist, permanently.
+     *
+     *      | graduates against | path |
+     *      |---|---|
+     *      | WBNB (expected) | `[WBNB, BNBULL]` — unchanged, unwired, today |
+     *      | USDT / CAKE / X | `[WBNB, X, BNBULL]` |
+     *
+     *      ⚠ ONE ADDRESS, NOT AN `address[]`. A settable path would need five
+     *      things validated (length, first element, last element, zero members,
+     *      gas-bomb length); an optional middle hop makes all five structurally
+     *      impossible instead — the length is 2 or 3, the first element is the
+     *      token the caller is spending, and the last is the immutable
+     *      `bnbull`. **A path whose last hop is not BNBULL cannot be
+     *      expressed.**
+     *
+     *      ⚠ TIMELOCKED, because a settable route is a rug vector: point it at
+     *      a token you control and protocol money buys your own supply. It is a
+     *      `Wire` slot, so it is `bootstrapWire` while zero, then
+     *      `proposeWire` -> wait -> `commitWire`, with the pending target and
+     *      ETA public throughout. No second, weaker mechanism.
+     *
+     *      ⚠ `address(wbnb)` IS THE SENTINEL FOR "BACK TO DIRECT", because
+     *      `TimelockedAddress.propose` refuses a zero target and a wire can
+     *      never be un-set. `[WBNB, WBNB, BNBULL]` is nonsense as a route,
+     *      which is what makes it safe to spend as a flag — and reverting a
+     *      wrong guess has to be possible, or the insurance becomes the trap.
+     */
+    function swapIntermediate() public view returns (address) {
+        address mid = _wire(Wire.SwapIntermediate);
+        return mid == address(wbnb) ? address(0) : mid;
+    }
+
+    /// @dev The asset the BNBULL pair is quoted in: WBNB normally, the wired
+    ///      intermediate otherwise. Not "the last element of the path" — the
+    ///      buy leg ends on that pair and the sell leg starts on it, and it is
+    ///      the same pool either way.
+    function _quoteAsset() private view returns (address) {
+        address mid = swapIntermediate();
+        return mid == address(0) ? address(wbnb) : mid;
+    }
+
+    /// @dev The route: two elements, byte for byte what this contract has
+    ///      always built, unless an intermediate is wired and then three. v2's
+    ///      router has always taken an arbitrary-length `address[] path`; the
+    ///      only thing hardcoded here was ever the length.
+    function _path(address inToken, address outToken)
+        private
+        view
+        returns (address[] memory path)
+    {
+        address mid = swapIntermediate();
+        if (mid == address(0)) {
+            path = new address[](2);
+            path[1] = outToken;
+        } else {
+            path = new address[](3);
+            path[1] = mid;
+            path[2] = outToken;
+        }
+        path[0] = inToken;
+    }
+
+    /**
+     * @dev Refuse to trade against a pair that does not exist, or holds less of
+     *      its quote asset than the floor for that quote asset.
      *
      *      REVERTS, and every caller is either inside a try/catch (the inline
      *      legs, where it becomes an accrual and a `…Deferred` event) or a
@@ -1086,39 +1187,49 @@ contract MintDrop is Ownable, Pausable, ReentrancyGuard {
      *      The factory is read off the router — never a second wire — so the
      *      reserve the floor is measured against is, by construction, the book
      *      the swap is about to hit.
+     *
+     *      ⚠ THE FLOOR IS PICKED BY DENOMINATION AND THE TWO ARE NEVER SHARED:
+     *      a WBNB pair against `minPoolLiquidity` (1 BNB), an X pair against
+     *      `minPoolLiquidityAlt` (in X). An unset alt floor refuses the trade
+     *      rather than comparing mismatched units.
      */
     function _requireLiquidity(address r) private view {
-        (, uint256 reserve) = _pool(r);
-        uint256 floor_ = minPoolLiquidity;
+        address q = _quoteAsset();
+        uint256 floor_ = q == address(wbnb) ? minPoolLiquidity : minPoolLiquidityAlt;
+        if (floor_ == 0) revert InvalidMinLiquidity(0);
+        (, uint256 reserve) = _pool(r, q);
         if (reserve < floor_) revert PoolTooThin(reserve, floor_);
     }
 
     /**
-     * @dev The canonical WBNB/BNBULL v2 pair and its WBNB-side reserve.
+     * @dev The canonical `quote`/BNBULL v2 pair and its quote-side reserve.
      *
      *      A MISSING pair returns zero rather than reverting, so "not launched
      *      yet" and "dust" land in the same place: below the floor, deferred.
      *      `token0()` is READ, never derived from address ordering — the pair
      *      is the authority on its own reserve order.
      */
-    function _pool(address r) private view returns (address pair, uint256 reserve) {
-        pair = IPancakeFactory(IPancakeRouter02(r).factory()).getPair(
-            address(wbnb), address(bnbull)
-        );
+    function _pool(address r, address q) private view returns (address pair, uint256 reserve) {
+        pair = IPancakeFactory(IPancakeRouter02(r).factory()).getPair(q, address(bnbull));
         if (pair == address(0)) return (pair, 0);
         (uint112 r0, uint112 r1,) = IPancakePair(pair).getReserves();
-        reserve = IPancakePair(pair).token0() == address(wbnb) ? uint256(r0) : uint256(r1);
+        reserve = IPancakePair(pair).token0() == q ? uint256(r0) : uint256(r1);
     }
 
-    /// @notice The canonical WBNB/BNBULL v2 pair and its WBNB-side reserve —
-    ///         the two numbers `minPoolLiquidity` is compared against. An
+    /// @notice The canonical BNBULL v2 pair and its quote-side reserve — the
+    ///         two numbers the liquidity floor is compared against. An
     ///         OFF-CHAIN read for the keepers and the deploy pre-flight; it is
     ///         on no never-fail path and may revert if the wired router does
     ///         not speak v2.
+    /// @dev ⚠ THE NAME IS HISTORICAL, KEPT SO KEEPER TOOLING DOES NOT BREAK. It
+    ///      follows the route: unwired (the default) it is WBNB/BNBULL and the
+    ///      reserve is WBNB; with an intermediate X it is X/BNBULL and the
+    ///      reserve is **in X**. Read `swapIntermediate()` before you read a
+    ///      unit into the number.
     function wbnbPoolLiquidity() external view returns (address pair, uint256 wbnbReserve) {
         address r = _wire(Wire.Router);
         if (r == address(0)) return (address(0), 0);
-        return _pool(r);
+        return _pool(r, _quoteAsset());
     }
 
     /// @dev Lock tokens into a pot. Nothing gets them out again except a won
@@ -1421,6 +1532,26 @@ contract MintDrop is Ownable, Pausable, ReentrancyGuard {
         emit MinPoolLiquidityChanged(minWbnbReserve);
     }
 
+    /**
+     * @notice Set the liquidity floor used when `swapIntermediate()` is wired —
+     *         denominated in THAT token, not in BNB.
+     *
+     * @dev ⚠ ZERO IS ALLOWED HERE AND MEANS "DO NOT TRADE THE ALTERNATE
+     *      ROUTE" — the opposite of what zero means on `setMinPoolLiquidity`,
+     *      because the risks are not symmetrical: a zero WBNB floor would let
+     *      every leg trade a dust pair, a zero alt floor makes every leg on the
+     *      alternate route defer. Both point the same way, and this one doubles
+     *      as the backup route's kill switch. The cap is reused as a raw sanity
+     *      ceiling; it is not BNB-denominated here.
+     */
+    function setMinPoolLiquidityAlt(uint256 minQuoteReserve) external onlyOwner {
+        if (minQuoteReserve > MAX_MIN_POOL_LIQUIDITY) {
+            revert InvalidMinLiquidity(minQuoteReserve);
+        }
+        minPoolLiquidityAlt = minQuoteReserve;
+        emit MinPoolLiquidityAltChanged(minQuoteReserve);
+    }
+
     function setKeeper(address _keeper) external onlyOwner {
         emit KeeperChanged(keeper, _keeper);
         keeper = _keeper;
@@ -1528,12 +1659,22 @@ contract MintDrop is Ownable, Pausable, ReentrancyGuard {
             uint8 d = AggregatorV3Interface(target).decimals();
             if (d > 36) revert FeedDecimalsUnusable(d);
             feedDecimals = d;
+        } else if (slot == Wire.SwapIntermediate) {
+            // BNBULL as its own middle hop builds a path containing a
+            // self-pair, which `PancakeLibrary.sortTokens` rejects
+            // (`IDENTICAL_ADDRESSES`). A dead leg rather than a stolen one, but
+            // a dead leg that only ever shows up as silent deferral.
+            if (target == address(bnbull)) revert BadIntermediate(target);
         }
     }
 
     /// @notice Every live wiring address in one call — the read the deploy
     ///         preflight and the keepers use. `wireOf` adds the pending target
     ///         and its ETA for a single slot.
+    /// @dev ⚠ THE SHAPE IS DELIBERATELY UNCHANGED. `Wire.SwapIntermediate` is
+    ///      NOT returned here — a fifth value would break every decoder already
+    ///      written against this selector for a slot expected to read zero
+    ///      forever. Use `swapIntermediate()` or `wireOf(...)`.
     function wires()
         external
         view

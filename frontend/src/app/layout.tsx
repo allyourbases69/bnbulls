@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { Providers } from './providers';
 import { NavBar } from '@/components/NavBar';
+import { TestnetBanner } from '@/components/TestnetBanner';
 import { PotTicker } from '@/components/PotTicker';
 import { SiteFooter } from '@/components/SiteFooter';
 import { siteUrl } from '@/lib/env';
@@ -76,7 +77,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body className="bull-app-texture">
         <Providers>
-          <NavBar />
+          <TestnetBanner />
+        <NavBar />
           {/* Site-wide pot strip: the pots stay in view on every page,
               growing. Renders nothing at all when no pot is deployed. */}
           <PotTicker />

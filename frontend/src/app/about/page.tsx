@@ -60,10 +60,24 @@ const DEV_SHARE_BPS = 1_000;
  *  the winner's 90% is never touched by it. */
 const POT_SHARE_BPS = 3_000;
 
-/** `Duel.discountBpsOf[bnbull]`, set in the constructor and nowhere else.
- *  `DECISIONS.md §2`: BNBULL and only BNBULL, applied to the sticker exactly
- *  once, in `Duel.fighterCost`. */
-const BNBULL_DISCOUNT_BPS = 1_000;
+/**
+ * `Duel.discountBpsOf[bnbull]`.
+ *
+ * ⚠ ZERO since `DECISIONS.md §39` — owner call: "a $2 duel costs $2, whether
+ * it is paid in BNB or in BNBULL." The `Duel` constructor no longer sets any
+ * launch discount, and `Verify.s.sol` asserts it is zero so a stray
+ * `setDiscountBps` before launch fails the preflight.
+ *
+ * `§2`'s "the discount is ALWAYS BNBULL" still holds — it belongs to MINTING.
+ * A duel is a bet between two players, and discounting one side's entry means
+ * they put DIFFERENT money into the same purse. `_distributePot` settles each
+ * side in its own asset, so that asymmetry does not average out: it lands
+ * directly in the winner's payout.
+ *
+ * The setter is still live, so if it is ever turned on, change this one
+ * constant and every figure on the page follows.
+ */
+const BNBULL_DISCOUNT_BPS = 0;
 
 /** $2 a side, in millionths of a dollar so every division below is integer
  *  division exactly like the contract's, with no float dust in the cents. */
@@ -550,8 +564,10 @@ export default function AboutPage() {
           </p>
           <p>
             once it does, ${TICKER} becomes a second way to pay for everything, and it is{' '}
-            <strong className="text-bull-text">the only leg that ever carries a discount</strong>.
-            the buy pressure the pots create switches on at the same moment.
+            <strong className="text-bull-text">the only leg that carries a discount on minting</strong>.
+            fights are the same price either way: a $2 duel costs $2 in bnb or $2 in ${TICKER}, because
+            both fighters should put the same money into the same purse. the buy pressure the pots
+            create switches on at the same moment.
           </p>
           <p className="text-bull-text-faint">
             when there is a real address and a real pool, they will be posted here and on this

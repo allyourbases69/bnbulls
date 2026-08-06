@@ -16,7 +16,7 @@
  * also means the token genuinely does not exist yet.
  */
 import type { ReactElement } from 'react';
-import { xUrl, telegramUrl, explorerBaseUrl, contractAddress } from '@/lib/env';
+import { xUrl, telegramUrl, githubUrl, explorerBaseUrl, contractAddress } from '@/lib/env';
 import { DESCRIPTION, SAFETY, TICKER } from '@/lib/brand';
 
 interface SocialLink {
@@ -31,6 +31,12 @@ const XIcon = (
   </svg>
 );
 
+const GitHubIcon = (
+  <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true">
+    <path d="M12 .5a12 12 0 0 0-3.79 23.4c.6.1.82-.26.82-.58v-2.2c-3.34.72-4.04-1.6-4.04-1.6-.55-1.4-1.34-1.77-1.34-1.77-1.1-.75.08-.73.08-.73 1.2.08 1.84 1.24 1.84 1.24 1.07 1.84 2.81 1.3 3.5 1 .1-.78.42-1.31.76-1.61-2.67-.3-5.47-1.34-5.47-5.96 0-1.32.47-2.4 1.24-3.24-.13-.3-.54-1.53.12-3.18 0 0 1.01-.32 3.3 1.24a11.5 11.5 0 0 1 6.01 0c2.29-1.56 3.3-1.24 3.3-1.24.66 1.65.25 2.88.12 3.18.77.84 1.24 1.92 1.24 3.24 0 4.63-2.81 5.65-5.49 5.95.43.37.82 1.1.82 2.22v3.29c0 .32.21.69.82.57A12 12 0 0 0 12 .5Z" />
+  </svg>
+);
+
 const TelegramIcon = (
   <svg viewBox="0 0 24 24" aria-hidden className="h-5 w-5" fill="currentColor">
     <path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0Zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z" />
@@ -38,9 +44,13 @@ const TelegramIcon = (
 );
 
 export function SiteFooter() {
+  const gh = githubUrl();
   const socials: SocialLink[] = [
     { href: xUrl(), label: 'x', icon: XIcon },
     { href: telegramUrl(), label: 'telegram', icon: TelegramIcon },
+    // Only rendered when a URL is configured — see `githubUrl`. A dead link on
+    // the "read the code" promise is worse than no link.
+    ...(gh ? [{ href: gh, label: 'github', icon: GitHubIcon }] : []),
   ];
   const token = contractAddress('bnbullToken');
   const explorer = explorerBaseUrl();

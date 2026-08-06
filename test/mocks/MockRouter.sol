@@ -42,10 +42,21 @@ contract MockV2Pair {
  * @dev `missing` makes it answer `address(0)` — the PRE-GRADUATION state, and
  *      the one the never-fail rule cares about most: no pair must defer, never
  *      revert.
+ *
+ *      ⚠ `setPairFor` IS AN OVERRIDE, NOT A REPLACEMENT, and the default answer
+ *      is untouched by it. It exists for ONE question the single-pair mock
+ *      cannot ask: when the swap path carries a middle hop, WBNB/X and
+ *      X/BNBULL are DIFFERENT pools with different reserves, and the whole
+ *      point of the liquidity floor is that it reads the BNBULL one. A mock
+ *      that answers the same pair for both cannot tell a passing floor from a
+ *      floor pointed at the wrong book.
  */
 contract MockV2Factory {
     address public pair;
     bool public missing;
+
+    mapping(bytes32 => address) private _pairs;
+    mapping(bytes32 => bool) private _set;
 
     constructor(address _pair) {
         pair = _pair;
@@ -55,8 +66,23 @@ contract MockV2Factory {
         missing = b;
     }
 
-    function getPair(address, address) external view returns (address) {
-        return missing ? address(0) : pair;
+    /// @notice Pin the pair for one token pair. `address(0)` pins "this
+    ///         specific pair does not exist" without hiding the others.
+    function setPairFor(address a, address b, address p) external {
+        bytes32 k = _key(a, b);
+        _pairs[k] = p;
+        _set[k] = true;
+    }
+
+    function getPair(address a, address b) external view returns (address) {
+        if (missing) return address(0);
+        bytes32 k = _key(a, b);
+        return _set[k] ? _pairs[k] : pair;
+    }
+
+    /// @dev Order-independent, exactly like the real factory's `getPair`.
+    function _key(address a, address b) private pure returns (bytes32) {
+        return a < b ? keccak256(abi.encodePacked(a, b)) : keccak256(abi.encodePacked(b, a));
     }
 }
 
@@ -115,6 +141,12 @@ contract MockRouter {
     ///         "never sell BNBULL" rule is proved by asserting this stays 0.
     uint256 public swapCalls;
 
+    /// @notice The exact `path` of the last swap. Recorded so a test can assert
+    ///         the ROUTE, not just the outcome: "the default is still two
+    ///         elements, WBNB then BNBULL" is a claim about this array and
+    ///         nothing else can prove it.
+    address[] private _lastPath;
+
     constructor(address _weth) {
         weth = _weth;
         v2Pair = new MockV2Pair();
@@ -170,6 +202,11 @@ contract MockRouter {
 
     function resetSwapCalls() external {
         swapCalls = 0;
+        delete _lastPath;
+    }
+
+    function lastPath() external view returns (address[] memory) {
+        return _lastPath;
     }
 
     // ─── Quote ────────────────────────────────────────────────────────────
@@ -206,6 +243,7 @@ contract MockRouter {
         if (revertOnSwap) revert("MockRouter: swap down");
         require(path.length >= 2, "MockRouter: bad path");
         swapCalls += 1;
+        _lastPath = path;
 
         uint256 out = _out(msg.value, path[0], path[path.length - 1]);
         uint256 sent = lying ? (out * lyingBps) / 10_000 : out;
@@ -223,6 +261,7 @@ contract MockRouter {
         if (revertOnSwap) revert("MockRouter: swap down");
         require(path.length >= 2, "MockRouter: bad path");
         swapCalls += 1;
+        _lastPath = path;
 
         // A real router pulls against the allowance, so a taxed INPUT token
         // delivers the pair less than `amountIn` — exactly as on chain.

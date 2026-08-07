@@ -63,11 +63,15 @@ interface PageProps {
  * everyone but the king until the collection address ships in a build, testnet
  * shows the lot.
  *
- * `dynamicParams = false` makes every id outside 1..501 (and every non-numeric
- * path) a static 404 with no function in the path — `parseId`/`notFound()`
- * below stay as the in-page guard for the generated set.
+ * ⚠ `dynamicParams` stays at its DEFAULT (true), reluctantly. With `false` (and
+ * with `dynamic = 'error'`) `vercel build` refuses the output — "Unable to find
+ * lambda for route: /bull/1" — because the builder wants a fallback function to
+ * exist for a dynamic route even when every real param is prerendered. So the
+ * fallback lambda remains, and it is the same broken-on-Vercel lambda as
+ * before — but now it is only in the path for ids OUTSIDE 1..501 and
+ * non-numeric junk, which bare-500 instead of 404ing. Ugly for junk urls,
+ * correct for every bull that exists.
  */
-export const dynamicParams = false;
 export function generateStaticParams() {
   return Array.from({ length: MAX_ID }, (_, i) => ({ id: String(i + 1) }));
 }

@@ -830,6 +830,31 @@
   .animate-truck-banner {
     animation: truck-banner 0.45s ease-out forwards;
   }
+
+  /* The winner's name on the victory card. This is THE reveal now — the
+     card above the fight no longer prints the outcome — so it gets one
+     beat of arrival and then sits still. One shot, never a loop: a name
+     that keeps pulsing is a name nobody can read or screenshot. */
+  @keyframes victory-name {
+    0% {
+      opacity: 0;
+      transform: scale(0.9);
+      text-shadow: none;
+    }
+    55% {
+      opacity: 1;
+      transform: scale(1.06);
+      text-shadow: 0 0 18px rgb(var(--bull-gold) / 0.75);
+    }
+    100% {
+      opacity: 1;
+      transform: scale(1);
+      text-shadow: 0 0 8px rgb(var(--bull-gold) / 0.35);
+    }
+  }
+  .animate-victory-name {
+    animation: victory-name 0.45s ease-out forwards;
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -896,11 +921,96 @@
     filter: drop-shadow(0 0 var(--tier-glow) rgb(var(--tier-ink) / 0.75));
   }
   .duel-portrait-winner {
-    box-shadow: 0 0 0 2px rgb(var(--bull-gold) / 0.8), 0 0 22px rgb(var(--bull-gold) / 0.55);
+    box-shadow: 0 0 0 3px rgb(var(--bull-gold) / 0.9), 0 0 34px rgb(var(--bull-gold) / 0.6);
   }
+  /* ⚠ `!important` because `.duel-portrait` sets `filter` for the tier glow
+     and the loser has to be able to overrule it. Without this the loser
+     kept a bright rarity halo while being greyed out, which read as the
+     winner. The reference is unambiguous: the loser goes dark and flat. */
   .duel-portrait-loser {
-    opacity: 0.62;
-    filter: grayscale(0.85);
+    opacity: 0.55;
+    filter: grayscale(1) brightness(0.55) !important;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════
+     THE FIGHT, FULL SCREEN. (`components/duel/DuelAnimation.tsx`)
+     ═══════════════════════════════════════════════════════════════════
+     Owner: "the animation should go full screen ... and then start within
+     its own popup". It is a portalled dialog now, so these rules are the
+     ones that decide whether it works on a phone.
+
+     ⚠ THE RULE THAT MATTERS: NOTHING A PLAYER PRESSES MAY BE INSIDE A
+     CLIPPED BOX. Fefers shipped an `absolute inset-0` result panel to a
+     real iPhone and its buttons landed outside the clipped card. Here the
+     arena is the only `overflow: hidden` element and the result card and
+     the controls are siblings of it, in a column that scrolls.
+     ═════════════════════════════════════════════════════════════════ */
+  .duel-overlay {
+    /* `dvh` so an iOS url bar sliding in cannot push the controls under
+       the fold. The `vh` line above it is the fallback for anything that
+       does not know `dvh`. */
+    height: 100vh;
+    height: 100dvh;
+  }
+
+  .duel-overlay-shell {
+    padding-left: max(0.75rem, env(safe-area-inset-left));
+    padding-right: max(0.75rem, env(safe-area-inset-right));
+    padding-top: max(0.75rem, env(safe-area-inset-top));
+    padding-bottom: max(0.75rem, env(safe-area-inset-bottom));
+  }
+
+  /* The pot strip, pinned above the fighters. Quiet on purpose: it sits in
+     the eyeline for the whole fight and must never out-shout the hp bars. */
+  .duel-jackpot-strip {
+    border: 1px solid rgb(var(--bull-border) / 0.7);
+    border-radius: 0.25rem;
+    background: rgb(var(--bull-bg) / 0.72);
+    backdrop-filter: blur(2px);
+  }
+
+  /*
+   * HOW BIG A FIGHTER IS.
+   *
+   * Sized off BOTH axes so the fight is as large as the screen allows and
+   * never larger: the width term keeps two of them plus the "vs" column
+   * inside a phone, and the height term reserves room for the pot strip,
+   * the name/hp/weapon readout and the controls row so they cannot be
+   * pushed off the bottom. `1.109` is TILE_W / TILE_H (71 / 64) — the
+   * height term is converted to a width because that is what the sprite
+   * is sized by (`BullSprite fluid` is `width: 100%; height: auto`).
+   *
+   * The `max()` floor stops a very short viewport resolving the height
+   * term to zero (or negative) and collapsing the bull to nothing.
+   */
+  .duel-stage-portrait {
+    width: min(clamp(6.5rem, 44vw, 22rem), max(6.5rem, calc((100vh - 18rem) * 1.109)));
+    width: min(clamp(6.5rem, 44vw, 22rem), max(6.5rem, calc((100dvh - 18rem) * 1.109)));
+    /* The column can be narrower than either term on a small phone. Height is
+       recomputed from `aspect-ratio` when this bites, so the bull never
+       stretches. */
+    max-width: 100%;
+    margin-inline: auto;
+  }
+
+  /*
+   * Once the result is in flow BENEATH the fight — which is what happens
+   * below `md`, because floating a card with buttons over a clipped box on
+   * a phone is the bug above — the fight shrinks to scenery so the card
+   * and the controls both stay on screen without scrolling. From `md` up
+   * the card floats over the fight and nothing needs to move.
+   */
+  @media (max-width: 767px) {
+    .duel-stage[data-card='true'] .duel-stage-portrait {
+      width: min(clamp(4.25rem, 26vw, 9rem), max(4.25rem, calc(24vh * 1.109)));
+      width: min(clamp(4.25rem, 26vw, 9rem), max(4.25rem, calc(24dvh * 1.109)));
+    }
+  }
+
+  .duel-victory-card {
+    background: rgb(var(--bull-bg) / 0.96);
+    backdrop-filter: blur(6px);
+    box-shadow: 0 18px 50px rgb(0 0 0 / 0.6);
   }
 }
 

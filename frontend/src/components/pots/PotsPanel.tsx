@@ -20,12 +20,14 @@ export function PotsPanel() {
           name="jackpotBnbull"
           label={POTS.bnbull.label}
           symbolFallback={POTS.bnbull.symbolFallback}
+          odds={POTS.bnbull.odds}
           tone="bnbull"
         />
         <PotCard
           name="jackpotBnb"
           label={POTS.bnb.label}
           symbolFallback={POTS.bnb.symbolFallback}
+          odds={POTS.bnb.odds}
           tone="bnb"
         />
       </div>

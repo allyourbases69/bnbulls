@@ -7,12 +7,12 @@ import { formatToken, shortAddr } from '@/lib/format';
 import { tickerToPrint, useTokenDecimals, useTokenSymbol } from '@/lib/hooks/useTokenDecimals';
 import { useJackpotAwards } from '@/lib/hooks/useJackpotAwards';
 import { QUOTE_REFRESH_MS } from '@/lib/constants';
-import { NotDeployed } from '@/components/shared/NotDeployed';
 
 export function PotCard({
   name,
   label,
   symbolFallback,
+  odds,
   tone,
 }: {
   name: 'jackpotBnbull' | 'jackpotBnb';
@@ -21,6 +21,11 @@ export function PotCard({
    *  `prizeToken().symbol()` below; this is only reached once that read has
    *  settled with no answer. See `POTS` in `brand.ts`. */
   symbolFallback: string;
+  /** ⚠ ONLY EVER RENDERED PRE-LAUNCH, and it comes from `POTS` in `brand.ts` so
+   *  there is one place to change it. Once the pot has an address the odds are
+   *  read off chain instead — a hardcoded number must never sit next to a live
+   *  pool, or a parameter change would leave the page confidently wrong. */
+  odds: string;
   /** Which ink this pot wears. Gold is $BNBULL, steel is BNB, and it is the
    *  same vocabulary the ticker strip and the standing panels use so all three
    *  surfaces read as the same two pots. */
@@ -73,8 +78,48 @@ export function PotCard({
 
   const { awards, isLoading: loadingAwards, incomplete } = useJackpotAwards(name);
 
+  /**
+   * PRE-LAUNCH: the real card, at zero.
+   *
+   * ⚠ THE ZERO IS TRUE, WHICH IS THE ONLY REASON THIS IS ALLOWED. Before the
+   * pots exist they hold nothing and have paid nobody, so every figure printed
+   * here is the correct figure — this shows the pot, it does not fake one. The
+   * card must never render invented pool sizes or a fabricated award list, and
+   * the moment an address is configured it drops through to the live path below
+   * and reads everything off chain.
+   *
+   * Owner, 2026-08-07: "on the prod site the BNBULL and BNB pots can be shown
+   * but just cosmetically show them at $0." A `NotDeployed` box in their place
+   * made a deliberate pre-launch site read as a half-built one.
+   */
   if (!address) {
-    return <NotDeployed what={`the ${label}`} />;
+    return (
+      <div
+        className={`pot-card bull-card ${tone === 'bnbull' ? 'pot-bnbull' : 'pot-bnb'} rounded p-5`}
+      >
+        <p className="font-mono text-xs uppercase tracking-[0.2em] text-bull-text-faint">{label}</p>
+        <p className="pot-figure bull-header mt-2 font-mono">
+          0 <span className="text-base font-normal">{symbolFallback}</span>
+        </p>
+        <p className="mt-1 text-sm text-bull-text-dim">
+          {odds} on every decisive fight, own pool, own roll.
+        </p>
+        <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+          <div>
+            <dt className="font-mono text-xs text-bull-text-faint">ever paid out</dt>
+            <dd className="font-mono">0 {symbolFallback}</dd>
+          </div>
+          <div>
+            <dt className="font-mono text-xs text-bull-text-faint">wins</dt>
+            <dd className="font-mono">0</dd>
+          </div>
+        </dl>
+        <p className="mt-4 font-mono text-xs uppercase tracking-wide text-bull-text-faint">
+          recent awards
+        </p>
+        <p className="mt-2 text-sm text-bull-text-dim">none yet. it starts filling on fight one.</p>
+      </div>
+    );
   }
 
   return (

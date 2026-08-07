@@ -48,6 +48,20 @@
 import type { Abi, Address, PublicClient } from 'viem';
 import { DuelAbi, Erc20Abi } from '@/lib/abi';
 import { CURRENCY } from '@/lib/brand';
+import { decodeRevert } from '@/lib/revertDecode';
+
+/**
+ * Run a read and keep BOTH outcomes. A bare `.catch(() => null)` throws away
+ * the one fact that decides what to tell the player: whether the contract
+ * refused, or whether we never managed to ask it.
+ */
+async function attempt<T>(p: Promise<T>): Promise<{ value: T | null; error: unknown }> {
+  try {
+    return { value: await p, error: null };
+  } catch (e) {
+    return { value: null, error: e };
+  }
+}
 
 /**
  * ⚠ WIDENED FROM THE `as const` ABI ON PURPOSE. The helper below calls
@@ -139,10 +153,18 @@ export async function readFightPricing(args: {
   const assets = await Promise.all(
     assetList.map(async (address): Promise<StakeAssetInfo> => {
       const kind = classify(address, bnbullRaw, wbnbRaw);
-      const [sticker, cost, discountBps, maxCost, decimals, symbol] = await Promise.all([
+      const [stickerTry, costTry, discountBps, maxCost, decimals, symbol] = await Promise.all([
         // Both of these revert together on an unhealthy oracle (BNB leg).
-        read<bigint>('stickerCost', [address]).catch(() => null),
-        read<bigint>('fighterCost', [address]).catch(() => null),
+        //
+        // ⚠ THE ERROR IS KEPT, NOT SWALLOWED. These used to be
+        // `.catch(() => null)`, which collapsed "the contract refused to quote"
+        // and "we could not reach the node" into the same value — so an RPC
+        // timeout, a rate limit or a dropped connection all printed a confident
+        // "the chainlink bnb/usd feed is unavailable, stale, or outside its
+        // sanity band" about a feed that was answering fine. Diagnosing a
+        // healthy oracle as broken sends the player away from a game that works.
+        attempt(read<bigint>('stickerCost', [address])),
+        attempt(read<bigint>('fighterCost', [address])),
         read<number>('discountBpsOf', [address]).then(Number).catch(() => 0),
         read<bigint>('maxFightCostOf', [address]).catch(() => 0n),
         client
@@ -160,17 +182,24 @@ export async function readFightPricing(args: {
           : Promise.resolve(KNOWN_SYMBOL[kind]),
       ]);
 
+      const sticker = stickerTry.value;
+      const cost = costTry.value;
       let resolved = cost;
       let note: string | null = null;
       let pending = false;
 
       if (resolved === null) {
+        // Transport is NOT a verdict. The node not answering says nothing about
+        // the oracle, so say the true thing and let them try again.
         note =
-          kind === 'bnb'
-            ? 'the chainlink bnb/usd feed is unavailable, stale, or outside its sanity ' +
-              'band, so a bnb fight cannot be priced right now. the contract refuses to ' +
-              'guess and so does this page.'
-            : `the contract would not quote a ${symbol} fight right now.`;
+          decodeRevert(costTry.error).kind === 'transport'
+            ? `the node did not answer, so a ${symbol} fight could not be priced. ` +
+              'that is the connection, not the fight. reload and it should quote.'
+            : kind === 'bnb'
+              ? 'the chainlink bnb/usd feed is unavailable, stale, or outside its sanity ' +
+                'band, so a bnb fight cannot be priced right now. the contract refuses to ' +
+                'guess and so does this page.'
+              : `the contract would not quote a ${symbol} fight right now.`;
       } else if (resolved === 0n) {
         // Zero is not an error. It is "nobody has priced this leg yet", which
         // is precisely the launch state for BNBULL (`DECISIONS.md §29`).

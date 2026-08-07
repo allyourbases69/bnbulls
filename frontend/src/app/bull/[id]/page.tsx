@@ -42,6 +42,36 @@ interface PageProps {
   params: Promise<{ id: string }>;
 }
 
+/**
+ * ⚠ STATICALLY GENERATED, ALL 501, AND THAT IS A BUG FIX AS WELL AS A SPEED-UP.
+ *
+ * This was the ONLY route in the build with no prerender fallback — every other
+ * page ships a static HTML fallback and the APIs ship complete function
+ * bundles, but /bull/[id] had to execute its page function on demand, and on
+ * our prebuilt-from-Windows deploys that one function crashes at init before
+ * Next even answers (a bare "Internal Server Error", no digest — Vercel's own
+ * crash page, observed identically on EVERY deployment, testnet and prod,
+ * while `npm run start` on the same build serves it clean). Owner hit it as
+ * "https://testnet.bnbulls.xyz/bull/6 doesn't load".
+ *
+ * Static is also simply CORRECT here: everything the server renders is
+ * deterministic at build time — the art engine plus build-time env. The chain
+ * half (owner, elo, record, pit, listing) is `BullOnChainPanel`, a client
+ * component that reads live either way. The `mayReveal` gate keys off
+ * `contractsDeployed('bullsNft')`, a build-time inlined value, so each build
+ * bakes exactly the reveal state it would have served dynamically: prod hides
+ * everyone but the king until the collection address ships in a build, testnet
+ * shows the lot.
+ *
+ * `dynamicParams = false` makes every id outside 1..501 (and every non-numeric
+ * path) a static 404 with no function in the path — `parseId`/`notFound()`
+ * below stay as the in-page guard for the generated set.
+ */
+export const dynamicParams = false;
+export function generateStaticParams() {
+  return Array.from({ length: MAX_ID }, (_, i) => ({ id: String(i + 1) }));
+}
+
 function parseId(raw: string): number | null {
   if (!/^\d+$/.test(raw)) return null;
   const id = Number(raw);

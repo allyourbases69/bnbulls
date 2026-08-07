@@ -469,9 +469,15 @@ export const DEAL = {
 
 // ─── safety refrain (VOICE-AND-BRAND §4, on every page footer) ───────
 
+/**
+ * ⚠ TWO TRUST SURFACES, ONE STORY. The telegram pin says "the CA drops here
+ * first", and this footer used to say the SITE was the only place — two
+ * official voices contradicting each other on the one subject where a scammer
+ * exploits any daylight. Both now name the same two places and nothing else.
+ */
 export const SAFETY =
-  'this site is the only place a real contract address gets posted. nobody dms first, ' +
-  'and nobody will ever ask for your seed phrase.';
+  'the real contract address gets posted exactly two places: this site and the pinned ' +
+  'telegram post. nobody dms first, and nobody will ever ask for your seed phrase.';
 
 // ─── nav (IA ported from fighting fefers) ────────────────────────────
 

@@ -1,14 +1,58 @@
 'use client';
 
 /**
- * THE DUEL FLOW. THREE NUMBERED STEPS, STACKED, ONE ACTIVE AT A TIME.
+ * THE DUEL PAGE, IN FEFERS' ORDER. THREE FOLDABLE SECTIONS, TOP TO BOTTOM.
  *
- *   1  your fighter   the dropdown. tick to send a bull in, click a name to
- *                     make it the one that fights next
- *   2  send them in   pay-with toggle, approve a run of fights, and the
- *                     standing approval with its revoke
- *   3  fight          greyed until step 2 is done, then the two fighter cards
- *                     side by side and the fight button
+ *   your fight              the flow, three numbered steps, one active at a time
+ *     1  your fighter       the dropdown. tick to send a bull in, click a name
+ *                           to make it the one that fights next
+ *     2  send them in       what is going in, then the money: pay-with, how many
+ *                           fights, ONE primary button, and the standing
+ *                           approvals kept quiet underneath. Folds itself to a
+ *                           one-line summary the moment it is satisfied.
+ *     3  fight              greyed until step 2 is done, then the two fighter
+ *                           cards side by side and the fight button
+ *   your herd in the pit    the way back out: per-bull and bulk enter/eject
+ *   who is in the pit       the whole roster, everybody's, at the bottom
+ *
+ * ═══════════════════════════════════════════════════════════════════════
+ * ⚠ THIS SHAPE IS FEFERS', NOT AN INVENTION. DO NOT FLATTEN IT BACK.
+ * ═══════════════════════════════════════════════════════════════════════
+ * Owner, 2026-08-07, third complaint about this page: *"i still hate the duel
+ * page, it's not laid out like fefers. you could collapse each section in
+ * fefers, and the roster of all of them waiting should be at bottom, and the
+ * buttons and approvals it's all just a bloody mess."*
+ *
+ * The three things he named, and where each of them went:
+ *
+ *   · COLLAPSIBLE SECTIONS. `DuelSection` is fefers' `CollapsibleSection`: a
+ *     header row you click, a body that folds, and the body stays MOUNTED so a
+ *     fight in flight is never thrown away by a fold. State is remembered for
+ *     the session.
+ *
+ *   · THE ROSTER AT THE BOTTOM. `PitRoster` used to render in the MIDDLE of
+ *     step 2, inside `PitPanel`, between the money controls. It is the
+ *     browse-the-field surface, not a step in the fight, so it is now the last
+ *     section on the page — and it renders for a disconnected visitor too,
+ *     because a stranger landing on /duel and seeing the field queued up is the
+ *     shopfront. Fefers ranks `ArenaLineup` exactly this way.
+ *
+ *   · ONE OBVIOUS NEXT ACTION. Step 2 used to show, all at once and all equally
+ *     loud: two pit bulk buttons, a button per bull, three currency tabs, five
+ *     fight-count pills, a full-width approve, a revoke and two disclosures.
+ *     Now it shows the FIRST outstanding thing and nothing else — send them in,
+ *     or approve — and when neither is outstanding it shows no button at all and
+ *     says so, which is fefers' `nothingWaiting`. The pit's own controls moved to
+ *     their own section; the count moved from five pills to one select; the
+ *     approvals sit quiet under a divider next to the control that creates them.
+ *
+ * ⚠ THE STEP LADDER IS RANKED BY WHAT ACTUALLY BLOCKS, and that ordering is the
+ * whole point of the button. Sending a bull in blocks EVERYTHING (the contract
+ * refuses outright), so it is always first. A first approval comes next, because
+ * it is what lets your herd be picked while you are offline. Topping an existing
+ * approval up is optional and never takes the primary slot — it is a quiet
+ * button next to the allowance line, or it would be the fourth loud thing on the
+ * step and we would be back where we started.
  *
  * ⚠ PORTED FROM THE LIVE FEFERS DUEL PAGE, off the owner's own screenshots, not
  * reinterpreted. The step bubbles, the numbering, the right-aligned "N alive in
@@ -81,7 +125,7 @@
  *    step 3 is deliberately NOT the same thing — see `moneyReady`.
  */
 
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useAccount, useReadContract, useReadContracts } from 'wagmi';
 import { DuelAbi, MarketplaceAbi } from '@/lib/abi';
@@ -97,11 +141,32 @@ import { QUOTE_REFRESH_MS } from '@/lib/constants';
 import { NotDeployed } from '@/components/shared/NotDeployed';
 import { BullCard } from '@/components/bulls/BullCard';
 import { FightAction, type PayAsset } from '@/components/duel/FightAction';
-import { PitPanel } from '@/components/duel/PitPanel';
+import { PitPanel, PitEntryButton } from '@/components/duel/PitPanel';
+import { PitRoster } from '@/components/pit/PitRoster';
+import { DuelSection, useDuelSectionState } from '@/components/duel/DuelSection';
+import { DuelFlowStep, type DuelStepState } from '@/components/duel/DuelFlowStep';
 import { CURRENCY, PIT } from '@/lib/brand';
 
 const ZERO = '0x0000000000000000000000000000000000000000' as const;
 const APPROVE_FIGHT_OPTIONS = [1, 5, 10, 25, 50] as const;
+
+/**
+ * The three foldable sections, and what each of them starts as.
+ *
+ * ⚠ THE DEFAULTS ARE A RANKING, NOT A PREFERENCE. Owner: *"the section a player
+ * is acting in should be the one that is open."* The flow is where you act, so
+ * it opens. The roster opens too, because it is at the bottom where it costs
+ * nothing above the fold and a stranger has to be able to see the field without
+ * hunting for a chevron. The herd panel is management — the way back out — so it
+ * starts folded, exactly as fefers starts its "eject status" section folded.
+ */
+type DuelSectionId = 'your-fight' | 'your-herd' | 'pit-roster';
+const SECTION_DEFAULTS: Readonly<Record<DuelSectionId, boolean>> = {
+  'your-fight': true,
+  'your-herd': false,
+  'pit-roster': true,
+};
+const SECTION_STORAGE_KEY = 'bnbulls.duel.sections';
 
 export function DuelPicker() {
   const duelAddress = contractAddress('duel');
@@ -134,6 +199,43 @@ export function DuelPicker() {
   const [fightsWanted, setFightsWanted] = useState<number>(10);
   const [open, setOpen] = useState(false);
   const autoPicked = useRef(false);
+  const fightsSelectId = useId();
+
+  /**
+   * The player asked step 2 back open after it had folded itself away. `false`
+   * means "follow the flow": open while there is setup outstanding, folded to a
+   * summary line the instant there is not. Straight off fefers' `openStep`.
+   */
+  const [openStep2, setOpenStep2] = useState(false);
+
+  const { open: sections, setSection } = useDuelSectionState<DuelSectionId>(
+    SECTION_STORAGE_KEY,
+    SECTION_DEFAULTS,
+  );
+
+  /**
+   * A FIGHT ON SCREEN OWNS THE SCREEN.
+   *
+   * Fefers gets this by rendering the whole idle page only while `phase.kind ===
+   * 'idle'`, so the roster and the side panels are simply not there during a
+   * fight. Our fight state lives inside `FightAction`, one level down, and
+   * hoisting it would be a rewrite of the flow rather than of the layout — so
+   * this does the same job through the fold instead: the moment an arena is up,
+   * everything below it folds and the flow stays open.
+   *
+   * ⚠ ONE DIRECTION ONLY. It never re-opens anything when the fight goes away,
+   * because by then the player has had a chance to fold things themselves and
+   * un-folding under them would throw that away.
+   */
+  const handleFightVisible = useCallback(
+    (visible: boolean) => {
+      if (!visible) return;
+      setSection('your-fight', true);
+      setSection('your-herd', false);
+      setSection('pit-roster', false);
+    },
+    [setSection],
+  );
 
   // Tick the first living bull once, so a one-bull wallet never has to click
   // anything before it can fight. After that the player owns the selection.
@@ -403,6 +505,85 @@ export function DuelPicker() {
   const pitReady = challengerInPit === true;
   const fightReady = step1Done && pitReady && moneyReady && !blockedReason;
 
+  // ── STEP 2'S ONE BUTTON, AND THE LADDER BEHIND IT ────────────────
+  //
+  // ⚠ `matchable` IS THREE-VALUED AND AN UNREAD PIT OFFERS NOTHING. `null`
+  // means the reads have not landed, and a button that said "send 4 into the
+  // pit" off an unread membership would be asking for a transaction that does
+  // nothing for bulls that are already in.
+  /** Ticked, still to fight, and the pit will not match them right now. Includes
+   *  a bull with an eject counting down: `Yards.enter` writes `leavesAt: 0`, so
+   *  sending it back in cancels the departure on the spot. */
+  const sendInIds = useMemo(() => {
+    const m = pit.matchable;
+    if (!m) return [] as number[];
+    return pending.filter((id) => !m.has(id));
+  }, [pending, pit.matchable]);
+  /** The membership reads have not answered. ⚠ NOT the same as "nothing to
+   *  send", and step 2 must not say the second when it means the first — an
+   *  empty `sendInIds` is produced by both, so the check has to be explicit. */
+  const pitUnread = pit.matchable === null;
+
+  /** Yours that are in the pit right now, for step 2's folded summary line. */
+  const myInPitCount = useMemo(
+    () => roster.mine.filter((b) => pit.inPit.has(b.id)).length,
+    [roster.mine, pit.inPit],
+  );
+
+  // The currency the player is actually being asked to sign for. `BOTH` lands on
+  // bnb, same as `/api/run-duel` resolves it — see `primaryIsBnbull`.
+  const primaryAllowance = primaryIsBnbull ? bnbullAllowance : bnbAllowance;
+  const primaryDecimals = primaryIsBnbull ? bnbullDecimals : wbnbDecimals;
+  /** What the wallet will actually approve. The bnb leg's ERC-20 is WBNB and
+   *  the button has to say so, or somebody goes looking for the wrong token. */
+  const primaryTokenLabel = primaryIsBnbull ? 'bnbull' : 'wbnb';
+  const primaryCurrencyLabel = primaryIsBnbull ? 'bnbull' : 'bnb';
+
+  /**
+   * NOTHING STANDING IN THE CURRENCY YOU PICKED.
+   *
+   * ⚠ THIS IS THE ONE APPROVAL THAT IS NOT OPTIONAL, WHICHEVER CURRENCY IT IS.
+   * On bnbull it stops you fighting at all. On bnb it does not — your own side
+   * rides in as `msg.value` — but it is the ONLY thing that lets somebody else
+   * pick one of your bulls, because `Duel._takeSide` gates the raw-bnb path on
+   * `owner_ == msg.sender` and a passive opponent stakes by allowance, always.
+   * A herd with no allowance is a herd nobody can challenge while you are
+   * offline, which is the silent failure this whole page exists to stop.
+   *
+   * ⚠ AND IT IS NOT ASKED FOR WHEN IT WOULD CHANGE NOTHING. When the BALANCE is
+   * the binding constraint, approving more buys zero extra fights, so the ladder
+   * skips it and the allowance row says why.
+   */
+  const needsFirstApproval =
+    primaryAllowance.configured &&
+    primaryAllowance.fightsAllowed < 1 &&
+    !primaryAllowance.limitedByBalance;
+  // ⚠ THERE IS DELIBERATELY NO `wantsTopUp` GATE HERE. An allowance that
+  // already covers a fight but not the whole run the player asked for is
+  // OPTIONAL, so it never takes the primary slot and never holds step 2 open.
+  // `AllowanceRow` offers it as a quiet button next to the live figure instead.
+  /** Step 2 has no signature left to collect. Fefers' `nothingWaiting`. */
+  const nothingOutstanding = sendInIds.length === 0 && !needsFirstApproval;
+
+  // ── STEP STATE ───────────────────────────────────────────────────
+  const step2Done = step1Done && pitReady && moneyReady && nothingOutstanding;
+  /** Open while there is setup outstanding, or when the player asked for it
+   *  back. Never for a wallet with nothing in it: there is nothing in it for
+   *  them. */
+  const step2Open = !!account && roster.mine.length > 0 && (!step2Done || openStep2);
+  const step1State: DuelStepState = step1Done ? 'done' : 'active';
+  const step2State: DuelStepState = !account ? 'waiting' : step2Done ? 'done' : 'active';
+  const step3State: DuelStepState = fightReady ? 'active' : 'waiting';
+
+  // Step 2 folds itself back the moment it is satisfied. Without this, opening
+  // it by hand to top up an approval leaves it sitting open with nothing to do
+  // once the approval lands. Fefers does exactly this.
+  const step2DoneRef = useRef(step2Done);
+  useEffect(() => {
+    if (step2Done && !step2DoneRef.current) setOpenStep2(false);
+    step2DoneRef.current = step2Done;
+  }, [step2Done]);
+
   function onSettled() {
     if (currentId === null) return;
     setSettled((prev) => (prev.includes(currentId) ? prev : [...prev, currentId]));
@@ -421,429 +602,633 @@ export function DuelPicker() {
     );
   }
 
+  /** "lord wagyu #501", for the lists that read better as names than counts. */
+  const nameOf = (id: number) => {
+    const b = roster.mine.find((x) => x.id === id);
+    return b ? `${b.name.toLowerCase()} #${id}` : `bull #${id}`;
+  };
+
   return (
-    <div className="space-y-6">
-      {/* ─── STEP 1 ─────────────────────────────────────────────── */}
-      <section className="rounded border border-bull-border bg-bull-panel p-4">
-        <div className="flex items-baseline justify-between gap-3">
-          <StepHeading n={1} title="your fighter" done={step1Done} />
-          <span className="font-mono text-[11px] text-bull-text-faint">
-            {roster.mine.length} alive in your herd
-          </span>
-        </div>
-
-        {!account ? (
-          <p className="mt-3 text-sm text-bull-text-dim">connect a wallet to see your herd.</p>
-        ) : roster.isLoading ? (
-          <p className="mt-3 text-sm text-bull-text-dim">reading your herd off the chain…</p>
-        ) : roster.unavailable ? (
-          <div className="mt-3 text-sm text-bull-text-dim">
-            <p>
-              couldn&apos;t read the herd off the chain just now. that is this page failing to
-              reach an rpc, not an empty wallet.
-            </p>
-            <button
-              type="button"
-              onClick={roster.refetch}
-              className="mt-3 rounded-full border border-bull-gold px-3 py-1.5 text-xs font-medium text-bull-gold"
-            >
-              try again
-            </button>
-          </div>
-        ) : roster.mine.length === 0 ? (
-          <p className="mt-3 text-sm text-bull-text-dim">
-            no living bulls in this wallet.{' '}
-            <Link href="/mint" className="text-bull-gold hover:underline">
-              mint one
-            </Link>{' '}
-            first.
-          </p>
-        ) : (
-          <>
-            <FighterDropdown
-              bulls={roster.mine}
-              ticked={ticked}
-              currentId={currentId}
-              settledIds={settled}
-              inPit={pit.inPit}
-              matchable={pit.matchable}
-              open={open}
-              onOpenChange={setOpen}
-              onToggle={toggle}
-              onMakeNext={makeNext}
-            />
-            <p className="mt-2 text-[11px] text-bull-text-faint">
-              {alive.length > roster.mine.length
-                ? `${alive.length - roster.mine.length} more alive in the full herd. `
-                : ''}
-              tick any of yours to send them in alongside it. they fight one after another.
-            </p>
-            {/* ⚠ SAID HERE AS WELL AS IN STEP 2, because this is the list where
-                somebody picks a bull, and picking one that is out is how the
-                whole "gas limit too high" mess started. */}
-            <p className="mt-1 text-[11px] text-bull-text-faint">{PIT.rule}</p>
-          </>
-        )}
-      </section>
-
-      {/* ─── STEP 2 ─────────────────────────────────────────────── */}
-      <section className="rounded border border-bull-border bg-bull-panel p-4">
-        <StepHeading n={2} title="send them in" done={pitReady && moneyReady && step1Done} />
-
-        <p className="mt-2 text-sm text-bull-text-dim">
-          {challenger ? (
-            <>
-              sending one in:{' '}
-              <span className="text-bull-text">
-                {challenger.name.toLowerCase()} #{challenger.id}
-              </span>
-              .
-            </>
-          ) : (
-            'tick a bull in step 1 first.'
-          )}
-          {pending.length > 1 && (
-            <>
-              {' '}
-              {pending.length - 1} more ticked behind it.
-            </>
-          )}
-        </p>
-
-        {/* ─── LEG ONE: THE BULL PIT ────────────────────────────────
-            The on-chain roster. `Duel` refuses a fight naming a bull that is
-            not in it, so this is not a preference panel — it is the gate. The
-            eject side of it is deliberately DELAYED and says so in words; see
-            `PitPanel` and `Yards.sol`'s anti-dodge section. */}
-        {account && roster.mine.length > 0 && (
-          <div className="mt-4 border-t border-bull-border pt-4">
-            <PitPanel bulls={roster.mine} onChanged={pit.refetch} />
-          </div>
-        )}
-
-        <p className="mt-3 text-sm text-bull-text-dim">
-          {lossesToDie !== undefined ? Number(lossesToDie) : 'five'} losses in a row, no win and
-          no tie in between, and a bull is on the truck to market. both sides put up the same
-          amount, in whichever currency each of them picks.
-          {usdFightPrice !== undefined && (usdFightPrice as bigint) > 0n && (
-            <>
-              {' '}
-              the sticker is{' '}
-              <span className="text-bull-text">{formatUsd1e18(usdFightPrice as bigint)}</span> a
-              side.
-            </>
-          )}
-        </p>
-
-        <div className="mt-4">
-          <p className="font-mono text-[11px] uppercase tracking-wide text-bull-text-faint">
-            pay with
-          </p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            <PayTab label="bnb" active={myAsset === 'BNB'} onClick={() => setMyAsset('BNB')} />
-            <PayTab
-              label="bnbull"
-              active={myAsset === 'BNBULL'}
-              onClick={() => setMyAsset('BNBULL')}
-              disabled={bnbullCost === undefined || bnbullCost === 0n}
-              disabledTitle={CURRENCY.bnbullPending}
-            />
-            {/* ⚠ "both" IS A MATCHMAKING PREFERENCE, NOT A SPLIT PAYMENT, AND IT
-                CANNOT BE ONE. `Duel.DuelResult` carries exactly one asset per
-                side (`assetA`/`assetB`) and `_takeSide` pulls ONE asset from ONE
-                owner, so "half in each" is not expressible in the struct that
-                gets signed. It would be a contract change, not a button.
-
-                This replaced "whatever i can pay", which was the `AUTO` selector.
-                AUTO did not just guess, it FAILED SILENTLY: `run-duel`'s
-                `resolveSide` hit a side that could not pay and simply
-                `continue`d, so the bull was never matched and the player had no
-                way to find out why. Every currency that cannot be used now
-                reports a named blocker instead. */}
-            <PayTab
-              label="both"
-              active={myAsset === 'BOTH'}
-              onClick={() => setMyAsset('BOTH')}
-            />
-          </div>
-        </div>
-
-        {/* ─── HOW MANY FIGHTS ARE YOU UP FOR ─────────────────────
-            ⚠ ONE APPROVAL, IN THE CURRENCY YOU PICKED. This block used to
-            render TWO live approve buttons side by side, one per currency, and
-            the owner signed both before his first fight. It is one now, sized
-            by the count below, and the second currency is a disclosure.
-
-            ⚠ WHAT AN ALLOWANCE IS ACTUALLY FOR, BECAUSE IT IS NOT REDUNDANT.
-            `Duel._takeSide` only lets raw `msg.value` cover a WBNB stake when
-            `owner_ == msg.sender`, so it covers YOUR side on a fight YOU
-            submit and nothing else. When somebody else picks one of your bulls
-            you are the PASSIVE side and settlement needs a WBNB allowance or it
-            reverts `StakeNotApproved` — native bnb cannot be pulled out of your
-            wallet by another player's transaction. So this is what lets your
-            herd be challenged while you are offline. Deleting it would quietly
-            make everybody's bulls unpickable, which is exactly how
-            `/api/run-duel`'s old silent skip felt from the player's side. */}
-        <div className="mt-5 border-t border-bull-border pt-4">
-          <p className="font-mono text-[11px] uppercase tracking-wide text-bull-text-faint">
-            how many fights are you up for
-          </p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {APPROVE_FIGHT_OPTIONS.map((n) => (
-              <PayTab
-                key={n}
-                label={`${n} fight${n === 1 ? '' : 's'}`}
-                active={fightsWanted === n}
-                onClick={() => setFightsWanted(n)}
-              />
-            ))}
-          </div>
-          <p className="mt-2 text-sm text-bull-text-dim">
-            one signature, sized for that many. the chain remembers it, so every fight after it
-            is a single confirm until the run is used up. each duel takes one fight&apos;s worth,
-            and you stop when the approval or the balance runs dry, or when a bull dies.
-          </p>
-
-          <div className="mt-3">
-            {primaryIsBnbull ? (
-              <AllowanceRow
-                label="bnbull"
-                tokenLabel="bnbull"
-                allowance={bnbullAllowance}
-                decimals={bnbullDecimals}
-                fights={fightsWanted}
-                packSize={pending.length}
-                nativeSelfPay={false}
-                unavailableNote={CURRENCY.bnbullPending}
-              />
-            ) : (
-              <AllowanceRow
-                label="bnb"
-                tokenLabel="wbnb"
-                allowance={bnbAllowance}
-                decimals={wbnbDecimals}
-                fights={fightsWanted}
-                packSize={pending.length}
-                nativeSelfPay
-                unavailableNote="no bnb fight cost is registered on the duel contract yet."
-              />
-            )}
-          </div>
-
-          <details className="mt-3">
-            <summary className="cursor-pointer font-mono text-[11px] uppercase tracking-wide text-bull-text-faint">
-              also let people challenge you in {primaryIsBnbull ? 'bnb' : 'bnbull'}
-            </summary>
-            <p className="mt-2 text-[11px] text-bull-text-faint">
-              you do not need this to fight. it only widens which currency somebody else can
-              pick your bulls in, and it is a second signature, so it is down here rather than
-              in front of you.
-            </p>
-            <div className="mt-2">
-              {primaryIsBnbull ? (
-                <AllowanceRow
-                  label="bnb"
-                  tokenLabel="wbnb"
-                  allowance={bnbAllowance}
-                  decimals={wbnbDecimals}
-                  fights={fightsWanted}
-                  packSize={pending.length}
-                  nativeSelfPay
-                  unavailableNote="no bnb fight cost is registered on the duel contract yet."
-                />
-              ) : (
-                <AllowanceRow
-                  label="bnbull"
-                  tokenLabel="bnbull"
-                  allowance={bnbullAllowance}
-                  decimals={bnbullDecimals}
-                  fights={fightsWanted}
-                  packSize={pending.length}
-                  nativeSelfPay={false}
-                  unavailableNote={CURRENCY.bnbullPending}
-                />
-              )}
-            </div>
-          </details>
-
-          <p className="mt-3 text-[11px] text-bull-text-faint">
-            it is one shared pool, not a budget per bull. send ten in and allow one fight, and
-            the first fight by any one of them uses the lot, and the other nine cannot fight
-            until you top it up.
-          </p>
-        </div>
-
-        <details className="mt-4">
-          <summary className="cursor-pointer font-mono text-[11px] uppercase tracking-wide text-bull-text-faint">
-            what a fight costs, per currency
-          </summary>
-          <div className="mt-3 overflow-x-auto">
-            <table className="w-full min-w-[420px] border-collapse text-sm">
-              <thead>
-                <tr className="border-b border-bull-border text-left font-mono text-xs uppercase tracking-wide text-bull-text-faint">
-                  <th className="py-2 pr-4">currency</th>
-                  <th className="py-2 pr-4">what each side puts in</th>
-                </tr>
-              </thead>
-              <tbody>
-                {assetList.map((a, i) => {
-                  // Three reads per asset, in order, from the flatMap above.
-                  const at = <T,>(off: number): T | undefined =>
-                    costsData?.[i * 3 + off]?.status === 'success'
-                      ? (costsData[i * 3 + off].result as T)
-                      : undefined;
-                  return (
-                    <AssetCostRow
-                      key={a}
-                      asset={a}
-                      cost={at<bigint>(0)}
-                      sticker={at<bigint>(1)}
-                      discountBps={at<number>(2)}
-                      bnbullAddr={bnbullAddr as `0x${string}` | undefined}
-                      wbnbAddr={wbnbAddr as `0x${string}` | undefined}
-                    />
-                  );
-                })}
-                {assetList.length === 0 && (
-                  <tr>
-                    <td colSpan={2} className="py-3 text-bull-text-faint">
-                      no fight currencies are registered yet.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-          {assetList.length > 0 && (
-            <p className="mt-2 font-mono text-[11px] text-bull-text-faint">
-              {quoteAge !== undefined ? `quoted ${quoteAge}s ago` : 'quoting…'} · refreshes every{' '}
-              {QUOTE_REFRESH_MS / 1000}s
-            </p>
-          )}
-        </details>
-      </section>
-
-      {/* ─── STEP 3 ─────────────────────────────────────────────── */}
-      <section
-        className={`rounded border bg-bull-panel p-4 transition ${
-          fightReady ? 'border-bull-gold/40' : 'border-bull-border opacity-60'
-        }`}
+    <div className="space-y-4">
+      {/* ═══════════════════════════════════════════════════════════
+          SECTION 1 · YOUR FIGHT — the three-step flow, folded as one.
+          Fefers wraps its whole stepper in a single "stomping ground"
+          collapsible and this is the same wrapper. The steps inside are
+          UNCHANGED in what they do; only their ranking moved.
+          ═══════════════════════════════════════════════════════════ */}
+      <DuelSection
+        id="your-fight"
+        title="your fight"
+        meta={challenger ? `${challenger.name.toLowerCase()} #${challenger.id}` : undefined}
+        open={sections['your-fight']}
+        onOpenChange={(v) => setSection('your-fight', v)}
       >
-        <div className="flex items-baseline justify-between gap-3">
-          <StepHeading n={3} title="fight" done={false} />
-          {!fightReady && (
-            <span className="font-mono text-[11px] text-bull-text-faint">
-              {step1Done ? 'step 2 first' : 'step 1 first'}
-            </span>
-          )}
-        </div>
-
-        {challenger && opponent ? (
-          <>
-            <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto_1fr] sm:items-center">
-              <Link
-                href={`/bull/${challenger.id}`}
-                className="bull-card block rounded border border-bull-border p-3 transition hover:border-bull-gold"
-              >
-                <BullCard
-                  id={challenger.id}
-                  facts={{
-                    name: challenger.name,
-                    elo: challenger.elo,
-                    wins: challenger.wins,
-                    losses: challenger.losses,
-                    ties: challenger.ties,
-                  }}
-                />
-              </Link>
-              <p className="bull-header text-center text-sm text-bull-text-faint">vs</p>
-              <Link
-                href={`/bull/${opponent.id}`}
-                className="bull-card block rounded border border-bull-border p-3 transition hover:border-bull-gold"
-              >
-                <BullCard
-                  id={opponent.id}
-                  facts={{
-                    name: opponent.name,
-                    elo: opponent.elo,
-                    wins: opponent.wins,
-                    losses: opponent.losses,
-                    ties: opponent.ties,
-                  }}
-                />
-              </Link>
-            </div>
-            <div className="mt-3 flex flex-wrap items-center gap-3">
-              <button
-                type="button"
-                onClick={() => setRerolls((n) => n + 1)}
-                disabled={ranked.length < 2}
-                className="rounded-full border border-bull-border px-3 py-1.5 text-xs font-medium text-bull-text-dim hover:border-bull-gold hover:text-bull-gold disabled:opacity-40"
-              >
-                find another opponent
-              </button>
-              <span className="font-mono text-[11px] text-bull-text-faint">
-                {ratingGap(challenger, opponent) === 0
-                  ? 'dead level on rating'
-                  : `${ratingGap(challenger, opponent)} rating apart`}{' '}
-                · closest of {ranked.length} available
-              </span>
-            </div>
-          </>
-        ) : (
-          <p className="mt-4 text-sm text-bull-text-dim">{blockedReason ?? 'no match yet.'}</p>
-        )}
-
-        <div className="mt-4">
-          <FightAction
-            duelAddress={duelAddress}
-            myTokenId={currentId}
-            oppTokenId={opponent?.id ?? null}
-            blockedReason={blockedReason}
-            myAsset={myAsset}
-            // ⚠ THE SAME COUNT THE PLAYER PICKED, not the queue length. If the
-            // fight in front of them ever does need a top-up (the oracle moved
-            // between the standing approval and the quote), it is sized for the
-            // whole run so it is asked ONCE, not once per fight.
-            approveFights={fightsWanted}
-            onSettled={onSettled}
-          />
-        </div>
-
-        <p className="mt-4 text-[11px] text-bull-text-faint">
-          the fight is simulated off chain from a random seed and the result is signed. the
-          contract verifies the signature, it never re-runs the fight. the seed is public, so
-          anyone can re-run it and catch a lying signer.
-        </p>
-
-        {queue.length > 1 && (
-          <div className="mt-4 border-t border-bull-border pt-3">
-            <p className="font-mono text-[11px] uppercase tracking-wide text-bull-text-faint">
-              the queue
-            </p>
-            <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs">
-              {queue.map((id) => (
-                <li
-                  key={id}
-                  className={
-                    settled.includes(id)
-                      ? 'text-bull-text-faint'
-                      : id === currentId
-                        ? 'text-bull-gold'
-                        : 'text-bull-text-dim'
-                  }
+        <div className="divide-y divide-bull-border rounded border border-bull-border bg-bull-panel">
+          {/* ─── STEP 1 ─────────────────────────────────────────── */}
+          <DuelFlowStep
+            n={1}
+            title="your fighter"
+            state={step1State}
+            status={account ? `${roster.mine.length} alive in your herd` : undefined}
+          >
+            {!account ? (
+              <p className="text-sm text-bull-text-dim">connect a wallet to see your herd.</p>
+            ) : roster.isLoading ? (
+              <p className="text-sm text-bull-text-dim">reading your herd off the chain…</p>
+            ) : roster.unavailable ? (
+              <div className="text-sm text-bull-text-dim">
+                <p>
+                  couldn&apos;t read the herd off the chain just now. that is this page failing to
+                  reach an rpc, not an empty wallet.
+                </p>
+                <button
+                  type="button"
+                  onClick={roster.refetch}
+                  className="mt-3 rounded-full border border-bull-gold px-3 py-1.5 text-xs font-medium text-bull-gold"
                 >
-                  {settled.includes(id) ? '✓' : id === currentId ? '●' : '○'} #{id}
-                </li>
-              ))}
-            </ul>
-            <p className="mt-2 text-[11px] text-bull-text-faint">
-              one at a time, because the contract allows one signed fight per wallet. settle the
-              one on screen and the next steps up.
-            </p>
-          </div>
-        )}
-      </section>
+                  try again
+                </button>
+              </div>
+            ) : roster.mine.length === 0 ? (
+              <p className="text-sm text-bull-text-dim">
+                no living bulls in this wallet.{' '}
+                <Link href="/mint" className="text-bull-gold hover:underline">
+                  mint one
+                </Link>{' '}
+                first.
+              </p>
+            ) : (
+              <>
+                <FighterDropdown
+                  bulls={roster.mine}
+                  ticked={ticked}
+                  currentId={currentId}
+                  settledIds={settled}
+                  inPit={pit.inPit}
+                  matchable={pit.matchable}
+                  open={open}
+                  onOpenChange={setOpen}
+                  onToggle={toggle}
+                  onMakeNext={makeNext}
+                />
+                <div className="space-y-1 text-[11px] text-bull-text-faint">
+                  <p>
+                    {alive.length > roster.mine.length
+                      ? `${alive.length - roster.mine.length} more alive in the full herd. `
+                      : ''}
+                    tick any of yours to send them in alongside it. they fight one after another.
+                  </p>
+                  {/* ⚠ SAID HERE AS WELL AS IN STEP 2, because this is the list
+                      where somebody picks a bull, and picking one that is out is
+                      how the whole "gas limit too high" mess started. */}
+                  <p>{PIT.rule}</p>
+                </div>
+              </>
+            )}
+          </DuelFlowStep>
+
+          {/* ─── STEP 2 ─────────────────────────────────────────────
+              ⚠ THE STEP THE OWNER CALLED A MESS. Read the ladder note at the
+              top of this file before adding a control here. In order: what is
+              about to happen, the money, ONE button, then everything else quiet
+              under a divider. Nothing else goes above the button. */}
+          <DuelFlowStep
+            n={2}
+            title="send them in"
+            state={step2State}
+            status={!account ? 'connect a wallet' : step2Done ? 'sorted' : undefined}
+          >
+            {!account ? (
+              <p className="text-sm text-bull-text-dim">
+                connect your wallet and this is where you back your bull.
+              </p>
+            ) : roster.mine.length === 0 ? (
+              <p className="text-sm text-bull-text-dim">{PIT.emptyWallet}</p>
+            ) : !step2Open ? (
+              /* SATISFIED, SO IT FOLDS TO ONE LINE. The two facts a player
+                 actually checks stay readable; they just stop being controls. */
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <p className="min-w-0 font-mono text-sm text-bull-text-dim">
+                  <span className="text-bull-gold">{myInPitCount}</span> of yours in {PIT.short} ·{' '}
+                  <span className="text-bull-text">{primaryAllowance.fightsAllowed}</span> fight
+                  {primaryAllowance.fightsAllowed === 1 ? '' : 's'} allowed in{' '}
+                  {primaryCurrencyLabel}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setOpenStep2(true)}
+                  className="shrink-0 py-1 font-mono text-xs text-bull-gold hover:underline"
+                >
+                  change
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {/* WHAT IS ABOUT TO HAPPEN, IN NAMES. "we are sending these
+                    three in" reads better than a count, wherever the list is
+                    short enough to read. */}
+                <div className="space-y-1 font-mono text-sm">
+                  {pitUnread ? (
+                    <p className="text-bull-text-dim">{PIT.loading}</p>
+                  ) : sendInIds.length > 0 ? (
+                    <p className="break-words text-bull-text">
+                      <span className="text-bull-gold">sending {sendInIds.length} in:</span>{' '}
+                      {sendInIds.map(nameOf).join(', ')}
+                    </p>
+                  ) : (
+                    <p className="text-bull-text-dim">
+                      <span className="text-bull-gold">{myInPitCount}</span> of yours already in{' '}
+                      {PIT.short}, nothing new to send
+                    </p>
+                  )}
+                  {pending.length > 1 && (
+                    <p className="text-[11px] text-bull-text-faint">
+                      {pending.length} ticked. they fight one after another, because the contract
+                      settles one signed fight per wallet at a time.
+                    </p>
+                  )}
+                </div>
+
+                {/* ─── THE MONEY ───────────────────────────────────
+                    ⚠ ONE APPROVAL, IN THE CURRENCY YOU PICKED. This block used
+                    to render TWO live approve buttons side by side, one per
+                    currency, and the owner signed both before his first fight.
+                    It is one now, sized by the count below, and the second
+                    currency is a disclosure.
+
+                    ⚠ WHAT AN ALLOWANCE IS ACTUALLY FOR, BECAUSE IT IS NOT
+                    REDUNDANT. `Duel._takeSide` only lets raw `msg.value` cover a
+                    WBNB stake when `owner_ == msg.sender`, so it covers YOUR
+                    side on a fight YOU submit and nothing else. When somebody
+                    else picks one of your bulls you are the PASSIVE side and
+                    settlement needs a WBNB allowance or it reverts
+                    `StakeNotApproved` — native bnb cannot be pulled out of your
+                    wallet by another player's transaction. So this is what lets
+                    your herd be challenged while you are offline. Deleting it
+                    would quietly make everybody's bulls unpickable.
+
+                    ⚠ THE COUNT IS A SELECT, NOT FIVE PILLS. Fefers uses a
+                    dropdown here for the same reason: five equally loud pills
+                    next to three currency pills is eight competing controls
+                    above the one button that matters. */}
+                <div className="space-y-3 border-t border-bull-border pt-3">
+                  <div className="flex flex-wrap items-baseline gap-x-3 gap-y-2">
+                    <span className="w-[5.5rem] shrink-0 font-mono text-[11px] uppercase tracking-wide text-bull-text-faint">
+                      pay with
+                    </span>
+                    <div className="flex flex-wrap gap-2">
+                      <PayTab
+                        label="bnb"
+                        active={myAsset === 'BNB'}
+                        onClick={() => setMyAsset('BNB')}
+                      />
+                      <PayTab
+                        label="bnbull"
+                        active={myAsset === 'BNBULL'}
+                        onClick={() => setMyAsset('BNBULL')}
+                        disabled={bnbullCost === undefined || bnbullCost === 0n}
+                        disabledTitle={CURRENCY.bnbullPending}
+                      />
+                      {/* ⚠ "both" IS A MATCHMAKING PREFERENCE, NOT A SPLIT
+                          PAYMENT, AND IT CANNOT BE ONE. `Duel.DuelResult`
+                          carries exactly one asset per side (`assetA`/`assetB`)
+                          and `_takeSide` pulls ONE asset from ONE owner, so
+                          "half in each" is not expressible in the struct that
+                          gets signed. It would be a contract change, not a
+                          button.
+
+                          This replaced "whatever i can pay", which was the
+                          `AUTO` selector. AUTO did not just guess, it FAILED
+                          SILENTLY: `run-duel`'s `resolveSide` hit a side that
+                          could not pay and simply `continue`d, so the bull was
+                          never matched and the player had no way to find out
+                          why. Every currency that cannot be used now reports a
+                          named blocker instead. */}
+                      <PayTab
+                        label="both"
+                        active={myAsset === 'BOTH'}
+                        onClick={() => setMyAsset('BOTH')}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-baseline gap-x-3 gap-y-2">
+                    <label
+                      htmlFor={fightsSelectId}
+                      className="w-[5.5rem] shrink-0 font-mono text-[11px] uppercase tracking-wide text-bull-text-faint"
+                    >
+                      fights
+                    </label>
+                    {/* ⚠ NO `text-sm` ON THIS SELECT. `.bull-input` sets 16px on
+                        purpose: anything smaller and iOS Safari zooms the whole
+                        page the moment it is focused. */}
+                    <select
+                      id={fightsSelectId}
+                      value={String(fightsWanted)}
+                      onChange={(e) => setFightsWanted(Number(e.target.value))}
+                      className="bull-input w-auto min-w-[8rem]"
+                    >
+                      {APPROVE_FIGHT_OPTIONS.map((n) => (
+                        <option key={n} value={n}>
+                          {n} fight{n === 1 ? '' : 's'}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="min-w-0 break-words font-mono text-sm">
+                      {/* Only quote a number somebody is actually about to sign
+                          for. An allowance that already reaches the count reads
+                          "already covered", not a figure nobody is being asked
+                          for. */}
+                      {primaryAllowance.covers ? (
+                        <span className="text-bull-gold">already covered</span>
+                      ) : primaryAllowance.approvalTotal !== undefined ? (
+                        <>
+                          ={' '}
+                          <span className="text-bull-gold">
+                            {formatToken(primaryAllowance.approvalTotal, primaryDecimals)}{' '}
+                            {primaryTokenLabel}
+                          </span>
+                        </>
+                      ) : (
+                        '…'
+                      )}
+                    </span>
+                  </div>
+
+                  <p className="text-[11px] text-bull-text-faint">
+                    one signature, sized for that many. the chain remembers it, so every fight
+                    after it is a single confirm until the run is used up. it is one shared pool
+                    and not a budget per bull, so the first fight by any of them draws on the
+                    lot.
+                  </p>
+                </div>
+
+                {/* ═══ THE ONE BUTTON ═══════════════════════════════
+                    The first outstanding thing, and nothing else. When there is
+                    nothing outstanding there is NO button here, because a
+                    full-width primary reading "nothing waiting" is the loudest
+                    thing on the step and the least use. */}
+                {pitUnread ? (
+                  /* ⚠ NO BUTTON OFF AN UNREAD PIT. "nothing to sign here" would
+                     be a claim about membership we have not read yet, and it is
+                     the one that sends somebody to the fight button with a bull
+                     the contract will refuse. */
+                  <p className="font-mono text-sm text-bull-text-dim">{PIT.loading}</p>
+                ) : sendInIds.length > 0 ? (
+                  <PitEntryButton
+                    ids={sendInIds}
+                    label={`send ${sendInIds.length} into ${PIT.short}`}
+                    note={PIT.enterInstant}
+                    onChanged={pit.refetch}
+                  />
+                ) : needsFirstApproval ? (
+                  <div>
+                    <button
+                      type="button"
+                      // ⚠ `whitespace-normal` OVERRIDES `.bull-btn`'s nowrap.
+                      // This label carries a count AND an amount ("approve 50
+                      // fights · 0.169560 wbnb"), which is well past what a
+                      // 390px phone fits on one line.
+                      className="bull-btn w-full whitespace-normal text-center"
+                      disabled={
+                        primaryAllowance.isApproving ||
+                        primaryAllowance.approvalTotal === undefined
+                      }
+                      onClick={async () => {
+                        await primaryAllowance.approve();
+                        primaryAllowance.refetch();
+                      }}
+                    >
+                      {primaryAllowance.isApproving
+                        ? 'approving…'
+                        : `approve ${fightsWanted} fight${fightsWanted === 1 ? '' : 's'} · ${
+                            primaryAllowance.approvalTotal !== undefined
+                              ? formatToken(primaryAllowance.approvalTotal, primaryDecimals)
+                              : '—'
+                          } ${primaryTokenLabel}`}
+                    </button>
+                    <p className="mt-1.5 text-[11px] text-bull-text-faint">
+                      {primaryIsBnbull
+                        ? 'bnbull can only ever move by allowance, so this covers your own side and lets somebody else pick your bulls.'
+                        : 'paying for your own fight in bnb never needs this: the amount rides with the transaction. this is the bit that lets anybody else pick your bulls while you are offline.'}
+                    </p>
+                  </div>
+                ) : (
+                  <p className="font-mono text-sm text-bull-text-dim">
+                    nothing to sign here. step 3 is your move.
+                  </p>
+                )}
+
+                {/* ═══ QUIET, UNDER A DIVIDER ═══════════════════════
+                    Live approvals, the way out of them, and the reference
+                    material. Kept next to the control that creates them and
+                    never louder than the button above. */}
+                <div className="space-y-3 border-t border-bull-border pt-3">
+                  {primaryIsBnbull ? (
+                    <AllowanceRow
+                      label="bnbull"
+                      tokenLabel="bnbull"
+                      allowance={bnbullAllowance}
+                      decimals={bnbullDecimals}
+                      fights={fightsWanted}
+                      packSize={pending.length}
+                      nativeSelfPay={false}
+                      hideApprove={needsFirstApproval}
+                      unavailableNote={CURRENCY.bnbullPending}
+                    />
+                  ) : (
+                    <AllowanceRow
+                      label="bnb"
+                      tokenLabel="wbnb"
+                      allowance={bnbAllowance}
+                      decimals={wbnbDecimals}
+                      fights={fightsWanted}
+                      packSize={pending.length}
+                      nativeSelfPay
+                      hideApprove={needsFirstApproval}
+                      unavailableNote="no bnb fight cost is registered on the duel contract yet."
+                    />
+                  )}
+
+                  <details>
+                    <summary className="cursor-pointer font-mono text-[11px] uppercase tracking-wide text-bull-text-faint">
+                      also let people challenge you in {primaryIsBnbull ? 'bnb' : 'bnbull'}
+                    </summary>
+                    <p className="mt-2 text-[11px] text-bull-text-faint">
+                      you do not need this to fight. it only widens which currency somebody else
+                      can pick your bulls in, and it is a second signature, so it is down here
+                      rather than in front of you.
+                    </p>
+                    <div className="mt-2">
+                      {primaryIsBnbull ? (
+                        <AllowanceRow
+                          label="bnb"
+                          tokenLabel="wbnb"
+                          allowance={bnbAllowance}
+                          decimals={wbnbDecimals}
+                          fights={fightsWanted}
+                          packSize={pending.length}
+                          nativeSelfPay
+                          unavailableNote="no bnb fight cost is registered on the duel contract yet."
+                        />
+                      ) : (
+                        <AllowanceRow
+                          label="bnbull"
+                          tokenLabel="bnbull"
+                          allowance={bnbullAllowance}
+                          decimals={bnbullDecimals}
+                          fights={fightsWanted}
+                          packSize={pending.length}
+                          nativeSelfPay={false}
+                          unavailableNote={CURRENCY.bnbullPending}
+                        />
+                      )}
+                    </div>
+                  </details>
+
+                  <details>
+                    <summary className="cursor-pointer font-mono text-[11px] uppercase tracking-wide text-bull-text-faint">
+                      what a fight costs, per currency
+                    </summary>
+                    <p className="mt-2 text-[11px] text-bull-text-faint">
+                      {lossesToDie !== undefined ? Number(lossesToDie) : 'five'} losses in a row,
+                      no win and no tie in between, and a bull is on the truck to market. both
+                      sides put up the same amount, in whichever currency each of them picks.
+                      {usdFightPrice !== undefined && (usdFightPrice as bigint) > 0n && (
+                        <>
+                          {' '}
+                          the sticker is{' '}
+                          <span className="text-bull-text-dim">
+                            {formatUsd1e18(usdFightPrice as bigint)}
+                          </span>{' '}
+                          a side.
+                        </>
+                      )}
+                    </p>
+                    <div className="mt-3 overflow-x-auto">
+                      <table className="w-full min-w-[420px] border-collapse text-sm">
+                        <thead>
+                          <tr className="border-b border-bull-border text-left font-mono text-xs uppercase tracking-wide text-bull-text-faint">
+                            <th className="py-2 pr-4">currency</th>
+                            <th className="py-2 pr-4">what each side puts in</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {assetList.map((a, i) => {
+                            // Three reads per asset, in order, from the flatMap
+                            // above.
+                            const at = <T,>(off: number): T | undefined =>
+                              costsData?.[i * 3 + off]?.status === 'success'
+                                ? (costsData[i * 3 + off].result as T)
+                                : undefined;
+                            return (
+                              <AssetCostRow
+                                key={a}
+                                asset={a}
+                                cost={at<bigint>(0)}
+                                sticker={at<bigint>(1)}
+                                discountBps={at<number>(2)}
+                                bnbullAddr={bnbullAddr as `0x${string}` | undefined}
+                                wbnbAddr={wbnbAddr as `0x${string}` | undefined}
+                              />
+                            );
+                          })}
+                          {assetList.length === 0 && (
+                            <tr>
+                              <td colSpan={2} className="py-3 text-bull-text-faint">
+                                no fight currencies are registered yet.
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                    {assetList.length > 0 && (
+                      <p className="mt-2 font-mono text-[11px] text-bull-text-faint">
+                        {quoteAge !== undefined ? `quoted ${quoteAge}s ago` : 'quoting…'} ·
+                        refreshes every {QUOTE_REFRESH_MS / 1000}s
+                      </p>
+                    )}
+                  </details>
+                </div>
+              </div>
+            )}
+          </DuelFlowStep>
+
+          {/* ─── STEP 3 ─────────────────────────────────────────── */}
+          <DuelFlowStep
+            n={3}
+            title="fight"
+            state={step3State}
+            status={!fightReady ? (step1Done ? 'step 2 first' : 'step 1 first') : undefined}
+          >
+            {challenger && opponent ? (
+              <>
+                <div className="grid gap-3 sm:grid-cols-[1fr_auto_1fr] sm:items-center">
+                  <Link
+                    href={`/bull/${challenger.id}`}
+                    className="bull-card block rounded border border-bull-border p-3 transition hover:border-bull-gold"
+                  >
+                    <BullCard
+                      id={challenger.id}
+                      facts={{
+                        name: challenger.name,
+                        elo: challenger.elo,
+                        wins: challenger.wins,
+                        losses: challenger.losses,
+                        ties: challenger.ties,
+                      }}
+                    />
+                  </Link>
+                  <p className="bull-header text-center text-sm text-bull-text-faint">vs</p>
+                  <Link
+                    href={`/bull/${opponent.id}`}
+                    className="bull-card block rounded border border-bull-border p-3 transition hover:border-bull-gold"
+                  >
+                    <BullCard
+                      id={opponent.id}
+                      facts={{
+                        name: opponent.name,
+                        elo: opponent.elo,
+                        wins: opponent.wins,
+                        losses: opponent.losses,
+                        ties: opponent.ties,
+                      }}
+                    />
+                  </Link>
+                </div>
+                {/* The reroll is a QUIET pill next to the matchup facts, not a
+                    second primary. Fefers hangs the same control off its
+                    matchup line for the same reason: one loud button per step. */}
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setRerolls((n) => n + 1)}
+                    disabled={ranked.length < 2}
+                    className="rounded-full border border-bull-border px-3 py-1.5 text-xs font-medium text-bull-text-dim hover:border-bull-gold hover:text-bull-gold disabled:opacity-40"
+                  >
+                    find another opponent
+                  </button>
+                  <span className="font-mono text-[11px] text-bull-text-faint">
+                    {ratingGap(challenger, opponent) === 0
+                      ? 'dead level on rating'
+                      : `${ratingGap(challenger, opponent)} rating apart`}{' '}
+                    · closest of {ranked.length} available
+                    {pit.matchable ? ` · ${pit.matchable.size} waiting in ${PIT.short}` : ''}
+                  </span>
+                </div>
+              </>
+            ) : (
+              <p className="text-sm text-bull-text-dim">{blockedReason ?? 'no match yet.'}</p>
+            )}
+
+            <FightAction
+              duelAddress={duelAddress}
+              myTokenId={currentId}
+              oppTokenId={opponent?.id ?? null}
+              blockedReason={blockedReason}
+              myAsset={myAsset}
+              // ⚠ THE SAME COUNT THE PLAYER PICKED, not the queue length. If the
+              // fight in front of them ever does need a top-up (the oracle moved
+              // between the standing approval and the quote), it is sized for the
+              // whole run so it is asked ONCE, not once per fight.
+              approveFights={fightsWanted}
+              onSettled={onSettled}
+              // A fight on screen folds everything below it away. See
+              // `handleFightVisible`.
+              onFightVisible={handleFightVisible}
+            />
+
+            {/* The rules that are true but are not a control. Folded, because
+                every line of prose next to the fight button is a line between
+                the player and the fight. */}
+            <details>
+              <summary className="cursor-pointer font-mono text-[11px] uppercase tracking-wide text-bull-text-faint">
+                how the fight is decided
+              </summary>
+              <p className="mt-2 text-[11px] text-bull-text-faint">
+                the fight is simulated off chain from a random seed and the result is signed. the
+                contract verifies the signature, it never re-runs the fight. the seed is public,
+                so anyone can re-run it and catch a lying signer.
+              </p>
+              <p className="mt-2 text-[11px] text-bull-text-faint">
+                a wallet cannot fight itself, and each wallet carries one signed fight at a time.
+                both are enforced on chain at settlement, not just checked here.
+              </p>
+            </details>
+
+            {queue.length > 1 && (
+              <div className="border-t border-bull-border pt-3">
+                <p className="font-mono text-[11px] uppercase tracking-wide text-bull-text-faint">
+                  the queue
+                </p>
+                <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 font-mono text-xs">
+                  {queue.map((id) => (
+                    <li
+                      key={id}
+                      className={
+                        settled.includes(id)
+                          ? 'text-bull-text-faint'
+                          : id === currentId
+                            ? 'text-bull-gold'
+                            : 'text-bull-text-dim'
+                      }
+                    >
+                      {settled.includes(id) ? '✓' : id === currentId ? '●' : '○'} #{id}
+                    </li>
+                  ))}
+                </ul>
+                <p className="mt-2 text-[11px] text-bull-text-faint">
+                  one at a time, because the contract allows one signed fight per wallet. settle
+                  the one on screen and the next steps up.
+                </p>
+              </div>
+            )}
+          </DuelFlowStep>
+        </div>
+      </DuelSection>
+
+      {/* ═══════════════════════════════════════════════════════════
+          SECTION 2 · YOUR HERD IN THE PIT — the way back out.
+          ⚠ THIS USED TO LIVE INSIDE STEP 2, and that is the single biggest
+          reason the step read as a mess: a per-bull management table with two
+          bulk buttons and a button per row, sitting between the currency tabs
+          and the approve. Fefers ranks the same panel the same way this now
+          does — its own section, under the flow, folded by default, because it
+          is the only control on the page that does not need a fight set up to
+          be useful. Hidden entirely for a wallet with nothing in it.
+          ═══════════════════════════════════════════════════════════ */}
+      <DuelSection
+        id="your-herd"
+        title={`your herd in ${PIT.label}`}
+        open={sections['your-herd']}
+        onOpenChange={(v) => setSection('your-herd', v)}
+        hidden={!account || roster.mine.length === 0}
+      >
+        <div className="rounded border border-bull-border bg-bull-panel p-4">
+          <PitPanel bulls={roster.mine} onChanged={pit.refetch} />
+        </div>
+      </DuelSection>
+
+      {/* ═══════════════════════════════════════════════════════════
+          SECTION 3 · THE WHOLE ROSTER — everybody waiting, at the bottom.
+          ⚠ OWNER CALL, 2026-08-07: *"the roster of all of them waiting should be
+          at bottom."* It was mid-page, buried inside `PitPanel` inside step 2.
+          It is the browse-the-field surface, not a step in the fight.
+          ⚠ NO WALLET GATE. A stranger landing on /duel and seeing the field
+          queued up is the shopfront, and fefers does not gate its lineup on a
+          connection either.
+          ═══════════════════════════════════════════════════════════ */}
+      <DuelSection
+        id="pit-roster"
+        title={`who is in ${PIT.short}`}
+        open={sections['pit-roster']}
+        onOpenChange={(v) => setSection('pit-roster', v)}
+      >
+        <div className="rounded border border-bull-border bg-bull-panel p-4">
+          <PitRoster />
+        </div>
+      </DuelSection>
     </div>
   );
 }
@@ -857,6 +1242,13 @@ export function DuelPicker() {
  * that stayed up would be inviting a second signature for permission that is
  * already recorded. `covers` is computed off the live allowance read, and an
  * unread allowance is deliberately NOT treated as covered.
+ *
+ * ⚠ AND IT IS QUIET, NEVER THE LOUDEST THING ON THE STEP. `hideApprove` is set
+ * when step 2's own primary button is already the first approval in this
+ * currency — two buttons asking for the same signature, one gold and one
+ * bordered, is exactly the clutter the restructure exists to remove. What is
+ * left here is a TOP-UP: an allowance that already covers a fight but not the
+ * whole run, which is optional and is styled like it.
  *
  * ⚠ THE COUNT IS LIMITED BY BALANCE AS WELL AS BY APPROVAL, because
  * `Duel._takeSide` checks both before it will pull a passive stake
@@ -880,6 +1272,7 @@ function AllowanceRow({
   fights,
   packSize,
   nativeSelfPay,
+  hideApprove = false,
   unavailableNote,
 }: {
   label: string;
@@ -892,6 +1285,8 @@ function AllowanceRow({
   packSize: number;
   /** Can this currency cover YOUR OWN side with raw bnb and no allowance? */
   nativeSelfPay: boolean;
+  /** Step 2's primary button is already asking for this exact signature. */
+  hideApprove?: boolean;
   unavailableNote: string;
 }) {
   const { configured, fightsAllowed, limitedByBalance, approvalTotal, isApproving, covers, hasAny } =
@@ -967,6 +1362,10 @@ function AllowanceRow({
           signed and remembered by the chain. nothing more to approve in {label} until this run
           is spent.
         </p>
+      ) : hideApprove ? (
+        <p className="mt-2 text-[11px] text-bull-text-faint">
+          the button above signs this one.
+        </p>
       ) : (
         <button
           type="button"
@@ -975,11 +1374,13 @@ function AllowanceRow({
             allowance.refetch();
           }}
           disabled={isApproving || approvalTotal === undefined}
-          className="mt-2 w-full rounded-full border border-bull-gold px-3 py-1.5 text-xs font-medium text-bull-gold disabled:opacity-40"
+          className="mt-2 rounded-full border border-bull-border px-3 py-1.5 text-xs font-medium text-bull-text-dim transition hover:border-bull-gold hover:text-bull-gold disabled:opacity-40"
         >
           {isApproving
             ? 'approving…'
-            : `approve ${fights} fight${fights === 1 ? '' : 's'} · ${
+            : `${fightsAllowed > 0 ? 'top up to' : 'approve'} ${fights} fight${
+                fights === 1 ? '' : 's'
+              } · ${
                 approvalTotal !== undefined ? formatToken(approvalTotal, decimals) : '—'
               } ${tokenLabel}`}
         </button>
@@ -999,22 +1400,13 @@ function AllowanceRow({
 }
 
 
-/** Fefers' numbered step bubble: a ✓ once the step is satisfied, the number
- *  otherwise. */
-function StepHeading({ n, title, done }: { n: number; title: string; done: boolean }) {
-  return (
-    <h2 className="flex items-center gap-2">
-      <span
-        className={`inline-flex h-5 w-5 items-center justify-center rounded-full border font-mono text-[11px] ${
-          done ? 'border-bull-gold text-bull-gold' : 'border-bull-border text-bull-text-faint'
-        }`}
-      >
-        {done ? '✓' : n}
-      </span>
-      <span className="bull-header text-sm lowercase text-bull-text">{title}</span>
-    </h2>
-  );
-}
+/*
+ * ⚠ `StepHeading` LIVED HERE AND IS GONE ON PURPOSE. It was a bare title row,
+ * so every step had to hand-roll its own status text, its own dimming and its
+ * own layout — which is how step 3 ended up the only dimmed step on the page.
+ * `DuelFlowStep` is fefers' version of the same thing and owns all four states
+ * (`todo` / `active` / `done` / `waiting`) in one place.
+ */
 
 function PayTab({
   label,

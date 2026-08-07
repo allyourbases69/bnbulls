@@ -39,11 +39,15 @@ export default function DuelPage() {
           banned "every fight rolls BOTH pots" (`VOICE-AND-BRAND.md §2`). A
           decisive fight opens a ticket on both pools and exactly one of them
           can pay. `POTS.rule` is the one sentence that says it correctly, and
-          it is used everywhere else, so it is used here too. */}
+          it is used everywhere else, so it is used here too.
+
+          ⚠ THE SELF-DUEL AND ONE-SIGNED-FIGHT RULES USED TO BE ON THE END OF
+          THIS LINE AND HAVE MOVED, NOT GONE. They are enforcement trivia, and
+          fefers keeps its header to two short lines for exactly that reason —
+          what to do, and what you win. They now live in step 3's "how the fight
+          is decided" disclosure, next to the button they constrain. */}
       <p className="mt-1 max-w-xl text-sm text-bull-text-dim">
-        winner takes 90% of what is in the middle. {POTS.rule} a wallet cannot fight itself, and
-        each wallet carries one signed fight at a time. both are enforced on chain at
-        settlement, not just checked here.
+        winner takes 90% of what is in the middle. {POTS.rule}
       </p>
 
       <PreLaunchNotice className="mt-8" />

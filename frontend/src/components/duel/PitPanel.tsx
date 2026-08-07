@@ -16,10 +16,86 @@ import { useWrongNetwork } from '@/lib/hooks/useWrongNetwork';
 import { WrongNetworkNotice } from '@/components/shared/WrongNetwork';
 import { RevertNotice } from '@/components/shared/RevertNotice';
 import { NotDeployed } from '@/components/shared/NotDeployed';
-import { PitRoster } from '@/components/pit/PitRoster';
+
+/**
+ * THE ONE BUTTON THAT SENDS THE TICKED BULLS IN, FOR STEP 2 OF THE FLOW.
+ *
+ * ═══════════════════════════════════════════════════════════════════════
+ * ⚠ WHY THE ENTRY LEG WAS SPLIT OUT OF THE PANEL BELOW
+ * ═══════════════════════════════════════════════════════════════════════
+ * Step 2 used to render the WHOLE of `PitPanel` — two bulk buttons, a row per
+ * bull with a button each, the eject rules and the full pit roster — in the
+ * middle of the money controls. Owner, 2026-08-07: *"the buttons and approvals
+ * it's all just a bloody mess bro."* He is right, and fefers does not do that:
+ * its step 2 carries ONE primary button and its eject controls live in their own
+ * collapsible section further down the page.
+ *
+ * So this is step 2's button and nothing else. It enters exactly the ids it is
+ * handed — the bulls the player ticked in step 1 that the pit says cannot be
+ * matched right now — and the management panel below keeps the per-bull and
+ * bulk controls for the section at the bottom.
+ *
+ * ⚠ RE-ENTERING A LEAVING BULL IS A FEATURE, NOT AN ACCIDENT. `Yards.enter`
+ * writes `leavesAt: 0` unconditionally, so a bull counting down that gets sent
+ * back in has its departure cancelled on the spot. That is why the caller may
+ * safely include leaving bulls in `ids`.
+ */
+export function PitEntryButton({
+  ids,
+  label,
+  note,
+  onChanged,
+}: {
+  /** Bulls to send in. One transaction, however many. */
+  ids: readonly number[];
+  label: string;
+  note?: string;
+  onChanged?: () => void;
+}) {
+  const { wrongNetwork } = useWrongNetwork();
+  const writes = usePitWrites(onChanged);
+
+  if (!writes.deployed) {
+    return <NotDeployed what={PIT.label} />;
+  }
+
+  const busy = writes.isBusy;
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => writes.enter(ids)}
+        disabled={busy || wrongNetwork || ids.length === 0}
+        // ⚠ `whitespace-normal` OVERRIDES `.bull-btn`'s nowrap on purpose. A
+        // full-width button on a 390px phone has about 30 characters before a
+        // nowrap label starts pushing the page sideways, and these labels carry
+        // a count. Two lines is fine; a horizontally scrolling page is not.
+        className="bull-btn w-full whitespace-normal text-center"
+      >
+        {wrongNetwork
+          ? 'wrong network'
+          : writes.checking
+            ? 'checking it will work…'
+            : busy
+              ? 'sending them in…'
+              : label}
+      </button>
+      {note && <p className="mt-1.5 font-mono text-[11px] text-bull-text-faint">{note}</p>}
+      <WrongNetworkNotice className="mt-3" />
+      <RevertNotice error={writes.error} className="mt-3" />
+    </div>
+  );
+}
 
 /**
  * WHO OF YOURS IS IN THE BULL PIT, AND THE TWO BUTTONS THAT MOVE THEM.
+ *
+ * ⚠ THIS IS THE BOTTOM-OF-PAGE MANAGEMENT SECTION NOW, not a block inside step
+ * 2. Fefers ranks the same thing the same way: its "eject status" panel is its
+ * own collapsible section under the fight flow, because it is the way back OUT
+ * and it is the only control on the page that does not need a fight set up to
+ * be useful. Step 2's own entry leg is `PitEntryButton` above.
  *
  * Owner, 2026-08-07: "people need to be able to EJECT their individual bulls or
  * all their bulls from the bull pit, yes make those buttons as well." Both, and
@@ -108,16 +184,15 @@ export function PitPanel({
   const disabled = busy || wrongNetwork;
 
   return (
-    <div className="mt-3">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <p className="font-mono text-[11px] uppercase tracking-wide text-bull-text-faint">
-          your herd in {PIT.label}
-        </p>
-        <p className="font-mono text-[11px] text-bull-text-faint">
-          {inIds.length} in · {outIds.length} out
-          {leavingIds.length > 0 ? ` · ${leavingIds.length} leaving` : ''}
-        </p>
-      </div>
+    <div>
+      {/* ⚠ NO TITLE ROW. The collapsible section this sits in is titled "your
+          herd in the bull pit" already, and a panel that repeats its own
+          container's heading is how a page ends up looking like it was built by
+          two people who never spoke. The counts are the part worth keeping. */}
+      <p className="text-right font-mono text-[11px] text-bull-text-faint">
+        {inIds.length} in · {outIds.length} out
+        {leavingIds.length > 0 ? ` · ${leavingIds.length} leaving` : ''}
+      </p>
 
       {/* ── THE BULK CONTROLS ─────────────────────────────────────── */}
       <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -168,17 +243,11 @@ export function PitPanel({
         ))}
       </ul>
 
-      {/* ── AND WHO ELSE IS IN THERE ──────────────────────────────
-          The panel above is the two buttons; this is the field they put a
-          bull into. It reads its OWN membership live off `inYardsMany` rather
-          than inferring one from the rows above, because those rows only
-          cover this wallet and the pit is everybody's.
-
-          ⚠ IT DOES NOT CACHE, AND THAT IS THE BUG THIS FIXES. A sale voids a
-          pit spot silently — no event, no ERC-721 hook — so a roster built
-          once and kept will happily offer a fight that cannot settle. See
-          `PitRoster` for the full argument. */}
-      <PitRoster className="mt-5 border-t border-bull-border pt-4" />
+      {/* ⚠ `PitRoster` USED TO RENDER HERE AND IT HAS MOVED, NOT GONE. Owner,
+          2026-08-07: *"the roster of all of them waiting should be at bottom."*
+          It is the browse-the-field surface, not a step in the fight, so it is
+          its own section at the foot of the page — the same rank fefers gives
+          "Waiting in the stomping ground". See `DuelPicker`. */}
 
       {/* ── THE RULES, IN THE ORDER THEY BITE ─────────────────────── */}
       <div className="mt-3 space-y-1.5 text-[11px] text-bull-text-faint">

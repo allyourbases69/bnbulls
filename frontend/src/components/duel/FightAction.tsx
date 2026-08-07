@@ -184,6 +184,7 @@ export function FightAction({
   myAsset,
   approveFights = 1,
   onSettled,
+  onFightVisible,
 }: {
   duelAddress: `0x${string}`;
   myTokenId: number | null;
@@ -201,6 +202,18 @@ export function FightAction({
   approveFights?: number;
   /** Fired once, when this pair's fight has actually settled on chain. */
   onSettled?: () => void;
+  /**
+   * There is an arena on screen, or there is not.
+   *
+   * ⚠ THIS IS HOW "A FIGHT OWNS THE SCREEN" IS DONE HERE. Fefers renders its
+   * whole idle page only while `phase.kind === 'idle'`, so the roster and the
+   * side panels are simply not there during a fight. Our fight state lives in
+   * this component rather than on the page, so instead of unmounting anything,
+   * the page folds its other sections away when this fires true. Nothing is
+   * destroyed, which matters: an unmount here would orphan the receipt the
+   * page is waiting on.
+   */
+  onFightVisible?: (visible: boolean) => void;
 }) {
   const { address: account } = useAccount();
   const { ensureSession, isSigning, error: sessionError, hasSession, clear } = useDuelSession();
@@ -385,6 +398,16 @@ export function FightAction({
    *  ⚠ This is what keeps the ending off the pre-fight card. */
   const [watched, setWatched] = useState(false);
   const showFight = quote !== null && !hidden;
+
+  // Tell the page whether there is an arena up. ⚠ THE CALLBACK GOES IN A REF for
+  // the same reason `usePitWrites` does it: callers pass an inline arrow, so a
+  // dependency on the callback itself would re-fire this every render, and the
+  // page's handler collapses sections.
+  const onFightVisibleRef = useRef(onFightVisible);
+  onFightVisibleRef.current = onFightVisible;
+  useEffect(() => {
+    onFightVisibleRef.current?.(showFight);
+  }, [showFight]);
   /**
    * ⚠ `isSuccess` MEANS "A RECEIPT ARRIVED", NOT "IT WORKED". viem resolves this
    * hook for a REVERTED transaction too — it does not throw. Read on its own,
@@ -636,6 +659,19 @@ export function FightAction({
         </div>
       )}
 
+      {/* ═══════════════════════════════════════════════════════════════
+          ⚠ EXACTLY ONE LOUD BUTTON ON THE STEP AT ANY MOMENT.
+          ═══════════════════════════════════════════════════════════════
+          Owner, 2026-08-07: *"the buttons and approvals it's all just a bloody
+          mess."* His own screenshot has a gold "re-quote" sitting directly above
+          a gold "into the pit", which is two primaries for two different
+          decisions stacked on top of each other.
+
+          Before a quote, THIS is the primary and it pulses. The moment a quote
+          exists the arena is up and ITS gate is the button that opens the
+          wallet, so this demotes itself to a quiet outline — it is a way back,
+          not the next move. Same ranking fefers uses: one live primary per
+          step, everything else bordered. */}
       <div className="flex flex-wrap items-center gap-3">
         <button
           type="button"
@@ -644,7 +680,9 @@ export function FightAction({
           // would swap the events out from under the arena and orphan the
           // receipt the queue is waiting on.
           disabled={!canRoll || rolling || isSigning || isSubmitting || isConfirming}
-          className="bull-btn"
+          className={
+            quote ? 'bull-btn bull-btn-secondary' : 'bull-btn bull-btn-pulse'
+          }
         >
           {isSigning
             ? 'waiting on your signature…'
@@ -662,25 +700,32 @@ export function FightAction({
             {chosen === 'BOTH' ? ' · whichever one covers it' : ''}
           </span>
         )}
-        {!hasSession && (
-          <span className="text-xs text-bull-text-faint">
-            one signature, good for 24 hours. not a transaction. nothing is sent, spent or
-            approved.
-          </span>
-        )}
       </div>
 
-      {/* ⚠ THE PASSIVE-OPPONENT RULE, SAID OUT LOUD. `Duel._takeSide` only lets
-          raw bnb cover a side when `owner_ == msg.sender`, so what you pick
-          here covers YOUR side on a fight YOU send in, and nothing else. The
-          other half — whether anybody can pick your bulls, and in which
-          currency — is the standing allowance in step 2. */}
-      <p className="text-[11px] text-bull-text-faint">
-        this covers your own side of a fight you start. somebody else picking one of your
-        bulls draws on the allowance you gave the duel contract in step 2, in whichever
-        currency you approved, because only the wallet sending the transaction can put raw
-        bnb in with it.
-      </p>
+      {!hasSession && (
+        <p className="text-[11px] text-bull-text-faint">
+          one signature, good for 24 hours. not a transaction. nothing is sent, spent or
+          approved.
+        </p>
+      )}
+
+      {/* ⚠ THE PASSIVE-OPPONENT RULE, SAID OUT LOUD — BUT FOLDED. It is true and
+          it matters (`Duel._takeSide` only lets raw bnb cover a side when
+          `owner_ == msg.sender`, so what you pick here covers YOUR side on a
+          fight YOU send in and nothing else), and it was four lines of prose
+          standing between the player and the fight button. Step 2's allowance
+          block is where that decision is actually made; this is the footnote. */}
+      <details>
+        <summary className="cursor-pointer font-mono text-[11px] uppercase tracking-wide text-bull-text-faint hover:text-bull-gold">
+          what your pick does and does not cover
+        </summary>
+        <p className="mt-2 text-[11px] text-bull-text-faint">
+          this covers your own side of a fight you start. somebody else picking one of your
+          bulls draws on the allowance you gave the duel contract in step 2, in whichever
+          currency you approved, because only the wallet sending the transaction can put raw
+          bnb in with it.
+        </p>
+      </details>
 
       <WrongNetworkNotice />
 

@@ -389,6 +389,21 @@ export function FightAction({
   const { writeContractAsync, isPending: isSubmitting } = useWriteContract();
   const [txHash, setTxHash] = useState<`0x${string}` | null>(null);
   /**
+   * ⚠ THE FIGHT ON SCREEN, PINNED. Set the moment the transaction broadcasts,
+   * cleared only when the player dismisses the outcome ("fight again" / close).
+   *
+   * WITHOUT THIS THE ARENA VANISHED MID-FIGHT, and the teardown was our own
+   * queue: the receipt lands ~3s in (the animation runs ~4-6s), `onSettled()`
+   * marks the bull done, `DuelPicker` advances `currentId` to the next queued
+   * bull, the `myTokenId` prop changes, and the pair-change effect below wipes
+   * the quote — unmounting the fight the player was watching before the victory
+   * card ever rendered. A fight that has been submitted is HISTORY; the
+   * matchmaker moving on must not be able to un-happen it on screen.
+   */
+  const [fight, setFight] = useState<{ quote: RunDuelJson; txHash: `0x${string}` } | null>(
+    null,
+  );
+  /**
    * The player pressed "hide the fight". The arena is otherwise up from the
    * moment a quote exists — there is no separate "into the pit" press any
    * more, so this is the ONLY reason it would not be on screen.
@@ -397,7 +412,17 @@ export function FightAction({
   /** The animation has played out. Only then is the outcome allowed on screen.
    *  ⚠ This is what keeps the ending off the pre-fight card. */
   const [watched, setWatched] = useState(false);
-  const showFight = quote !== null && !hidden;
+  /** What the arena renders: the pinned fight outranks the live quote, so a
+   *  queue advance behind a playing fight changes nothing on screen. Memoised
+   *  because two useMemos below key off it. */
+  const view = useMemo(
+    () => fight ?? (quote !== null ? { quote, txHash } : null),
+    [fight, quote, txHash],
+  );
+  const showFight = view !== null && !hidden;
+  /** The hash whose receipt decides the verdict on screen. The pinned fight's,
+   *  never the (possibly already cleared) live one. */
+  const activeHash = fight?.txHash ?? txHash;
 
   // Tell the page whether there is an arena up. ⚠ THE CALLBACK GOES IN A REF for
   // the same reason `usePitWrites` does it: callers pass an inline arrow, so a
@@ -419,7 +444,7 @@ export function FightAction({
     data: receipt,
     isLoading: isConfirming,
     isSuccess: mined,
-  } = useWaitForTransactionReceipt({ hash: txHash ?? undefined });
+  } = useWaitForTransactionReceipt({ hash: activeHash ?? undefined });
   const reverted = mined && receipt?.status === 'reverted';
   const settled = mined && receipt?.status === 'success';
 
@@ -437,8 +462,9 @@ export function FightAction({
     setError(null);
     setRevert(null);
     setTxHash(null);
-    setHidden(false);
-    setWatched(false);
+    // ⚠ `fight` IS DELIBERATELY NOT CLEARED HERE. The queue advancing IS a pair
+    // change, and it fires while the player is still watching — see the pin.
+    // `hidden`/`watched` belong to the pinned fight, so they survive with it.
   }, [myTokenId, oppTokenId, account]);
 
   // Changing the currency invalidates the quote but NOT a settled fight: the
@@ -465,28 +491,69 @@ export function FightAction({
         kind: 'failed',
         message: revert.message,
         headline: revert.kind === 'rejected' ? 'you called it off' : undefined,
-        ...(txHash ? { txHash } : {}),
+        ...(activeHash ? { txHash: activeHash } : {}),
       };
     }
-    if (reverted && txHash) {
+    if (reverted && activeHash) {
       return {
         kind: 'failed',
         message: 'the transaction ran but the contract rejected it, so nothing settled.',
-        txHash,
+        txHash: activeHash,
       };
     }
-    if (settled && txHash) return { kind: 'settled', txHash };
-    if (txHash) return { kind: 'inflight', txHash };
+    if (settled && activeHash) return { kind: 'settled', txHash: activeHash };
+    if (activeHash) return { kind: 'inflight', txHash: activeHash };
     return { kind: 'signing' };
-  }, [revert, reverted, settled, txHash]);
+  }, [revert, reverted, settled, activeHash]);
 
   const settledFor = useRef<string | null>(null);
   useEffect(() => {
-    if (!settled || !txHash) return;
-    if (settledFor.current === txHash) return;
-    settledFor.current = txHash;
+    if (!settled || !activeHash) return;
+    if (settledFor.current === activeHash) return;
+    settledFor.current = activeHash;
     onSettled?.();
-  }, [settled, txHash, onSettled]);
+  }, [settled, activeHash, onSettled]);
+
+  /** The player is done with the outcome: "fight again", or closing a finished
+   *  fight. Unpins, so the arena falls back to whatever the queue is up to. */
+  const dismissFight = useCallback(() => {
+    setFight(null);
+    setTxHash(null);
+    setHidden(false);
+    setWatched(false);
+  }, []);
+
+  /** Ratings after the fight, straight off the signed result — never computed
+   *  here (`core/elo.ts`: a re-implementation diverges on rounding from the
+   *  numbers the player was paid on). */
+  const viewNewElo = useMemo(
+    () =>
+      view ? { a: view.quote.result.newEloA, b: view.quote.result.newEloB } : null,
+    [view],
+  );
+
+  /**
+   * The money on the victory card. ONLY what the signed quote actually carries:
+   * the purse, and only when both sides fought in the same currency — a mixed
+   * BNB/BNBULL fight has no honest single-symbol total, so it shows nothing
+   * rather than a number in the wrong unit. The pot slice and the live balance
+   * need reads this component does not own yet, so those rows stay absent
+   * rather than fabricated.
+   */
+  const viewPayout = useMemo(() => {
+    if (!view) return undefined;
+    const s = view.quote.stakes;
+    if (s.symbolA !== s.symbolB || s.decimalsA !== s.decimalsB) return undefined;
+    const a = BigInt(s.amountA);
+    const b = BigInt(s.amountB);
+    return {
+      purse: {
+        total: formatToken(a + b, s.decimalsA),
+        each: formatToken(a, s.decimalsA),
+        symbol: s.symbolA,
+      },
+    };
+  }, [view]);
 
   const submit = useCallback(async () => {
     if (!quote || wrongNetwork) return;
@@ -561,6 +628,9 @@ export function FightAction({
         value: nativeValue,
       });
       setTxHash(hash);
+      // Pin it. From here the fight on screen is history, and the queue
+      // advancing underneath cannot take it down — see `fight`.
+      setFight({ quote, txHash: hash });
     } catch (e) {
       // The second layer. State can move between the simulation and the
       // confirmation, so this path is a race by construction and gets the same
@@ -817,100 +887,103 @@ export function FightAction({
             </div>
           )}
 
-          {/* ⚠ THE REPLAY PLAYS HERE, IT IS NOT A DOWNLOAD LINK. This used to be
-              an <a href="/api/duel-gif?tx="> that made you leave the page to see
-              your own fight. The replay re-simulates from the signed seed and
-              409s on any winner/rounds mismatch, so it is the PROOF the fight
-              was real, not decoration. `DuelReplayInline` renders that refusal
-              in words rather than quietly falling back to a picture. */}
-          {/* ⚠ THE FIGHT PLAYS HERE, LIVE, WHILE THE TX IS IN FLIGHT. The signed
-              events are already on the client, so nothing is fetched and nothing
-              waits on a receipt. Playing it on the ROLL would spoil the outcome
-              before any money moved; playing it on the RECEIPT is the GIF, which
-              is a highlight reel rather than watching your bull win or die.
-              `DuelReplayInline` below is the RECEIPT and stays put — this is the
-              fight, that is the proof.
-
-              ⚠ IT MOUNTS ON THE QUOTE, NOT ON A SECOND BUTTON. The gate is up
-              until the wallet answers, so nothing is spoiled by it being on
-              screen early, and the gate's own button is the single user gesture
-              that opens the wallet. See the header. */}
-          {showFight && (
-            <div className="mt-4">
-              <DuelAnimation
-                aTokenId={Number(quote.result.tokenA)}
-                bTokenId={Number(quote.result.tokenB)}
-                events={quote.events}
-                status={fightStatus}
-                // The amount goes in the headline, the way fefers does it, so
-                // the one thing a player checks before signing is on the button
-                // they are about to press rather than in a card above it.
-                signingMessage={
-                  mySide
-                    ? `put your ${formatToken(mySide.amount, mySide.decimals)} ${mySide.symbol} in the middle`
-                    : 'put your half in the middle'
-                }
-                signingAction={{
-                  label: gateLabel,
-                  onTap: () => void submit(),
-                  disabled:
-                    isSubmitting ||
-                    isConfirming ||
-                    checking ||
-                    settled ||
-                    expired ||
-                    wrongNetwork ||
-                    (needsErc20 && needsApproval),
-                }}
-                onFinished={() => setWatched(true)}
-                onClose={() => setHidden(true)}
-                // ⚠ THE OUTCOME LIVES HERE AND ONLY HERE. `finishedOverlay`
-                // renders inside the outcome panel, which the animation only
-                // puts up once the last event has played.
-                finishedOverlay={
-                  <FightProof quote={quote} myTokenId={myTokenId} txHash={txHash} />
-                }
-              />
-            </div>
-          )}
-
-          {/* "hide the fight" is `DuelAnimation`'s own control and it has no
-              matching "show it again", so the way back lives here. Without it a
-              player who hid the arena would have no button on screen that opens
-              their wallet at all, and the quote would just sit there. */}
-          {!showFight && (
-            <button
-              type="button"
-              onClick={() => setHidden(false)}
-              className="mt-4 font-mono text-xs text-bull-gold hover:underline"
-            >
-              {settled || reverted ? 'show the fight' : 'back to the fight'}
-            </button>
-          )}
-
-          {/* Hidden the arena mid-fight? The proof does not go with it. */}
-          {!showFight && (watched || settled || reverted) && (
-            <div className="mt-3">
-              <FightProof quote={quote} myTokenId={myTokenId} txHash={txHash} />
-            </div>
-          )}
-
-          {txHash && !showFight && (
-            <p className="mt-3 text-xs">
-              <a
-                href={`${explorerBaseUrl()}/tx/${txHash}`}
-                target="_blank"
-                rel="noreferrer"
-                className="text-bull-gold hover:underline"
-              >
-                view the transaction
-              </a>
-            </p>
-          )}
-
-          {settled && txHash && <DuelReplayInline txHash={txHash} className="mt-3" />}
         </div>
       )}
+
+      {/* ⚠ THE FIGHT PLAYS HERE, LIVE, WHILE THE TX IS IN FLIGHT. The signed
+          events are already on the client, so nothing is fetched and nothing
+          waits on a receipt. Playing it on the ROLL would spoil the outcome
+          before any money moved; playing it on the RECEIPT is the GIF, which
+          is a highlight reel rather than watching your bull win or die.
+
+          ⚠ AND IT LIVES OUTSIDE THE QUOTE CARD, ON `view`, NOT `quote`. The
+          queue advances the moment the receipt lands, which clears the quote
+          and unmounts that card — and the fight used to be inside it, so it
+          vanished ~3s in with no victory card. The pinned fight keeps playing
+          here until the player dismisses it. */}
+      {view !== null && !hidden && (
+        <div className="mt-4">
+          <DuelAnimation
+            aTokenId={Number(view.quote.result.tokenA)}
+            bTokenId={Number(view.quote.result.tokenB)}
+            events={view.quote.events}
+            status={fightStatus}
+            // The amount goes in the headline, the way fefers does it, so
+            // the one thing a player checks before signing is on the button
+            // they are about to press rather than in a card above it.
+            signingMessage={
+              mySide
+                ? `put your ${formatToken(mySide.amount, mySide.decimals)} ${mySide.symbol} in the middle`
+                : 'put your half in the middle'
+            }
+            signingAction={{
+              label: gateLabel,
+              onTap: () => void submit(),
+              disabled:
+                isSubmitting ||
+                isConfirming ||
+                checking ||
+                settled ||
+                expired ||
+                wrongNetwork ||
+                (needsErc20 && needsApproval),
+            }}
+            onFinished={() => setWatched(true)}
+            // Closing a FINISHED fight is dismissal — the outcome has been seen
+            // and the next bull is waiting. Mid-fight it is only a fold, with
+            // the way back below.
+            onClose={() => {
+              if (watched || settled || reverted) dismissFight();
+              else setHidden(true);
+            }}
+            onFightAgain={dismissFight}
+            newElo={viewNewElo}
+            payout={viewPayout}
+            // ⚠ THE OUTCOME LIVES HERE AND ONLY HERE. `finishedOverlay`
+            // renders inside the outcome panel, which the animation only
+            // puts up once the last event has played.
+            finishedOverlay={
+              <FightProof quote={view.quote} myTokenId={myTokenId} txHash={activeHash} />
+            }
+          />
+        </div>
+      )}
+
+      {/* "hide the fight" is `DuelAnimation`'s own control and it has no
+          matching "show it again", so the way back lives here. Without it a
+          player who hid the arena would have no button on screen that opens
+          their wallet at all, and the quote would just sit there. */}
+      {view !== null && !showFight && (
+        <button
+          type="button"
+          onClick={() => setHidden(false)}
+          className="mt-4 font-mono text-xs text-bull-gold hover:underline"
+        >
+          {settled || reverted ? 'show the fight' : 'back to the fight'}
+        </button>
+      )}
+
+      {/* Hidden the arena mid-fight? The proof does not go with it. */}
+      {view !== null && !showFight && (watched || settled || reverted) && (
+        <div className="mt-3">
+          <FightProof quote={view.quote} myTokenId={myTokenId} txHash={activeHash} />
+        </div>
+      )}
+
+      {activeHash && !showFight && (
+        <p className="mt-3 text-xs">
+          <a
+            href={`${explorerBaseUrl()}/tx/${activeHash}`}
+            target="_blank"
+            rel="noreferrer"
+            className="text-bull-gold hover:underline"
+          >
+            view the transaction
+          </a>
+        </p>
+      )}
+
+      {settled && activeHash && <DuelReplayInline txHash={activeHash} className="mt-3" />}
     </div>
   );
 }

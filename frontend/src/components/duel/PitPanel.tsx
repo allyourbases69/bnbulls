@@ -278,8 +278,15 @@ function PitRow({
 
       {/* The per-state footnote. One line, under the row, only where the state
           needs explaining. */}
+      {/* ⚠ THE GOOD HALF FIRST. On its own `ejectPending` reads as "your bull
+          is still up for grabs for another 15 minutes", which is not true and is
+          how the owner read it. Nothing new can be matched against it from the
+          moment the eject confirms — the countdown only keeps already-signed
+          fights alive. Lead with what he actually wanted to hear. */}
       {status.leaving && (
-        <p className="w-full text-[11px] text-bull-text-faint">{PIT.ejectPending}</p>
+        <p className="w-full text-[11px] text-bull-text-faint">
+          {PIT.ejectImmediate} {PIT.ejectPending}
+        </p>
       )}
       {status.reason === 'sold' && (
         <p className="w-full text-[11px] text-bull-text-faint">

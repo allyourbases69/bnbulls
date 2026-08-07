@@ -219,7 +219,16 @@ export function BullOnChainPanel({ tokenId, isKing }: { tokenId: number; isKing:
         // that costs money if you get it wrong. `inYardsFor` returns true until
         // `leavesAt` passes, on purpose, so a fight signed before the eject
         // still lands.
-        <p className="mt-4 text-sm text-bull-text-dim">{PIT.ejectPending}</p>
+        // ⚠ BOTH HALVES, ALWAYS. `ejectPending` alone reads as "your bull can
+        // still be dragged into fights for 15 minutes", which is false and is
+        // the reading the owner arrived at. The bull is unmatchable the instant
+        // the eject confirms; the countdown only covers fights already signed.
+        // Printing the warning without the reassurance makes a safety property
+        // look like a penalty.
+        <div className="mt-4 space-y-1 text-sm text-bull-text-dim">
+          <p>{PIT.ejectImmediate}</p>
+          <p>{PIT.ejectPending}</p>
+        </div>
       )}
     </div>
   );

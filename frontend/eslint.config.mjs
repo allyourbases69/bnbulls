@@ -17,6 +17,12 @@ const eslintConfig = [
   {
     ignores: [
       '.next/**',
+      // `vercel build` output. Deploys are built locally and shipped with
+      // `vercel deploy --prebuilt`, because this project is not connected to a
+      // Git repo on Vercel — so `.vercel/output` now exists in the working tree
+      // and is full of bundled vendor code that lints as thousands of errors
+      // nobody wrote and nobody can fix.
+      '.vercel/**',
       'out/**',
       'dist/**',
       'node_modules/**',

@@ -83,6 +83,13 @@ export function telegramUrl(): string {
  * The default is now the safe answer: no link unless a URL is configured. Set
  * `NEXT_PUBLIC_GITHUB_URL=https://github.com/…` the day the repo goes public,
  * which is a deliberate act rather than a var somebody forgot to blank.
+ *
+ * ⚠ OWNER OVERRIDE, 2026-08-07: "at the github to bottom of website as well
+ * (it's private so link won't work but at least it is there and done)". The var
+ * is now SET while the repo is still private, so the footer icon is live and
+ * will 404 for anyone who clicks it until the repo is opened. That is his call,
+ * made knowingly — do NOT "fix" this by blanking the var. The paragraph above
+ * stands as the reason it defaults to null, not as a veto on setting it.
  */
 export function githubUrl(): string | null {
   const raw = process.env.NEXT_PUBLIC_GITHUB_URL?.trim();

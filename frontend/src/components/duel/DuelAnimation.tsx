@@ -121,7 +121,7 @@ import {
 import { createPortal } from 'react-dom';
 import { useReadContracts } from 'wagmi';
 import { DuelAbi } from '@/lib/abi';
-import { contractAddress, explorerBaseUrl } from '@/lib/env';
+import { contractAddress } from '@/lib/env';
 import { BullSprite } from '@/components/BullSprite';
 import { TILE_H, TILE_W } from '@/lib/art/bull';
 import { tierLabel, tierTextClass } from '@/lib/rarity';
@@ -830,7 +830,6 @@ export function DuelAnimation({
           ? b.name
           : null;
 
-  const txUrl = 'txHash' in status && status.txHash ? `${explorerBaseUrl()}/tx/${status.txHash}` : null;
   const playing = !gated && !ended;
 
   const card = showCard ? (
@@ -843,7 +842,6 @@ export function DuelAnimation({
       state={chainFailed ? 'failed' : status.kind === 'settled' ? 'settled' : 'inflight'}
       failHeadline={status.kind === 'failed' ? status.headline : undefined}
       failMessage={status.kind === 'failed' ? status.message : undefined}
-      txUrl={txUrl}
       payout={payout}
       onFightAgain={onFightAgain ?? null}
       extra={finishedOverlay}

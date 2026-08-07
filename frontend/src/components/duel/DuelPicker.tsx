@@ -140,7 +140,7 @@ import { usePitPool } from '@/lib/hooks/useYards';
 import { QUOTE_REFRESH_MS } from '@/lib/constants';
 import { NotDeployed } from '@/components/shared/NotDeployed';
 import { BullCard } from '@/components/bulls/BullCard';
-import { FightAction, type PayAsset } from '@/components/duel/FightAction';
+import { FightAction, type PayChoice } from '@/components/duel/FightAction';
 import { PitPanel, PitEntryButton } from '@/components/duel/PitPanel';
 import { PitRoster } from '@/components/pit/PitRoster';
 import { DuelSection, useDuelSectionState } from '@/components/duel/DuelSection';
@@ -180,7 +180,7 @@ export function DuelPicker() {
   const [nextId, setNextId] = useState<number | null>(null);
   const [settled, setSettled] = useState<number[]>([]);
   const [rerolls, setRerolls] = useState(0);
-  const [myAsset, setMyAsset] = useState<PayAsset>('BNB');
+  const [myAsset, setMyAsset] = useState<PayChoice>('BNB');
   /**
    * ⚠ ONE COUNT FOR THE WHOLE PAGE. Owner, 2026-08-07: *"they just need to say
    * how many fights they are keen for."*

@@ -220,7 +220,7 @@ export function BullOnChainPanel({ tokenId, isKing }: { tokenId: number; isKing:
         // `leavesAt` passes, on purpose, so a fight signed before the eject
         // still lands.
         // ⚠ BOTH HALVES, ALWAYS. `ejectPending` alone reads as "your bull can
-        // still be dragged into fights for 15 minutes", which is false and is
+        // still be dragged into fights until the countdown ends", which is false and is
         // the reading the owner arrived at. The bull is unmatchable the instant
         // the eject confirms; the countdown only covers fights already signed.
         // Printing the warning without the reassurance makes a safety property

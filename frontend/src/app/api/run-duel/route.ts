@@ -619,7 +619,8 @@ export async function POST(request: Request) {
   try {
     signerAccount = privateKeyToAccount(env.signerKey);
   } catch (e) {
-    return bad(`the signing key is invalid: ${e instanceof Error ? e.message : String(e)}`, 500);
+    console.error('[run-duel] signing key invalid:', e);
+    return bad('the signing key on this server is invalid.', 500);
   }
 
   // ── Session verification ────────────────────────────────────────
@@ -963,7 +964,11 @@ export async function POST(request: Request) {
       blockNumber,
     });
     if (pricing.assets.length === 0) {
-      return bad('no stake assets are registered on the duel contract yet.', 503, 'NO_ASSETS');
+      return bad(
+        'no currencies are registered on the duel contract yet, so there is nothing to put in the middle.',
+        503,
+        'NO_ASSETS',
+      );
     }
 
     /**
@@ -1090,7 +1095,7 @@ export async function POST(request: Request) {
     for (const [amount, info] of [[stakeAAmount, sideA.asset], [stakeBAmount, sideB.asset]] as const) {
       if (info.maxCost === 0n || amount > info.maxCost) {
         return bad(
-          `refusing to sign: a ${info.symbol} stake of ${amount} is above the ` +
+          `refusing to sign: ${amount} ${info.symbol} in the middle is above the ` +
             `contract's one-shot ceiling of ${info.maxCost}.`,
           500,
           'ABOVE_CEILING',
@@ -1312,9 +1317,10 @@ export async function POST(request: Request) {
 
     return NextResponse.json(response);
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
+    // ⚠ The raw message is INTERNAL — a viem transport error embeds the
+    // server's rpc url. Logged in full above the wire, generic on it.
     console.error('[run-duel] failed:', e);
-    return bad(`run-duel failed: ${message}`, 500);
+    return bad('run-duel failed on this server. it has been logged, try again shortly.', 500);
   }
 }
 

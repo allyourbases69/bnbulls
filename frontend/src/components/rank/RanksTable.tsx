@@ -61,7 +61,7 @@ export function RanksTable() {
               <>computed in your browser, off the same tables the contract holds.</>
             ) : (
               <>
-                last computed {new Date(computedAt).toLocaleString()} · recomputes in your browser
+                last computed {new Date(computedAt).toLocaleString('en-US')} · recomputes in your browser
                 whenever the minted count changes
               </>
             )}

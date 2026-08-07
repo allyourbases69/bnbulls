@@ -120,7 +120,8 @@ export function PitEntryButton({
  * ⚠ THE COUNTDOWN'S NUMBER IS READ, NOT WRITTEN HERE. `ejectDelay` is
  * owner-settable inside a bounded range; the copy says "the wait" and the
  * figure comes off `Yards.ejectDelay()`. Nothing on this panel hardcodes
- * fifteen minutes.
+ * a duration — the deployed value and the source differ right now, which is
+ * exactly why.
  */
 export function PitPanel({
   bulls,
@@ -361,9 +362,9 @@ function PitRow({
       {/* The per-state footnote. One line, under the row, only where the state
           needs explaining. */}
       {/* ⚠ THE GOOD HALF FIRST. On its own `ejectPending` reads as "your bull
-          is still up for grabs for another 15 minutes", which is not true and is
-          how the owner read it. Nothing new can be matched against it from the
-          moment the eject confirms — the countdown only keeps already-signed
+          is still up for grabs until the countdown ends", which is not true and
+          is how the owner read it. Nothing new can be matched against it from
+          the moment the eject confirms — the countdown only keeps already-signed
           fights alive. Lead with what he actually wanted to hear. */}
       {status.leaving && (
         <p className="w-full text-[11px] text-bull-text-faint">

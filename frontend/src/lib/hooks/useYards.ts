@@ -32,10 +32,13 @@ import { decodeRevert, type DecodedRevert } from '@/lib/revertDecode';
  *    stays fightable until it passes (`inYardsFor`: `lv == 0 || now < lv`). A
  *    duel settles on a SIGNED result and BSC's mempool is public, so an instant
  *    eject would let the losing side front-run the submission and make the loss
- *    evaporate — an undefeatable-bull button. `MIN_EJECT_DELAY` is 15 minutes
- *    because that is `MAX_DUEL_EXPIRY_SECONDS`, the ceiling on how long a fight
- *    signature may live, so an eject cannot outrun a signature that already
- *    exists. **NEVER render a bull with a live `leavesAt` as already safe.**
+ *    evaporate — an undefeatable-bull button. `MIN_EJECT_DELAY` is pinned to
+ *    `MAX_DUEL_EXPIRY_SECONDS`, the ceiling on how long a fight signature may
+ *    live, so an eject cannot outrun a signature that already exists. (The
+ *    source pins both at 300s; the DEPLOYED contract still carries the older
+ *    15-minute floor until the redeploy lands, which is one more reason the
+ *    number is read, never assumed.) **NEVER render a bull with a live
+ *    `leavesAt` as already safe.**
  *
  * 3. **A TRANSFER VOIDS THE ENTRY, WITH NO EVENT AND NO HOOK.** The stored
  *    entry is `(enteredBy, leavesAt)` and membership requires `enteredBy ==
@@ -44,7 +47,7 @@ import { decodeRevert, type DecodedRevert } from '@/lib/revertDecode';
  *    it themselves. This has already cost us a debugging session.
  *
  * ⚠ `ejectDelay` IS READ, NEVER ASSUMED. It is an owner-settable value inside
- * `[MIN_EJECT_DELAY, MAX_EJECT_DELAY]`. Hardcoding "15 minutes" in copy would
+ * `[MIN_EJECT_DELAY, MAX_EJECT_DELAY]`. Hardcoding a duration in copy would
  * be a number this site invented, and it would be wrong the first time it moves.
  */
 

@@ -181,9 +181,12 @@ export const PIT = {
   // The delay is not caution, it is the anti-dodge bound. A duel settles when
   // somebody submits a SIGNED result, BSC's mempool is public, so an instant
   // eject would let the losing side front-run the submission and make the loss
-  // evaporate. `MIN_EJECT_DELAY` is exactly `MAX_DUEL_EXPIRY_SECONDS`, the
+  // evaporate. `MIN_EJECT_DELAY` is pinned to `MAX_DUEL_EXPIRY_SECONDS`, the
   // ceiling on how long a fight signature may live, so by the time an eject
-  // bites every signature that could name that bull has already expired.
+  // bites every signature that could name that bull has already expired. (The
+  // source pins both at 300s; the deployed contract still carries the older,
+  // longer floor until the redeploy lands — either way the bound holds, and
+  // either way the number on screen is read off chain.)
   //
   // ⚠ NEVER HARDCODE THE MINUTES. `ejectDelay` is an owner-settable value
   // inside a bounded range. Read it off the contract; these strings are the

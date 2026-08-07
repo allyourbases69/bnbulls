@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   useAccount,
-  useReadContract,
   useWaitForTransactionReceipt,
   useWriteContract,
 } from 'wagmi';
@@ -17,9 +16,9 @@ import { WrongNetworkNotice } from '@/components/shared/WrongNetwork';
 import { RevertNotice } from '@/components/shared/RevertNotice';
 import { DuelReplayInline } from '@/components/duel/DuelReplay';
 import { DuelAnimation, type DuelChainStatus } from '@/components/duel/DuelAnimation';
+import { VICTORY } from '@/components/duel/duelCopy';
 import type { CombatEvent } from '@/core/types';
 import { explorerBaseUrl, CHAIN_ID } from '@/lib/env';
-import { CURRENCY } from '@/lib/brand';
 import { decodeRevert, type DecodedRevert } from '@/lib/revertDecode';
 
 /**
@@ -151,24 +150,15 @@ const ZERO = '0x0000000000000000000000000000000000000000' as const;
  */
 export type PayChoice = 'BNB' | 'BNBULL' | 'BOTH';
 
-/**
- * ⚠ `'AUTO'` IS DEAD. IT IS IN THIS UNION FOR ONE REASON ONLY.
- *
- * It was "whatever i can pay" and the owner removed it. `DuelPicker.tsx` still
- * renders a tab that sets it and that file is owned by another agent right now,
- * so narrowing the union would break its build rather than its behaviour.
- *
- * NOTHING ACTS ON IT. This component treats it as NO CHOICE MADE and asks for
- * one, and `/api/run-duel` 400s on it. Delete the member the moment the tab
- * goes, along with `needsChoice` and the picker it renders.
+/*
+ * ⚠ `'AUTO'` IS GONE FOR REAL NOW. It was "whatever i can pay", the owner
+ * removed it, and this union carried it only while `DuelPicker` still rendered
+ * a tab that set it. That tab no longer exists anywhere, so the member, the
+ * `needsChoice` fallback and the in-component currency picker it rendered are
+ * deleted — exactly as the note on the old union said to do. `/api/run-duel`
+ * still 400s on it server-side, which is the right place for that check to
+ * outlive the type.
  */
-export type PayAsset = PayChoice | 'AUTO';
-
-const PAY_CHOICES: readonly PayChoice[] = ['BNB', 'BNBULL', 'BOTH'];
-
-function isPayChoice(v: PayAsset): v is PayChoice {
-  return (PAY_CHOICES as readonly string[]).includes(v);
-}
 
 const CHOICE_LABEL: Record<PayChoice, string> = {
   BNB: 'bnb',
@@ -191,7 +181,7 @@ export function FightAction({
   oppTokenId: number | null;
   /** Set when the page already knows this pair would revert. Disables step 2. */
   blockedReason: string | null;
-  myAsset: PayAsset;
+  myAsset: PayChoice;
   /**
    * How many fights the approval should cover — the player's own "how many
    * fights are you up for" pick, handed down from the picker. The contract
@@ -233,49 +223,27 @@ export function FightAction({
   const [revert, setRevert] = useState<DecodedRevert | null>(null);
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
 
-  /**
-   * THE CURRENCY, AND IT CANNOT BE SKIPPED.
-   *
-   * Normally the page above has already made the pick and it rides in as
-   * `myAsset`, so there is still exactly ONE currency control on screen. The
-   * fallback below exists for one case: a picker that hands down the dead
-   * `'AUTO'`. Rather than dead-ending on a button that no longer does anything,
-   * this asks for a real choice and explains why the old one went.
-   */
-  const [ownChoice, setOwnChoice] = useState<PayChoice | null>(null);
-  const needsChoice = !isPayChoice(myAsset);
-  const chosen: PayChoice | null = isPayChoice(myAsset) ? myAsset : ownChoice;
+  /** THE CURRENCY. The page above owns the one currency control on screen and
+   *  the pick rides in as `myAsset` — always a real choice now that the dead
+   *  `'AUTO'` fallback is gone. */
+  const chosen: PayChoice = myAsset;
 
   useEffect(() => {
     const t = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000);
     return () => clearInterval(t);
   }, []);
 
-  /**
-   * Is the bnbull leg switched on yet? `Duel.fighterCost` returns ZERO for a
-   * leg nobody has priced, which is precisely the launch state
-   * (`DECISIONS.md §29`): four.meme holds the token transfer-locked until its
-   * curve fills. Read so the picker can say WHY bnbull is off rather than
-   * hiding it or quietly landing everyone on bnb.
-   */
-  const { data: bnbullAddr } = useReadContract({
-    address: duelAddress,
-    abi: DuelAbi,
-    functionName: 'bnbull',
-    query: { enabled: needsChoice },
-  });
-  const { data: bnbullCost } = useReadContract({
-    address: duelAddress,
-    abi: DuelAbi,
-    functionName: 'fighterCost',
-    args: bnbullAddr ? [bnbullAddr as `0x${string}`] : undefined,
-    query: { enabled: needsChoice && !!bnbullAddr },
-  });
-  const bnbullLive = typeof bnbullCost === 'bigint' && bnbullCost > 0n;
-
   const mySide = useMemo(() => {
     if (!quote || myTokenId === null) return null;
     const isA = Number(quote.result.tokenA) === myTokenId;
+    const isB = Number(quote.result.tokenB) === myTokenId;
+    // ⚠ A STANDING FIGHT CAN NAME A DIFFERENT PAIR. Ask for #5 vs #12 while
+    // the wallet still owes a #3 vs #9 and the signer hands the standing fight
+    // back — `result.tokenA/B` then match NEITHER of this component's props.
+    // Guessing "not A, so B" here printed the OPPONENT'S stake as "you put
+    // in" and pointed the approval at their asset. Unknown is unknown: the
+    // card shows a dash and the preflight owns the real check.
+    if (!isA && !isB) return null;
     return {
       asset: isA ? quote.stakes.assetA : quote.stakes.assetB,
       symbol: isA ? quote.stakes.symbolA : quote.stakes.symbolB,
@@ -320,13 +288,8 @@ export function FightAction({
   const expired = quote !== null && secondsLeft === 0;
 
   const roll = useCallback(async () => {
-    if (myTokenId === null || oppTokenId === null || chosen === null) return;
+    if (myTokenId === null || oppTokenId === null) return;
     setError(null);
-    // A re-quote on the SAME pair does not trip the pair effect below, so the
-    // arena has to be un-hidden and the outcome re-hidden from here or a
-    // second roll would open with the previous fight's ending on screen.
-    setHidden(false);
-    setWatched(false);
     const session = await ensureSession();
     if (!session) return;
     setRolling(true);
@@ -378,6 +341,22 @@ export function FightAction({
        */
       setTxHash(null);
       setRevert(null);
+      /**
+       * ⚠ A FRESH ROLL SUPERSEDES A PINNED FIGHT. The roll button is disabled
+       * while a transaction is actually in flight, so any pin still standing
+       * here is a finished (or refused) fight the player has moved past —
+       * left in place it would outrank the new quote in `view` and the new
+       * fight's gate could never reach the screen.
+       *
+       * The un-hide and the outcome re-hide happen HERE, on success, not at
+       * press time: a re-quote on the SAME pair does not trip the pair effect,
+       * so a second roll would otherwise open on the previous fight's ending —
+       * and doing it at press time re-opened the OLD fight's arena while the
+       * fetch was still out.
+       */
+      setFight(null);
+      setHidden(false);
+      setWatched(false);
       setQuote(json as RunDuelJson);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -515,10 +494,21 @@ export function FightAction({
   }, [settled, activeHash, onSettled]);
 
   /** The player is done with the outcome: "fight again", or closing a finished
-   *  fight. Unpins, so the arena falls back to whatever the queue is up to. */
+   *  fight. Unpins, and clears the whole flow back to "roll a fight".
+   *
+   *  ⚠ THE QUOTE GOES TOO, AND THAT IS A CLOSE-BUTTON BUG, NOT TIDINESS. On a
+   *  settled fight the queue has already advanced and wiped it, so this drops
+   *  nothing. On a fight the wallet rejected or the chain reverted the pair
+   *  never advanced, the quote is still standing, and `view` falls straight
+   *  back to it — which re-rendered the arena the player just closed and left
+   *  them in a full-screen dialog no button could get them out of. A dismissed
+   *  fight ends with the page back at the roll button, always. */
   const dismissFight = useCallback(() => {
     setFight(null);
     setTxHash(null);
+    setQuote(null);
+    setRevert(null);
+    setError(null);
     setHidden(false);
     setWatched(false);
   }, []);
@@ -639,6 +629,29 @@ export function FightAction({
     }
   }, [quote, duelAddress, writeContractAsync, nativeValue, wrongNetwork, preflight]);
 
+  /**
+   * ⚠ THE APPROVAL RUNS FROM THE GATE, because the gate is all the player can
+   * reach. The quote card's own top-up button sits on the PAGE, and the arena
+   * is a full-screen dialog over it — a gate that said "approve bnbull first"
+   * while staying disabled was pointing at a button behind the backdrop. So
+   * when the allowance is short, the gate's one button IS the approve (still a
+   * real user gesture, which the wallet deep link needs), and the moment the
+   * allowance lands it goes back to being the fight button.
+   */
+  const needsGateApproval = needsErc20 && needsApproval;
+  const gateApprove = useCallback(async () => {
+    try {
+      await approve();
+      await refetchAllowance();
+    } catch (e) {
+      // A player cancelling their own approval is not a failed fight: stay
+      // gated, quote intact, button ready to be pressed again. Anything else
+      // gets the decoder, same as the page's own top-up button.
+      const d = decodeRevert(e);
+      if (d.kind !== 'rejected') setRevert(d);
+    }
+  }, [approve, refetchAllowance]);
+
   if (!account) {
     return (
       <p className="text-sm text-bull-text-dim">connect a wallet to roll a fight.</p>
@@ -648,13 +661,9 @@ export function FightAction({
   // Rolling spends no money, but it does burn a `personal_sign` and hand back a
   // quote that could never be settled from the chain the wallet is on. Block it
   // at the same line as the settle, so the whole panel has one story.
-  //
-  // ⚠ `chosen !== null` IS PART OF THE GATE. There is no default currency any
-  // more, here or in the signer, so an unpicked side never reaches the wallet.
   const canRoll =
     myTokenId !== null &&
     oppTokenId !== null &&
-    chosen !== null &&
     !blockedReason &&
     !wrongNetwork;
 
@@ -671,64 +680,21 @@ export function FightAction({
     : settled
       ? 'settled'
       : expired
-        ? 'expired, re-quote above'
-        : needsErc20 && needsApproval
-          ? `approve ${approveSymbol} first`
-          : isConfirming
-            ? 'settling…'
-            : checking
-              ? 'checking it will work…'
-              : isSubmitting
-                ? 'check your wallet…'
-                : 'put it in and fight';
+        ? 'expired · cancel and re-quote'
+        : isApproving
+          ? 'approving…'
+          : needsGateApproval
+            ? `approve ${approveSymbol} to fight`
+            : isConfirming
+              ? 'settling…'
+              : checking
+                ? 'checking it will work…'
+                : isSubmitting
+                  ? 'check your wallet…'
+                  : 'put it in and fight';
 
   return (
     <div className="space-y-4">
-      {needsChoice && (
-        <div className="rounded border border-bull-gold/40 bg-bull-gold/5 px-4 py-3">
-          <p className="font-mono text-[11px] uppercase tracking-wide text-bull-text-faint">
-            what are you backing your bull with?
-          </p>
-          <p className="mt-1 text-xs text-bull-text-dim">
-            {'pick one. "whatever i can pay" is gone: it could pass over a currency ' +
-              'without saying so, and a bull it passed over just sat there with nothing ' +
-              'on screen to explain why.'}
-          </p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {PAY_CHOICES.map((c) => {
-              const off = c === 'BNBULL' && !bnbullLive;
-              const active = ownChoice === c;
-              return (
-                <button
-                  key={c}
-                  type="button"
-                  disabled={off}
-                  title={off ? CURRENCY.bnbullPending : undefined}
-                  onClick={() => setOwnChoice(c)}
-                  className={`rounded-full border px-3 py-1.5 text-xs font-medium transition ${
-                    off
-                      ? 'cursor-not-allowed border-bull-border text-bull-text-faint opacity-50'
-                      : active
-                        ? 'border-bull-gold text-bull-gold'
-                        : 'border-bull-border text-bull-text-dim hover:border-bull-gold hover:text-bull-text'
-                  }`}
-                >
-                  {CHOICE_LABEL[c]}
-                </button>
-              );
-            })}
-          </div>
-          <p className="mt-2 text-[11px] text-bull-text-faint">
-            {'"both" means either one is fine with you, not half in each: your side of the ' +
-              'money in the middle is always one currency. ' +
-              (bnbullLive ? 'it tries bnb first.' : 'right now that lands on bnb.')}
-          </p>
-          {!bnbullLive && (
-            <p className="mt-1 text-[11px] text-bull-text-faint">{CURRENCY.bnbullPending}</p>
-          )}
-        </div>
-      )}
-
       {/* ═══════════════════════════════════════════════════════════════
           ⚠ EXACTLY ONE LOUD BUTTON ON THE STEP AT ANY MOMENT.
           ═══════════════════════════════════════════════════════════════
@@ -764,12 +730,10 @@ export function FightAction({
                   ? 'start the slaughter'
                   : 'sign in & start the slaughter'}
         </button>
-        {chosen !== null && (
-          <span className="font-mono text-[11px] text-bull-text-faint">
-            backing your bull with {CHOICE_LABEL[chosen]}
-            {chosen === 'BOTH' ? ' · whichever one covers it' : ''}
-          </span>
-        )}
+        <span className="font-mono text-[11px] text-bull-text-faint">
+          backing your bull with {CHOICE_LABEL[chosen]}
+          {chosen === 'BOTH' ? ' · whichever one covers it' : ''}
+        </span>
       </div>
 
       {!hasSession && (
@@ -904,6 +868,13 @@ export function FightAction({
       {view !== null && !hidden && (
         <div className="mt-4">
           <DuelAnimation
+            // ⚠ ONE FIGHT PER MOUNT. `DuelAnimation` plans its playback once
+            // and never resets on an `events` change, and `view` can swap
+            // fights WITHOUT unmounting (a dismissed pin falling back to a
+            // fresh quote, a re-quote on the same pair). The nonce is the
+            // signed result's identity, so a different fight is a fresh
+            // arena and the same fight survives its own status changes.
+            key={view.quote.result.nonce}
             aTokenId={Number(view.quote.result.tokenA)}
             bTokenId={Number(view.quote.result.tokenB)}
             events={view.quote.events}
@@ -918,22 +889,31 @@ export function FightAction({
             }
             signingAction={{
               label: gateLabel,
-              onTap: () => void submit(),
+              // One button, whatever the next signature is: the approve when
+              // the allowance is short, the fight once it is not.
+              onTap: () => void (needsGateApproval ? gateApprove() : submit()),
               disabled:
                 isSubmitting ||
                 isConfirming ||
+                isApproving ||
                 checking ||
                 settled ||
                 expired ||
-                wrongNetwork ||
-                (needsErc20 && needsApproval),
+                wrongNetwork,
             }}
             onFinished={() => setWatched(true)}
-            // Closing a FINISHED fight is dismissal — the outcome has been seen
+            // Closing a WATCHED fight is dismissal: the outcome has been seen
             // and the next bull is waiting. Mid-fight it is only a fold, with
             // the way back below.
+            // ⚠ `settled` MUST NOT BE IN THIS TEST. The receipt lands ~3s into
+            // a 4-6s animation by design, so mid-fight `settled` is the NORMAL
+            // state — reading it as "finished" here dismissed the fight the
+            // player was still watching, which is the exact vanish the pin
+            // exists to stop. `watched` is the animation's own word that the
+            // ending has been on screen; a chain-refused fight (`reverted`, or
+            // a `revert` before broadcast) has no ending to protect.
             onClose={() => {
-              if (watched || settled || reverted) dismissFight();
+              if (watched || reverted || revert !== null) dismissFight();
               else setHidden(true);
             }}
             onFightAgain={dismissFight}
@@ -970,7 +950,11 @@ export function FightAction({
         </div>
       )}
 
-      {activeHash && !showFight && (
+      {/* ⚠ MID-FLIGHT ONLY. Once the fight is finished the proof block above
+          carries the tx in its own row, and this link next to it was the same
+          destination twice. While the fight is still landing there is no proof
+          on screen, so this is the one thread back to the transaction. */}
+      {activeHash && !showFight && !(watched || settled || reverted) && (
         <p className="mt-3 text-xs">
           <a
             href={`${explorerBaseUrl()}/tx/${activeHash}`}
@@ -978,7 +962,7 @@ export function FightAction({
             rel="noreferrer"
             className="text-bull-gold hover:underline"
           >
-            view the transaction
+            {VICTORY.viewTx}
           </a>
         </p>
       )}

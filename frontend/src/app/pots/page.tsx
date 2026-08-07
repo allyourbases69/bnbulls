@@ -5,8 +5,10 @@ import { EMOJI, POTS } from '@/lib/brand';
 
 export const metadata: Metadata = {
   title: 'the pots',
+  // ⚠ no "no-withdraw" framing here — the pots are pitched as jackpots that
+  // grow and pay, not as a trust story. see `POTS` in `lib/brand.ts`.
   description:
-    'the two no-withdraw pots: bnbull at 1-in-50, bnb at 1-in-100. current size, the odds, and every win so far.',
+    'the two jackpots: bnbull at 1-in-50, bnb at 1-in-100 on every decisive fight. current size, the odds, and every win so far.',
 };
 
 export default function PotsPage() {

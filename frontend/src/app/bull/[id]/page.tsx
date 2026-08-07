@@ -58,7 +58,12 @@ function mayReveal(id: number): boolean {
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { id: raw } = await params;
   const id = parseId(raw);
-  if (id === null) return { title: 'bull not found' };
+  if (id === null) {
+    return {
+      title: 'bull not found',
+      description: 'no bull wears that number. the herd runs 1 to 501.',
+    };
+  }
   // ⚠ The title and description are a leak too. A hidden bull must not have
   // its name and tier read off a search result or a link preview.
   if (!mayReveal(id)) {

@@ -127,8 +127,22 @@ export async function GET(request: Request) {
 
   const src = await replayInputFromChain({ txHash: tx as `0x${string}`, logIndex });
   if (!src.ok) {
+    // ⚠ 'rpc' and 'config' details are INTERNAL: a viem transport error embeds
+    // the server's rpc url (key and all) and a config failure names env vars.
+    // Log them, answer with a sentence a caller can act on. The other reasons
+    // ('not-found', 'no-duel', 'mismatch') are crafted, chain-public sentences
+    // and pass through.
+    const internal = src.reason === 'rpc' || src.reason === 'config';
+    if (internal) console.error(`duel-gif ${src.reason}: ${src.detail}`);
     return NextResponse.json(
-      { error: src.detail, reason: src.reason },
+      {
+        error: internal
+          ? src.reason === 'rpc'
+            ? 'the chain did not answer just now. try again shortly.'
+            : 'this server is not configured to serve replays yet.'
+          : src.detail,
+        reason: src.reason,
+      },
       { status: STATUS[src.reason] ?? 500 },
     );
   }
@@ -137,9 +151,11 @@ export async function GET(request: Request) {
   try {
     bytes = renderDuelReplayGif(src.input, scale).gif;
   } catch (e) {
-    // A throw here is a bug in the compositor or the encoder, not a bad request.
+    // A throw here is a bug in the compositor or the encoder, not a bad
+    // request — log the real message, answer with a generic one.
+    console.error('duel-gif render:', e instanceof Error ? e.message : String(e));
     return NextResponse.json(
-      { error: e instanceof Error ? e.message : String(e), reason: 'render' },
+      { error: 'this replay failed to render. it has been logged.', reason: 'render' },
       { status: 500 },
     );
   }

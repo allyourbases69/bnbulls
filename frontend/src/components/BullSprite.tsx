@@ -53,9 +53,16 @@ export function BullSprite({ token, scale = 4, className, fluid = false }: BullS
         fluid
           ? { imageRendering: 'pixelated', display: 'block', width: '100%', height: 'auto' }
           : {
+              // ⚠ `maxWidth` + `height: auto` are the containment fix: the
+              // fixed `TILE_W * scale` width used to be honoured even when the
+              // card was narrower (the post-mint single reveal caps its column
+              // at 14rem, scale 4 wants 284px), so the canvas spilled past the
+              // panel edge and under the stats block. Clamped, it fills the
+              // card and the intrinsic width/height attrs keep the ratio.
               imageRendering: 'pixelated',
               width: TILE_W * scale,
-              height: TILE_H * scale,
+              maxWidth: '100%',
+              height: 'auto',
               display: 'block',
             }
       }

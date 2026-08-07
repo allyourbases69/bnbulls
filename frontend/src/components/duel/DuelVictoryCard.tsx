@@ -80,7 +80,6 @@ export interface DuelVictoryCardProps {
   readonly state: 'inflight' | 'settled' | 'failed';
   readonly failHeadline?: string;
   readonly failMessage?: string;
-  readonly txUrl?: string | null;
   readonly payout?: DuelPayout;
   readonly onFightAgain?: (() => void) | null;
   readonly extra?: ReactNode;
@@ -95,7 +94,6 @@ export function DuelVictoryCard({
   state,
   failHeadline,
   failMessage,
-  txUrl,
   payout,
   onFightAgain,
   extra,
@@ -217,21 +215,12 @@ export function DuelVictoryCard({
       )}
 
       {/* The flow's own slot: the money it computes, and the signed-result
-          proof disclosure. Kept a slot so no money copy is written twice. */}
+          proof disclosure. Kept a slot so no money copy is written twice.
+          ⚠ THE TX LINK LIVES IN THERE, NOT HERE. This card used to print its
+          own "view the transaction" under the slot, which put the same link on
+          the card twice — once in prose, once in the proof's tx row. The proof
+          is the receipt, so the proof is where the transaction lives. */}
       {extra}
-
-      {txUrl && (
-        <p className="text-xs">
-          <a
-            href={txUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="break-all font-mono text-bull-gold hover:underline"
-          >
-            {VICTORY.viewTx}
-          </a>
-        </p>
-      )}
     </div>
   );
 }

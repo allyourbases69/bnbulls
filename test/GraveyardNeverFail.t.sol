@@ -229,6 +229,8 @@ contract GraveyardNeverFailTest is DuelGraveyardBase {
                 lpTreasury: lpTreasury
             })
         );
+        // The drop now ships PAUSED; tests open it deliberately.
+        d.unpause();
         Jackpot brokenPot = new Jackpot(address(broken), address(0), address(coord), 50);
         brokenPot.setFunder(address(d), true);
         potBnb.setFunder(address(d), true);

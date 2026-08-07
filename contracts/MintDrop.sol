@@ -601,6 +601,26 @@ contract MintDrop is Ownable, Pausable, ReentrancyGuard {
         // can retune without a redeploy.
         discountBpsOf[p.bnbull] = 1_000;
         emit DiscountSet(p.bnbull, 1_000);
+
+        // ⚠ THE DROP SHIPS CLOSED. `unpause()` IS THE "START MINTING" SWITCH.
+        //
+        // OpenZeppelin's `Pausable` initialises `_paused = false`, so without
+        // this line minting is LIVE from the moment this contract lands on
+        // chain — before the token exists, before the pots are funded, before
+        // anyone has been told. Two things go wrong in that window and neither
+        // is recoverable:
+        //
+        //   1. the $10 rung of the `§12` price ladder is the cheapest the drop
+        //      will ever be, and it would be spent by whoever watches the
+        //      mempool rather than by the people the launch is for;
+        //   2. every BNBULL buy leg defers (`§29` — there is no pool yet), so
+        //      those mints fund the BNBULL pot only later, via a keeper sweep
+        //      that nobody has published floors for yet.
+        //
+        // Deploy → wire → verify → fund → **then** `unpause()`, deliberately,
+        // straight after the four.meme launch. `pause()` remains the emergency
+        // stop; this is simply the state the contract starts in.
+        _pause();
     }
 
     // ══════════════════════════════════════════════════════════════════════

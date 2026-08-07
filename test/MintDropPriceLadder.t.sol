@@ -304,6 +304,8 @@ contract MintDropPriceLadderTest is BnbullsBase {
                 lpTreasury: lpTreasury
             })
         );
+        // The drop now ships PAUSED; tests open it deliberately.
+        d.unpause();
         b.bootstrapWire(Bulls.Wire.MintDrop, address(d));
         d.bootstrapWire(MintDrop.Wire.PriceFeed, address(feed));
         d.bootstrapWire(MintDrop.Wire.Router, address(router));

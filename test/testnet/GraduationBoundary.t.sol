@@ -107,6 +107,8 @@ contract GraduationBoundaryTest is TestnetDexBase {
                 lpTreasury: lpTreasury
             })
         );
+        // The drop now ships PAUSED; tests open it deliberately.
+        drop.unpause();
         drop.bootstrapWire(MintDrop.Wire.PriceFeed, address(feed));
         drop.bootstrapWire(MintDrop.Wire.Router, V2_ROUTER);
         drop.bootstrapWire(MintDrop.Wire.JackpotBnbull, address(potBnbull));

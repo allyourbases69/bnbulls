@@ -71,6 +71,8 @@ contract PancakeV2LiquidityForkTest is ForkBase {
                 lpTreasury: lpTreasury
            })
         );
+        // The drop now ships PAUSED; tests open it deliberately.
+        drop.unpause();
 
         bulls.bootstrapWire(Bulls.Wire.MintDrop, address(drop));
         drop.bootstrapWire(MintDrop.Wire.PriceFeed, A.CHAINLINK_BNB_USD);
@@ -352,6 +354,8 @@ contract PancakeV2LiquidityForkTest is ForkBase {
                 lpTreasury: lpTreasury
            })
         );
+        // The drop now ships PAUSED; tests open it deliberately.
+        d.unpause();
         d.bootstrapWire(MintDrop.Wire.PriceFeed, A.CHAINLINK_BNB_USD);
         d.bootstrapWire(MintDrop.Wire.JackpotBnbull, address(potBnbull));
         d.bootstrapWire(MintDrop.Wire.JackpotBnb, address(potBnb));

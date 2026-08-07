@@ -339,7 +339,18 @@ abstract contract VerifyCore is BnbullsConfig {
         _okUint(m.lpShareBps(), 0, "MintDrop.lpShareBps == 0 at launch");
         _okAddr(m.lpTreasury(), d.mintSplitter, "MintDrop.lpTreasury -> MintBnbullSplitter");
 
-        _ok(!m.paused(), "MintDrop is not paused");
+        // ⚠ INVERTED DELIBERATELY. This checklist is the PRE-LAUNCH gate
+        // (`DEPLOY-SAFETY-PREFLIGHT.md` is blocking, not advisory), and the
+        // drop now ships PAUSED from its constructor. A freshly deployed,
+        // freshly wired MintDrop that is already OPEN means mints are live
+        // before the token exists — the $10 rung of the ladder gets taken by
+        // whoever watches the mempool, and every BNBULL leg defers because
+        // there is no pool yet.
+        //
+        // `unpause()` is the go-live switch and it is pulled by hand, straight
+        // after the four.meme launch. So the correct pre-launch state is
+        // PAUSED, and this line failing after go-live is expected, not a bug.
+        _ok(m.paused(), "MintDrop is PAUSED (mints closed until the deliberate go-live)");
 
         // Does the oracle actually answer? Option A prices EVERYTHING through
         // it, so a mis-wired or stale feed is a total sale outage.

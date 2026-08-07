@@ -65,6 +65,8 @@ contract ChainlinkFeedForkTest is ForkBase {
                 lpTreasury: lpTreasury
            })
         );
+        // The drop now ships PAUSED; tests open it deliberately.
+        drop.unpause();
         bulls.bootstrapWire(Bulls.Wire.MintDrop, address(drop));
 
         // THE wire under test: the real aggregator.

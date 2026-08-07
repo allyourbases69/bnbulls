@@ -466,6 +466,8 @@ contract DecoyPoolForkTest is ForkBase {
                 lpTreasury: lpTreasury
            })
         );
+        // The drop now ships PAUSED; tests open it deliberately.
+        drop.unpause();
         bulls.bootstrapWire(Bulls.Wire.MintDrop, address(drop));
         drop.bootstrapWire(MintDrop.Wire.PriceFeed, A.CHAINLINK_BNB_USD);
         drop.bootstrapWire(MintDrop.Wire.Router, A.PANCAKE_V2_ROUTER);

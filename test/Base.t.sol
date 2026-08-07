@@ -106,6 +106,8 @@ abstract contract BnbullsBase is Test {
                 lpTreasury: lpTreasury
             })
         );
+        // The drop now ships PAUSED; tests open it deliberately.
+        drop.unpause();
 
         bulls.bootstrapWire(Bulls.Wire.MintDrop, address(drop));
 

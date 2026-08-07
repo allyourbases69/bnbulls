@@ -332,6 +332,8 @@ contract MintDropLiquidityFloorTest is BnbullsBase {
                 lpTreasury: lpTreasury
             })
         );
+        // The drop now ships PAUSED; tests open it deliberately.
+        d.unpause();
         b.bootstrapWire(Bulls.Wire.MintDrop, address(d));
 
         MockRouter r = new MockRouter(address(wbnb));

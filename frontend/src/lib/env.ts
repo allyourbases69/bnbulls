@@ -95,27 +95,55 @@ export function deployBlock(): bigint | null {
   return BigInt(raw);
 }
 
-/** Names for every contract this app will eventually read from. Kept as a
- *  const tuple (not a loose string[]) so `contractAddress()` below is typo-safe. */
-const CONTRACT_ENV_KEYS = {
-  bnbullToken: 'NEXT_PUBLIC_BNBULL_TOKEN',
-  bullsNft: 'NEXT_PUBLIC_BULLS_NFT',
-  mintDrop: 'NEXT_PUBLIC_MINTDROP',
-  duel: 'NEXT_PUBLIC_DUEL',
-  graveyard: 'NEXT_PUBLIC_GRAVEYARD',
-  jackpotBnbull: 'NEXT_PUBLIC_JACKPOT_BNBULL',
-  jackpotBnb: 'NEXT_PUBLIC_JACKPOT_BNB',
-  marketplace: 'NEXT_PUBLIC_MARKETPLACE',
-} as const;
+/**
+ * Every contract this app reads from, mapped to its address.
+ *
+ * ⚠ EACH VALUE IS A LITERAL `process.env.NEXT_PUBLIC_X`, ONE PER LINE, AND THAT
+ * IS LOAD-BEARING — DO NOT "TIDY" IT INTO A LOOKUP.
+ *
+ * Next.js inlines `process.env.NEXT_PUBLIC_*` into the client bundle at BUILD
+ * time by literal textual substitution, so it can only replace references it
+ * can actually see. This map used to hold the KEY NAMES and be read with
+ * `process.env[CONTRACT_ENV_KEYS[name]]` — a dynamic lookup webpack cannot
+ * substitute. The consequence was total and silent:
+ *
+ *   in EVERY production build, `process.env` is an empty object in the browser,
+ *   so every address resolved to `null` and every panel rendered its calm
+ *   "not deployed yet" state — mint, market, graveyard, pots, all of them.
+ *
+ * It worked perfectly under `next dev`, which populates `process.env` at
+ * runtime, and that is exactly why it survived to a deployed site: the failure
+ * exists only in a real build. `CHAIN_ID` and `explorerBaseUrl()` were fine
+ * throughout because they read their vars statically, which is what made the
+ * deployed site look correctly configured while every contract was missing.
+ */
+const CONTRACT_ADDRESSES: Record<string, string | undefined> = {
+  bnbullToken: process.env.NEXT_PUBLIC_BNBULL_TOKEN,
+  bullsNft: process.env.NEXT_PUBLIC_BULLS_NFT,
+  mintDrop: process.env.NEXT_PUBLIC_MINTDROP,
+  duel: process.env.NEXT_PUBLIC_DUEL,
+  graveyard: process.env.NEXT_PUBLIC_GRAVEYARD,
+  jackpotBnbull: process.env.NEXT_PUBLIC_JACKPOT_BNBULL,
+  jackpotBnb: process.env.NEXT_PUBLIC_JACKPOT_BNB,
+  marketplace: process.env.NEXT_PUBLIC_MARKETPLACE,
+};
 
-export type ContractName = keyof typeof CONTRACT_ENV_KEYS;
+export type ContractName =
+  | 'bnbullToken'
+  | 'bullsNft'
+  | 'mintDrop'
+  | 'duel'
+  | 'graveyard'
+  | 'jackpotBnbull'
+  | 'jackpotBnb'
+  | 'marketplace';
 
 /** A 0x-prefixed address, or null when the env var is unset/empty/malformed.
  *  Deliberately returns null rather than throwing — the whole app has to
  *  render a calm "not deployed yet" state, not crash on a page load before
  *  the contracts exist. */
 export function contractAddress(name: ContractName): `0x${string}` | null {
-  const raw = process.env[CONTRACT_ENV_KEYS[name]]?.trim();
+  const raw = CONTRACT_ADDRESSES[name]?.trim();
   if (!raw) return null;
   if (!/^0x[0-9a-fA-F]{40}$/.test(raw)) return null;
   return raw as `0x${string}`;

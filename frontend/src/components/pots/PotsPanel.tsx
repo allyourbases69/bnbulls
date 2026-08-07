@@ -1,7 +1,18 @@
 import { PotCard } from './PotCard';
 import { POTS } from '@/lib/brand';
+import { contractsDeployed } from '@/lib/env';
 
 export function PotsPanel() {
+  /* ⚠ "every row above is …" NEEDS ROWS ABOVE IT, AND PRE-LAUNCH THERE ARE
+     NONE. The award list that clause points at lives inside `PotCard`, and
+     with no address both cards are replaced by `NotDeployed` - so on the live
+     site the sentence pointed at two "not live yet" boxes. A confident
+     sentence referring to something that is not on the page is exactly what
+     makes a deliberate pre-launch state read as a half-finished one, which is
+     the one thing `PreLaunchNotice` exists to prevent. Only the clause that
+     needs rows is gated; the rest of the paragraph is true either way. */
+  const potsLive = contractsDeployed('jackpotBnbull', 'jackpotBnb');
+
   return (
     <div>
       <div className="grid gap-6 sm:grid-cols-2">
@@ -25,11 +36,11 @@ export function PotsPanel() {
 
       <div className="mt-10 rounded border border-bull-gold/30 bg-bull-panel p-5">
         <p className="font-mono text-xs uppercase tracking-[0.2em] text-bull-gold">
-          the trust story
+          how the pots grow
         </p>
         <p className="mt-2 max-w-2xl text-sm text-bull-text-dim">
-          {POTS.trust} every row above is one of those wins. {POTS.rule} winning is the only way
-          in: no entry fee, nothing to claim, the tokens just turn up.
+          {POTS.grow} {POTS.rule} {potsLive ? 'every row above is somebody who rolled it. ' : ''}
+          no entry fee and nothing to claim: the tokens just turn up.
         </p>
       </div>
     </div>

@@ -16,7 +16,10 @@ import { WrongNetworkNotice } from '@/components/shared/WrongNetwork';
 import { BullCard, BullCardLink, type BullFacts } from '@/components/bulls/BullCard';
 import { isValidBullId } from '@/lib/art/collection';
 import { withCushion, QUOTE_REFRESH_MS } from '@/lib/constants';
-import { CURRENCY } from '@/lib/brand';
+import { CURRENCY, PIT } from '@/lib/brand';
+import { usePreflight } from '@/lib/hooks/usePreflight';
+import { RevertNotice } from '@/components/shared/RevertNotice';
+import { decodeRevert, type DecodedRevert } from '@/lib/revertDecode';
 
 const STATIC_LADDER = [
   { upToSold: 100, usd: 10 },
@@ -253,9 +256,15 @@ export function MintPanel() {
     writeContractAsync,
     isPending: isMinting,
     data: mintHash,
-    error: mintError,
     reset: resetMint,
   } = useWriteContract();
+  const { preflight, checking } = usePreflight();
+  /**
+   * ⚠ DECODED, NEVER `mintError.message`. This panel used to render the wallet's
+   * own string straight out of wagmi, which on a reverting call is the rpc's
+   * complaint about a gas number rather than the reason the mint failed.
+   */
+  const [mintRevert, setMintRevert] = useState<DecodedRevert | null>(null);
   const {
     data: mintReceipt,
     isLoading: isConfirmingMint,
@@ -410,25 +419,67 @@ export function MintPanel() {
    * an address that holds no code on whatever chain the wallet is actually on.
    * That BNB is gone. With it pinned, viem throws before signing.
    */
+  /**
+   * ⚠ SIMULATED FIRST, and this is the write where the old behaviour was worst.
+   *
+   * A mint quote is a Chainlink conversion with a cushion on top, and every
+   * input to it moves: the price ladder steps at a mint boundary somebody else
+   * can cross first (`PriceTooHigh`), the feed goes stale (`OracleStale`), the
+   * drop sells out (`SupplyExhausted`), the swap route thins out
+   * (`PoolTooThin`, `SwapOutBelowMin`). Each of those is a sentence a player
+   * can act on, and this panel used to render `mintError.message` instead —
+   * which on a reverting call is the rpc's complaint about a gas number.
+   */
   async function handleMint() {
     if (!mintDropAddress || !account || wrongNetwork) return;
-    if (asset === 'bnb' && bnbDue !== undefined) {
-      await writeContractAsync({
-        address: mintDropAddress,
-        abi: MintDropAbi,
-        chainId: CHAIN_ID,
-        functionName: 'mintWithBNB',
-        args: [account, BigInt(count)],
-        value: withCushion(bnbDue),
-      });
-    } else if (asset === 'bnbull') {
-      await writeContractAsync({
-        address: mintDropAddress,
-        abi: MintDropAbi,
-        chainId: CHAIN_ID,
-        functionName: 'mintWithBNBULL',
-        args: [account, BigInt(count)],
-      });
+    setMintRevert(null);
+
+    const call =
+      asset === 'bnb' && bnbDue !== undefined
+        ? {
+            address: mintDropAddress,
+            abi: MintDropAbi,
+            functionName: 'mintWithBNB' as const,
+            args: [account, BigInt(count)] as const,
+            value: withCushion(bnbDue),
+          }
+        : asset === 'bnbull'
+          ? {
+              address: mintDropAddress,
+              abi: MintDropAbi,
+              functionName: 'mintWithBNBULL' as const,
+              args: [account, BigInt(count)] as const,
+            }
+          : null;
+    if (!call) return;
+
+    const pre = await preflight(call);
+    if (!pre.ok) {
+      setMintRevert(pre.error);
+      return;
+    }
+
+    try {
+      if (asset === 'bnb' && bnbDue !== undefined) {
+        await writeContractAsync({
+          address: mintDropAddress,
+          abi: MintDropAbi,
+          chainId: CHAIN_ID,
+          functionName: 'mintWithBNB',
+          args: [account, BigInt(count)],
+          value: withCushion(bnbDue),
+        });
+      } else {
+        await writeContractAsync({
+          address: mintDropAddress,
+          abi: MintDropAbi,
+          chainId: CHAIN_ID,
+          functionName: 'mintWithBNBULL',
+          args: [account, BigInt(count)],
+        });
+      }
+    } catch (e) {
+      setMintRevert(decodeRevert(e));
     }
   }
 
@@ -623,8 +674,16 @@ export function MintPanel() {
           ) : asset !== 'bnb' && needsApproval ? (
             <button
               onClick={async () => {
-                await approve();
-                refetchAllowance();
+                // ⚠ CAUGHT. This used to be a bare `await approve()`, so a
+                // rejected or failing approval threw into an unhandled promise
+                // rejection and the player saw NOTHING AT ALL — the silent end
+                // of the same bug class as "gas limit too high".
+                try {
+                  await approve();
+                  refetchAllowance();
+                } catch (e) {
+                  setMintRevert(decodeRevert(e));
+                }
               }}
               disabled={isApproving || wrongNetwork}
               className="bull-btn mt-4 w-full"
@@ -641,12 +700,12 @@ export function MintPanel() {
                 ? 'wrong network'
                 : isMinting || isConfirmingMint
                   ? 'minting…'
-                  : `mint ${count}`}
+                  : checking
+                    ? 'checking…'
+                    : `mint ${count}`}
             </button>
           )}
-          {mintError && (
-            <p className="mt-3 text-sm text-bull-red">{mintError.message}</p>
-          )}
+          <RevertNotice error={mintRevert} className="mt-3" />
         </div>
       )}
 
@@ -841,21 +900,20 @@ function MintedReveal({
         </p>
       )}
 
-      {/* ⚠ DELIBERATELY SAYS NOTHING ABOUT ARENA ENTRY. Fefers' equivalent line
-          is "they're yours, but not fighting yet: fefers sit benched until you
-          send them into the stomping ground", which is true there because
-          `ArenaOptOut` gates it. bnbulls' roster contract (`contracts/Yards.sol`)
-          landed while this was being written and is another agent's to wire, so
-          asserting EITHER "nothing to enter" or "you must enter them" would be
-          a claim this file cannot currently back. It points at the duel page
-          and lets that page state the rule. Revisit when Yards is wired. */}
+      {/* ⚠ THIS USED TO SAY NOTHING ABOUT ARENA ENTRY, because `Yards` was not
+          wired and asserting either "nothing to enter" or "you must enter them"
+          would have been a claim this file could not back. It is wired now, and
+          the honest line is the second one: `Yards.sol` defaults every bull
+          OUT, a fresh mint included, and `Duel` reverts `BullNotInYards` on
+          anything that has not been sent in. Saying so here is what stops a new
+          holder discovering it as a failed transaction. */}
       <p className="mt-4 text-sm text-bull-text-dim">
-        {single ? 'he is' : 'they are'} yours. the duel page is where {single ? 'he goes' : 'they go'} in.
+        {single ? 'he is' : 'they are'} yours, and not fighting yet. {PIT.defaultOut}
       </p>
 
       <div className="mt-3 flex flex-wrap items-center gap-3">
         <Link href="/duel" className="bull-btn bull-btn-pulse">
-          send {single ? 'him' : 'them'} into the yards ⚔️
+          send {single ? 'him' : 'them'} into {PIT.label} ⚔️
         </Link>
         {single && (
           <Link

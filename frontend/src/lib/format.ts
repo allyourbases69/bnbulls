@@ -77,3 +77,25 @@ export function formatDuration(totalSeconds: number): string {
   if (minutes > 0) return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
   return `${seconds}s`;
 }
+
+/**
+ * A ticking `mm:ss` clock — "04:31". Used for the pit's eject countdown, where
+ * the point is that the number is MOVING and the bull is still fightable until
+ * it reaches zero.
+ *
+ * ⚠ DIFFERENT JOB FROM `formatDuration`, which drops zero components ("4m") so
+ * a static window reads cleanly. A countdown that hides its seconds looks
+ * frozen, and this one has to look like it is running out, because it is.
+ *
+ * ⚠ NEVER ROUNDS UP PAST ZERO. `00:00` means the departure has landed; while
+ * any time remains, some digit is non-zero.
+ */
+export function formatCountdown(totalSeconds: number): string {
+  if (totalSeconds <= 0) return '00:00';
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = Math.floor(totalSeconds % 60);
+  const mm = String(minutes).padStart(2, '0');
+  const ss = String(seconds).padStart(2, '0');
+  return hours > 0 ? `${hours}:${mm}:${ss}` : `${mm}:${ss}`;
+}

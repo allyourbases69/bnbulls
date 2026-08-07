@@ -2,10 +2,17 @@ import type { Metadata } from 'next';
 import { DuelPicker } from '@/components/duel/DuelPicker';
 import { JackpotPanel } from '@/components/JackpotPanel';
 import { PreLaunchNotice } from '@/components/PreLaunchNotice';
-import { POTS } from '@/lib/brand';
+import { POTS, PIT } from '@/lib/brand';
 
+/**
+ * ⚠ THE ROUTE STAYS `/duel`. The page is LABELLED `PIT.label` — "the bull pit",
+ * the owner's own rename of the fighting area — and the url is not touched,
+ * because urls get shared and a 404 is worse than a label that does not match a
+ * path. Exactly the precedent `/graveyard` set by being labelled "the butcher".
+ * The contract behind it stays `Yards` for the same reason, one layer down.
+ */
 export const metadata: Metadata = {
-  title: 'duel',
+  title: PIT.label,
   description:
     'pick your bull, get matched on rating, and see exactly what each side puts in before anything is signed.',
 };
@@ -13,16 +20,21 @@ export const metadata: Metadata = {
 export default function DuelPage() {
   return (
     <div className="mx-auto max-w-3xl px-4 py-8 md:px-8">
-      <p className="bull-header text-xs uppercase tracking-[0.2em] text-bull-gold">⚔️ duel</p>
-      <h1 className="bull-header mt-3 text-3xl sm:text-4xl">duel</h1>
+      <p className="bull-header text-xs uppercase tracking-[0.2em] text-bull-gold">
+        {PIT.eyebrow}
+      </p>
+      <h1 className="bull-header mt-3 text-3xl sm:text-4xl">{PIT.heading}</h1>
       {/* Fefers' own two lines, translated: "pick your fefer and hit fight.
           we'll find you an opponent." / "winner takes 90% of the pot, and
           every fight rolls for the pots up top." The 90% is `DECISIONS.md
           §23`, not a round number someone liked. The pots sit at the BOTTOM
           here, so the pointer points down. */}
-      <p className="mt-3 max-w-xl text-bull-text-dim">
-        pick your bull and hit fight. we&apos;ll find you an opponent on rating.
-      </p>
+      <p className="mt-3 max-w-xl text-bull-text-dim">{PIT.lead}</p>
+      {/* ⚠ THE MEMBERSHIP RULE GOES ABOVE THE FOLD, not in a details block.
+          `Duel._requireInYards` reverts `BullNotInYards` on any bull that is
+          out, and a player who does not know that reads the resulting failed
+          gas estimate as a broken site. */}
+      <p className="mt-1 max-w-xl text-sm text-bull-text-dim">{PIT.rule}</p>
       {/* ⚠ "every fight rolls for the pots" was loose enough to be read as the
           banned "every fight rolls BOTH pots" (`VOICE-AND-BRAND.md §2`). A
           decisive fight opens a ticket on both pools and exactly one of them

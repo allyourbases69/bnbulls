@@ -146,6 +146,35 @@ export function useJackpot(
   };
 }
 
+/**
+ * The pot headline, sized to FIT. A jackpot is the biggest number on the site
+ * and it grows without bound, so full precision overflows its own box: the
+ * BNBULL pot rendered `348,612.034` and the box clipped it mid-digit.
+ *
+ * ⚠ PRECISION IS DROPPED BY MAGNITUDE, NEVER SILENTLY ROUNDED UP. The decimals
+ * on a six-figure pot are noise nobody reads; the leading digits are the whole
+ * point. Below a thousand every decimal still shows, because that is where a
+ * fraction actually means something.
+ *
+ *   < 1,000       2,347.85       full precision, this is a small pot
+ *   < 1,000,000   348,612        whole units, grouped
+ *   >= 1,000,000  1.23M          compact, because seven digits never fit
+ *
+ * Truncates rather than rounds, so the figure can never claim a pot holds more
+ * than it does. The exact wei is still on chain and still in `formatted`.
+ */
+export function potHeadline(figure: string): string {
+  if (figure === '—' || figure === '?') return figure;
+  const n = Number(figure.replace(/,/g, ''));
+  if (!Number.isFinite(n)) return figure;
+  if (n >= 1_000_000) {
+    const m = Math.floor((n / 1_000_000) * 100) / 100;
+    return `${m}M`;
+  }
+  if (n >= 1_000) return Math.floor(n).toLocaleString('en-US');
+  return figure;
+}
+
 /** Three answers, three glyphs. `—` we are still asking, `?` we asked and could
  *  not get an answer, a number means a number. Never let the first two share a
  *  symbol: that is the whole bug this exists to kill. */

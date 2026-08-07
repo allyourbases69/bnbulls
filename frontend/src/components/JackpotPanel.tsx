@@ -28,7 +28,7 @@
  */
 import { POTS } from '@/lib/brand';
 import { formatBps } from '@/lib/format';
-import { useJackpot, potFigure, potSymbol } from '@/lib/hooks/useJackpot';
+import { useJackpot, potFigure, potSymbol, potHeadline } from '@/lib/hooks/useJackpot';
 
 export interface JackpotPanelProps {
   pot: 'bnbull' | 'bnb';
@@ -113,8 +113,16 @@ export function JackpotPanel({ pot, compact = false, className = '' }: JackpotPa
         <p className="font-mono text-[10px] uppercase tracking-wider text-bull-text-faint">
           next winner takes
         </p>
-        <p className="pot-figure bull-header mt-1">
-          {potFigure(read, 'pendingPayout')}{' '}
+        {/* ⚠ HEADLINE FIGURE, NOT THE EXACT ONE. A pot grows without bound and
+            the exact string overflowed its own box (`348,612.034` clipped mid
+            digit). `potHeadline` drops precision by magnitude and TRUNCATES, so
+            it can never claim a bigger pot than there is. `title` carries the
+            exact figure for anyone who wants it. */}
+        <p
+          className="pot-figure bull-header mt-1"
+          title={`${potFigure(read, 'pendingPayout')} ${symbol}`.trim()}
+        >
+          {potHeadline(potFigure(read, 'pendingPayout'))}{' '}
           <span className="text-base font-normal">{symbol}</span>
         </p>
       </div>

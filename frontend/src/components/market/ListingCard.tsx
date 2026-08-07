@@ -9,7 +9,11 @@ import { formatToken, formatUsd1e18, shortAddr } from '@/lib/format';
 import { useTokenDecimals, NATIVE_BNB_DECIMALS } from '@/lib/hooks/useTokenDecimals';
 import { useErc20Approval } from '@/lib/hooks/useErc20Approval';
 import { useWrongNetwork } from '@/lib/hooks/useWrongNetwork';
+import { usePreflight } from '@/lib/hooks/usePreflight';
 import { WrongNetworkNotice } from '@/components/shared/WrongNetwork';
+import { RevertNotice } from '@/components/shared/RevertNotice';
+import { decodeRevert, type DecodedRevert } from '@/lib/revertDecode';
+import { PitSaleNotice } from '@/components/duel/PitPanel';
 import { withCushion, QUOTE_REFRESH_MS } from '@/lib/constants';
 import { CURRENCY } from '@/lib/brand';
 import type { Token } from '@/lib/art/bull';
@@ -118,46 +122,86 @@ export function ListingCard({
     dueForAsset[asset],
   );
 
-  const { writeContractAsync, isPending, data: txHash, error: txError } = useWriteContract();
+  const { writeContractAsync, isPending, data: txHash } = useWriteContract();
   const { isLoading: isConfirming, isSuccess: confirmed } = useWaitForTransactionReceipt({ hash: txHash });
+  const { preflight, checking } = usePreflight();
+  // ⚠ DECODED, NEVER `txError.message`. A listing is the most race-prone thing
+  // on the site: it can be bought, cancelled or repriced by somebody else
+  // between this card rendering and the click landing, and every one of those
+  // has a real sentence (`NotListed`, `PaymentShortfall`, `OracleStale`).
+  const [revert, setRevert] = useState<DecodedRevert | null>(null);
 
   const isMine = !!account && listing.seller.toLowerCase() === account.toLowerCase();
 
   // ⚠ Every branch pins `chainId`. Without it wagmi hands viem `chain: null`,
   // viem skips `assertCurrentChain`, and `buyWithBNB` pays a codeless address
   // on whatever chain the wallet is on. See `useWrongNetwork`.
+  //
+  // ⚠ AND EVERY BRANCH IS SIMULATED FIRST. The listing shown on this card came
+  // out of a batched read that is seconds old by the time anybody clicks, so
+  // "somebody else bought it" is the NORMAL failure here, not an exotic one.
   async function handleBuy() {
     if (!marketAddress || wrongNetwork) return;
+    setRevert(null);
     const id = BigInt(tokenId);
-    if (asset === 'bnb') {
-      await writeContractAsync({
-        address: marketAddress,
-        abi: MarketplaceAbi,
-        chainId: CHAIN_ID,
-        functionName: 'buyWithBNB',
-        args: [id],
-        value: bnbDue !== undefined ? withCushion(bnbDue) : 0n,
-      });
-    } else {
-      await writeContractAsync({
-        address: marketAddress,
-        abi: MarketplaceAbi,
-        chainId: CHAIN_ID,
-        functionName: 'buyWithBNBULL',
-        args: [id],
-      });
+    const value = asset === 'bnb' && bnbDue !== undefined ? withCushion(bnbDue) : undefined;
+    const fn = asset === 'bnb' ? 'buyWithBNB' : 'buyWithBNBULL';
+
+    const pre = await preflight({
+      address: marketAddress,
+      abi: MarketplaceAbi,
+      functionName: fn,
+      args: [id],
+      value: asset === 'bnb' ? (value ?? 0n) : undefined,
+    });
+    if (!pre.ok) {
+      setRevert(pre.error);
+      return;
+    }
+
+    try {
+      if (asset === 'bnb') {
+        await writeContractAsync({
+          address: marketAddress,
+          abi: MarketplaceAbi,
+          chainId: CHAIN_ID,
+          functionName: 'buyWithBNB',
+          args: [id],
+          value: value ?? 0n,
+        });
+      } else {
+        await writeContractAsync({
+          address: marketAddress,
+          abi: MarketplaceAbi,
+          chainId: CHAIN_ID,
+          functionName: 'buyWithBNBULL',
+          args: [id],
+        });
+      }
+    } catch (e) {
+      setRevert(decodeRevert(e));
     }
   }
 
   async function handleCancel() {
     if (!marketAddress || wrongNetwork) return;
-    await writeContractAsync({
+    setRevert(null);
+    const call = {
       address: marketAddress,
       abi: MarketplaceAbi,
-      chainId: CHAIN_ID,
-      functionName: 'cancel',
-      args: [BigInt(tokenId)],
-    });
+      functionName: 'cancel' as const,
+      args: [BigInt(tokenId)] as const,
+    };
+    const pre = await preflight(call);
+    if (!pre.ok) {
+      setRevert(pre.error);
+      return;
+    }
+    try {
+      await writeContractAsync({ ...call, chainId: CHAIN_ID });
+    } catch (e) {
+      setRevert(decodeRevert(e));
+    }
   }
 
   return (
@@ -181,10 +225,10 @@ export function ListingCard({
       {isMine ? (
         <button
           onClick={handleCancel}
-          disabled={isPending || isConfirming || wrongNetwork}
+          disabled={isPending || isConfirming || checking || wrongNetwork}
           className="mt-3 w-full rounded-full border border-bull-border px-3 py-1.5 text-xs text-bull-text-dim hover:border-bull-red hover:text-bull-red disabled:opacity-50"
         >
-          {wrongNetwork ? 'wrong network' : isPending || isConfirming ? 'sending…' : 'unlist'}
+          {wrongNetwork ? 'wrong network' : checking ? 'checking…' : isPending || isConfirming ? 'sending…' : 'unlist'}
         </button>
       ) : (
         <div className="mt-3">
@@ -220,8 +264,16 @@ export function ListingCard({
           ) : asset !== 'bnb' && needsApproval ? (
             <button
               onClick={async () => {
-                await approve();
-                refetchAllowance();
+                // ⚠ CAUGHT. This used to be a bare `await approve()`, so a
+                // rejected or failing approval threw into an unhandled promise
+                // rejection and the player saw NOTHING AT ALL — the silent end
+                // of the same bug class as "gas limit too high".
+                try {
+                  await approve();
+                  refetchAllowance();
+                } catch (e) {
+                  setRevert(decodeRevert(e));
+                }
               }}
               disabled={isApproving || wrongNetwork}
               className="mt-2 w-full rounded-full border border-bull-gold px-3 py-1.5 text-xs font-medium text-bull-gold disabled:opacity-50"
@@ -231,16 +283,27 @@ export function ListingCard({
           ) : (
             <button
               onClick={handleBuy}
-              disabled={isPending || isConfirming || wrongNetwork}
+              disabled={isPending || isConfirming || checking || wrongNetwork}
               className="mt-2 w-full rounded-full border border-bull-gold bg-bull-gold px-3 py-1.5 text-xs font-semibold text-bull-gold-ink disabled:opacity-50"
             >
-              {wrongNetwork ? 'wrong network' : isPending || isConfirming ? 'buying…' : 'buy'}
+              {wrongNetwork ? 'wrong network' : checking ? 'checking…' : isPending || isConfirming ? 'buying…' : 'buy'}
             </button>
           )}
         </div>
       )}
-      {confirmed && <p className="mt-2 text-xs text-bull-gold">done.</p>}
-      {txError && <p className="mt-2 break-words text-xs text-bull-red">{txError.message}</p>}
+      {confirmed && (
+        <>
+          <p className="mt-2 text-xs text-bull-gold">done.</p>
+          {/* ⚠ THE MOMENT A BUYER MOST NEEDS THIS. `Yards` membership is stored
+              against the wallet that entered the bull, so the purchase that
+              just landed VOIDED it: they now hold a bull nobody can fight until
+              they send it in themselves, with no event and nothing on the token
+              to show it. Not telling them here is how bull #16 turned into a
+              "gas limit too high" bug report. */}
+          {!isMine && <PitSaleNotice className="mt-2" />}
+        </>
+      )}
+      <RevertNotice error={revert} className="mt-2" />
     </div>
   );
 }

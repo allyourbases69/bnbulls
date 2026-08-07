@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { LeadersTable } from '@/components/rank/LeadersTable';
 import { PreLaunchNotice } from '@/components/PreLaunchNotice';
+import { PIT } from '@/lib/brand';
 
 /**
  * /leaders — the DUEL RATING board. Ported from fighting fefers'
@@ -13,8 +14,7 @@ import { PreLaunchNotice } from '@/components/PreLaunchNotice';
  */
 export const metadata: Metadata = {
   title: 'leaders',
-  description:
-    'every bull that has stepped into the yards, ranked by rating. win against higher-rated bulls to climb faster.',
+  description: PIT.leadersDescription,
 };
 
 export default function LeadersPage() {
@@ -23,7 +23,7 @@ export default function LeadersPage() {
       <p className="bull-header text-xs uppercase tracking-[0.2em] text-bull-gold">the board</p>
       <h1 className="bull-header mt-3 text-3xl sm:text-4xl">leaders</h1>
       <p className="mt-3 max-w-2xl text-bull-text-dim">
-        only bulls that have stepped into the yards. ranked by rating: beat a higher-rated bull
+        {PIT.onlyFought} ranked by rating: beat a higher-rated bull
         and you climb faster. this is how good it fights, not how rare it is, which is what{' '}
         <Link href="/ranks" className="text-bull-gold hover:underline">
           rarity rank

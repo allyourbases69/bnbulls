@@ -49,6 +49,13 @@ const TARGETS: Target[] = [
     file: 'Marketplace.ts',
     artifact: 'Marketplace.sol/Marketplace.json',
   },
+  // The arena roster. `Duel.submitDuel` reverts `BullNotInYards` for a bull
+  // whose live owner has not entered it, so the UI has to be able to READ
+  // membership and WRITE both `enter` and `eject` or a player's bulls are
+  // silently unfightable. ⚠ The contract is `Yards` and stays `Yards` — the
+  // player-facing name for it is `PIT` in `lib/brand.ts`, and the two are
+  // deliberately allowed to differ (same as `/graveyard` being "the butcher").
+  { exportName: 'YardsAbi', file: 'Yards.ts', artifact: 'Yards.sol/Yards.json' },
   {
     exportName: 'Erc20Abi',
     file: 'Erc20.ts',

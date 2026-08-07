@@ -109,6 +109,19 @@ export const JackpotAbi = [
   },
   {
     "type": "function",
+    "name": "MIN_ODDS_ONE_IN",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "MIN_REQUEST_CONFIRMATIONS",
     "inputs": [],
     "outputs": [
@@ -168,6 +181,29 @@ export const JackpotAbi = [
   },
   {
     "type": "function",
+    "name": "bootstrapPayoutParams",
+    "inputs": [
+      {
+        "name": "_oddsOneIn",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "_payoutBps",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "_minPool",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "callbackGasLimit",
     "inputs": [],
     "outputs": [
@@ -195,6 +231,13 @@ export const JackpotAbi = [
   },
   {
     "type": "function",
+    "name": "cancelPayoutParams",
+    "inputs": [],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "cancelStalledRequest",
     "inputs": [],
     "outputs": [],
@@ -210,6 +253,13 @@ export const JackpotAbi = [
   {
     "type": "function",
     "name": "commitDuel",
+    "inputs": [],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "commitPayoutParams",
     "inputs": [],
     "outputs": [],
     "stateMutability": "nonpayable"
@@ -422,7 +472,72 @@ export const JackpotAbi = [
   },
   {
     "type": "function",
+    "name": "payoutParamsBootstrapped",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "bool",
+        "internalType": "bool"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "payoutParamsEta",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "pendingMinPool",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "pendingOdds",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "pendingPayout",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "pendingPayoutBps",
     "inputs": [],
     "outputs": [
       {
@@ -548,6 +663,74 @@ export const JackpotAbi = [
       }
     ],
     "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "proposePayoutParams",
+    "inputs": [
+      {
+        "name": "_oddsOneIn",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "_payoutBps",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "_minPool",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "eta",
+        "type": "uint64",
+        "internalType": "uint64"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "proposedMinPool",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "proposedOdds",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "proposedPayoutBps",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
   },
   {
     "type": "function",
@@ -706,6 +889,45 @@ export const JackpotAbi = [
   },
   {
     "type": "function",
+    "name": "resolveMinPool",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "resolveOdds",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "resolvePayoutBps",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "resolveUntil",
     "inputs": [],
     "outputs": [
@@ -769,45 +991,6 @@ export const JackpotAbi = [
         "name": "allowed",
         "type": "bool",
         "internalType": "bool"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "setMinPoolToFire",
-    "inputs": [
-      {
-        "name": "_minPool",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "setOdds",
-    "inputs": [
-      {
-        "name": "_oddsOneIn",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "setPayoutBps",
-    "inputs": [
-      {
-        "name": "_payoutBps",
-        "type": "uint256",
-        "internalType": "uint256"
       }
     ],
     "outputs": [],
@@ -1443,6 +1626,62 @@ export const JackpotAbi = [
   },
   {
     "type": "event",
+    "name": "PayoutParamsCancelled",
+    "inputs": [
+      {
+        "name": "oddsOneIn",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "payoutBps",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "minPoolToFire",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "PayoutParamsProposed",
+    "inputs": [
+      {
+        "name": "oddsOneIn",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "payoutBps",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "minPoolToFire",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "eta",
+        "type": "uint64",
+        "indexed": false,
+        "internalType": "uint64"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "RandomnessFulfilled",
     "inputs": [
       {
@@ -1808,6 +2047,11 @@ export const JackpotAbi = [
   },
   {
     "type": "error",
+    "name": "NothingProposed",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "NothingToResolve",
     "inputs": []
   },
@@ -1845,6 +2089,27 @@ export const JackpotAbi = [
         "name": "coordinator",
         "type": "address",
         "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "PayoutParamsAlreadyBootstrapped",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "PayoutParamsNotElapsed",
+    "inputs": [
+      {
+        "name": "eta",
+        "type": "uint64",
+        "internalType": "uint64"
+      },
+      {
+        "name": "nowTs",
+        "type": "uint64",
+        "internalType": "uint64"
       }
     ]
   },

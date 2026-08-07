@@ -39,7 +39,15 @@ import {
 // ⚠ THE 5x9 BRAND FONT, NOT `src/lib/pixelFont.ts`. That one is 3x5 and
 // cannot tell m from n by its own admission, so `bnbulls` came out as
 // `bmbulls` on the first draft of this card, and it has no lowercase at all.
-import { drawText, textWidth, GLYPH_H } from './wordmark.ts';
+//
+// ⚠ IT MOVED OUT OF `scripts/wordmark.ts` AND INTO `src/lib/brandTile.ts`.
+// The landing page stamps the same wordmark onto the king's tile in the
+// browser, so the glyphs had to live somewhere both a node script and a client
+// component can load. The shapes are byte-for-byte the ones that were here;
+// two copies of a wordmark font is exactly how two brand assets end up
+// disagreeing about how the name is set. `brandTile.ts` has no imports of its
+// own, which is what keeps it loadable under plain node with no path mapping.
+import { drawText, textWidth, GLYPH_H } from '../src/lib/brandTile.ts';
 import {
   assertUniformBlocks,
   blit,

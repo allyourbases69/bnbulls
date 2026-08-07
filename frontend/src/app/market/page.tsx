@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import { MarketPanel } from '@/components/market/MarketPanel';
 import { PreLaunchNotice } from '@/components/PreLaunchNotice';
-import { DEATH } from '@/lib/brand';
+import { DEATH, PIT } from '@/lib/brand';
 
 /**
  * ⚠ Label is "marketplace", the ROUTE stays `/market` — a url is a shared,
@@ -26,6 +26,13 @@ export default function MarketPage() {
         is locked out of fights. the dead flag, the loss streak and the revive rung all travel
         with the token, so check {DEATH.label} before you buy one off someone else.
       </p>
+      {/* ⚠ THE ONE THING THAT DOES **NOT** TRAVEL WITH THE TOKEN, and it has
+          already cost us a debugging session: `Yards` membership is stored
+          against the wallet that entered the bull, so a sale voids it silently.
+          A buyer who is not told this owns a bull that looks fightable, cannot
+          be matched, and reverts `BullNotInYards` if anybody tries. It belongs
+          on the page where the buying happens, not only on the duel page. */}
+      <p className="mt-2 max-w-2xl text-sm text-bull-text-faint">{PIT.saleVoidsEntry}</p>
       <PreLaunchNotice className="mt-8 max-w-3xl" />
 
       <div className="mt-10">

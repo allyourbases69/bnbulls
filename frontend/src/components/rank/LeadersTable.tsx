@@ -9,7 +9,7 @@ import { getBull } from '@/lib/art/collection';
 import type { Token } from '@/lib/art/bull';
 import { useRoster, type RosterBull } from '@/lib/hooks/useRoster';
 import { tierLabel, tierTextClass, type RankTier } from '@/lib/rarity';
-import { DEATH } from '@/lib/brand';
+import { DEATH, PIT } from '@/lib/brand';
 
 /**
  * /leaders — the DUEL RATING table. Ported from fighting fefers'
@@ -63,14 +63,21 @@ export function LeadersTable() {
   return (
     <div>
       {/* ⚠ THE CONTROL ROW IS GATED ON `deployed`. Pre-launch it renders
-          "in the yards (0) · all fighters (0) · 0 ranked by rating" over a box
+          "still standing (0) · all fighters (0) · 0 ranked by rating" over a box
           saying the collection is not live — a row of filters that filter
           nothing, above an explanation of why. The zeroes look like a failed
-          read rather than a game that has not started. */}
+          read rather than a game that has not started.
+
+          ⚠ THE FIRST TAB IS `DEATH.standing`, NOT A PIT WORD. It filters on
+          `isDead`, so it counts HEARTBEATS. It used to be labelled "in the
+          yards", which was harmless while nothing read the roster and is a lie
+          now that `PIT` membership is a real on-chain fact: a bull can be very
+          much alive and not in the pit, and calling it "in the pit" here would
+          send somebody to the duel page with a herd that cannot fight. */}
       {roster.deployed && (
         <div className="flex flex-wrap items-center gap-2">
           <FilterTab
-            label={`in the yards (${aliveCount})`}
+            label={`${DEATH.standing} (${aliveCount})`}
             active={filter === 'alive'}
             onClick={() => setFilter('alive')}
           />
@@ -87,7 +94,7 @@ export function LeadersTable() {
             href="/duel"
             className="rounded-full border border-bull-border px-3 py-1.5 text-xs font-medium text-bull-text-dim transition hover:border-bull-gold hover:text-bull-gold"
           >
-            the yards →
+            {PIT.label} →
           </Link>
         </div>
       )}
@@ -116,12 +123,12 @@ export function LeadersTable() {
           <p className="text-sm text-bull-text-dim">
             {fighters.length === 0
               ? 'nobody has fought yet. be the first name on the board.'
-              : 'nothing in the yards. every fighter on the board is on the truck.'}
+              : DEATH.noneStanding}
           </p>
           <p className="mt-2 text-sm text-bull-text-faint">
             pick two bulls and send them in at{' '}
             <Link href="/duel" className="text-bull-gold hover:underline">
-              the yards
+              {PIT.label}
             </Link>
             . a bull lands here the moment its first fight settles on chain.
           </p>

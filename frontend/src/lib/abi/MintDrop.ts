@@ -126,6 +126,19 @@ export const MintDropAbi = [
   },
   {
     "type": "function",
+    "name": "MAX_MIN_POOL_LIQUIDITY",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "MAX_ORACLE_AGE",
     "inputs": [],
     "outputs": [
@@ -514,6 +527,32 @@ export const MintDropAbi = [
   {
     "type": "function",
     "name": "minBnbUsd",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "minPoolLiquidity",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "minPoolLiquidityAlt",
     "inputs": [],
     "outputs": [
       {
@@ -964,6 +1003,32 @@ export const MintDropAbi = [
   },
   {
     "type": "function",
+    "name": "setMinPoolLiquidity",
+    "inputs": [
+      {
+        "name": "minWbnbReserve",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setMinPoolLiquidityAlt",
+    "inputs": [
+      {
+        "name": "minQuoteReserve",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "setOraclePolicy",
     "inputs": [
       {
@@ -1081,6 +1146,19 @@ export const MintDropAbi = [
     ],
     "outputs": [],
     "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "swapIntermediate",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
   },
   {
     "type": "function",
@@ -1221,6 +1299,24 @@ export const MintDropAbi = [
         "name": "",
         "type": "address",
         "internalType": "contract IWBNB"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "wbnbPoolLiquidity",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "pair",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "wbnbReserve",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "stateMutability": "view"
@@ -1626,6 +1722,32 @@ export const MintDropAbi = [
       },
       {
         "name": "amount",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "MinPoolLiquidityAltChanged",
+    "inputs": [
+      {
+        "name": "minQuoteReserve",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "MinPoolLiquidityChanged",
+    "inputs": [
+      {
+        "name": "minWbnbReserve",
         "type": "uint256",
         "indexed": false,
         "internalType": "uint256"
@@ -2045,6 +2167,17 @@ export const MintDropAbi = [
   },
   {
     "type": "error",
+    "name": "BadIntermediate",
+    "inputs": [
+      {
+        "name": "target",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
     "name": "BadSource",
     "inputs": []
   },
@@ -2128,6 +2261,17 @@ export const MintDropAbi = [
     "inputs": [
       {
         "name": "count",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "InvalidMinLiquidity",
+    "inputs": [
+      {
+        "name": "requested",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -2273,6 +2417,22 @@ export const MintDropAbi = [
   },
   {
     "type": "error",
+    "name": "PoolTooThin",
+    "inputs": [
+      {
+        "name": "wbnbReserve",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "minimum",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
     "name": "PotNotWired",
     "inputs": []
   },
@@ -2291,6 +2451,11 @@ export const MintDropAbi = [
         "internalType": "uint256"
       }
     ]
+  },
+  {
+    "type": "error",
+    "name": "PricedSweepIsOwnerOnly",
+    "inputs": []
   },
   {
     "type": "error",

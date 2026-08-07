@@ -530,8 +530,16 @@ export default function AboutPage() {
             just appear. the roll settles a moment AFTER the fight, so you cannot grind by
             throwing away losing results.
           </p>
+          {/* ⚠ SAY WHERE THE MONEY GOES, NOT WHAT CANNOT HAPPEN TO IT. This
+              line used to read "there is no withdraw, for a player or for us",
+              which the owner correctly called out on 2026-08-07: it reads as if
+              a player cannot get the pot either, when a player getting the pot
+              is the ENTIRE point. It muddled a mechanism with an outcome.
+              Frame it as the payout, which is both the better pitch and the
+              same checkable fact. */}
           <p className="rounded border border-bull-gold/30 bg-bull-panel p-4 text-bull-text">
-            {POTS.trust}
+            every pot pays out to a player. a win is the only thing that moves money out of
+            either pool, and every one of them is logged on chain for anyone to check.
           </p>
           <p>
             a fight has to actually fund the pot to earn a ticket. zero-money fights settle, move

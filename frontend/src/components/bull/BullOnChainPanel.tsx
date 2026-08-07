@@ -2,10 +2,11 @@
 
 import Link from 'next/link';
 import { useReadContract } from 'wagmi';
-import { BullsAbi, MarketplaceAbi } from '@/lib/abi';
+import { BullsAbi, MarketplaceAbi, YardsAbi } from '@/lib/abi';
 import { contractAddress, explorerBaseUrl } from '@/lib/env';
 import { shortAddr, formatUsd1e18 } from '@/lib/format';
 import { NotDeployed } from '@/components/shared/NotDeployed';
+import { PIT } from '@/lib/brand';
 
 interface BullStruct {
   strength: number;
@@ -75,6 +76,29 @@ export function BullOnChainPanel({ tokenId, isKing }: { tokenId: number; isKing:
     query: { enabled: !!marketAddress && !ownerError },
   });
 
+  /**
+   * ⚠ ONE OF THE THREE FACTS THAT DECIDE WHETHER THIS BULL CAN FIGHT, and the
+   * only one nothing else on the page carries. `Duel` reverts `BullNotInYards`
+   * for a bull that is out, and the entry is stored against the wallet that
+   * ENTERED it — so a sale voids it silently, with no event and nothing on the
+   * token to show for it. This is the page somebody reads before they buy, so
+   * it is the page that has to say it.
+   */
+  const yardsAddress = contractAddress('yards');
+  const { data: pitStatus } = useReadContract({
+    address: yardsAddress ?? undefined,
+    abi: YardsAbi,
+    functionName: 'statusOf',
+    args: [BigInt(tokenId)],
+    query: { enabled: !!yardsAddress && !ownerError },
+  });
+  const [, pitLeavesAt, pitLive] =
+    (pitStatus as readonly [`0x${string}`, bigint, boolean] | undefined) ?? [
+      undefined,
+      undefined,
+      undefined,
+    ];
+
   if (!bullsAddress) {
     return <NotDeployed what="the bulls collection" />;
   }
@@ -137,6 +161,26 @@ export function BullOnChainPanel({ tokenId, isKing }: { tokenId: number; isKing:
             {bullLoading || !b ? '—' : `${b.wins}W · ${b.losses}L · ${b.ties}T`}
           </dd>
         </div>
+        <div>
+          <dt className="font-mono text-xs uppercase tracking-wide text-bull-text-faint">
+            {PIT.label}
+          </dt>
+          <dd className="mt-1">
+            {!yardsAddress ? (
+              'not deployed yet'
+            ) : pitLive === undefined ? (
+              // ⚠ NEVER "out of the pit" off an unread call. That would tell a
+              // prospective buyer this bull cannot fight when it may well be in.
+              '—'
+            ) : pitLive && pitLeavesAt !== undefined && pitLeavesAt > 0n ? (
+              <span className="text-bull-gold">{PIT.leavingLabel}</span>
+            ) : pitLive ? (
+              <span className="text-bull-text">{PIT.inLabel}</span>
+            ) : (
+              <span className="text-bull-text-faint">{PIT.outLabel}</span>
+            )}
+          </dd>
+        </div>
         <div className="col-span-2 sm:col-span-1">
           <dt className="font-mono text-xs uppercase tracking-wide text-bull-text-faint">
             marketplace
@@ -161,6 +205,21 @@ export function BullOnChainPanel({ tokenId, isKing }: { tokenId: number; isKing:
             check the revive ladder →
           </Link>
         </p>
+      )}
+      {!b?.isDead && pitLive === false && (
+        <p className="mt-4 text-sm text-bull-text-dim">
+          {PIT.rule}{' '}
+          <Link href="/duel" className="text-bull-gold hover:underline">
+            {PIT.label} →
+          </Link>
+        </p>
+      )}
+      {!b?.isDead && pitLive === true && pitLeavesAt !== undefined && pitLeavesAt > 0n && (
+        // ⚠ SAYS "STILL FIGHTABLE", not "leaving", because that is the fact
+        // that costs money if you get it wrong. `inYardsFor` returns true until
+        // `leavesAt` passes, on purpose, so a fight signed before the eject
+        // still lands.
+        <p className="mt-4 text-sm text-bull-text-dim">{PIT.ejectPending}</p>
       )}
     </div>
   );

@@ -63,7 +63,7 @@ import {
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { randomBytes } from 'node:crypto';
-import { BullsAbi, DuelAbi, Erc20Abi, MarketplaceAbi } from '@/lib/abi';
+import { BullsAbi, DuelAbi, Erc20Abi, MarketplaceAbi, YardsAbi } from '@/lib/abi';
 import { validateServerDuelEnv, serverChain, duelExpirySeconds } from '@/lib/serverEnv';
 import { checkSessionTerms, SESSION_ERROR } from '@/lib/duelSession';
 import {
@@ -400,7 +400,7 @@ function badSelector(field: string, raw: unknown): string {
     return (
       `${field}: "whatever i can pay" is gone. it could pass over a currency ` +
       'without saying so, which left bulls unmatchable with no way to find out ' +
-      `why. send one of ${ASSET_SELECTORS.join(', ')} — BOTH means either ` +
+      `why. send one of ${ASSET_SELECTORS.join(', ')}. "BOTH" means either ` +
       'currency is fine, not half in each.'
     );
   }
@@ -445,6 +445,65 @@ function bad(error: string, status: number, code?: string) {
   return NextResponse.json(code ? { error, code } : { error }, { status });
 }
 
+// ─── The bull pit (`Yards.sol`) ──────────────────────────────────────
+
+/** `Yards.statusOf` -> `(enteredBy, leavesAt, live)`. */
+type YardStatus = readonly [Address, bigint, boolean];
+
+/**
+ * Why this bull cannot be matched, or `null` when it can.
+ *
+ * ⚠ `live` FROM THE CONTRACT IS NOT THE ANSWER ON ITS OWN. `inYardsFor`
+ * returns true for a bull with an eject counting down, deliberately, so an
+ * already-signed loss still lands. A NEW fight is a different question and the
+ * answer to it is no — see the block at the call site.
+ */
+type YardProblem = 'never' | 'sold' | 'ejected' | 'leaving';
+
+function yardsProblem(status: YardStatus, liveOwner: Address): YardProblem | null {
+  const [enteredBy, leavesAt, live] = status;
+  if (live) return leavesAt > 0n ? 'leaving' : null;
+  if (enteredBy === ZERO_ADDRESS) return 'never';
+  // The entry exists but belongs to a wallet that no longer holds the bull.
+  // Worth naming separately: it is the only one the CURRENT owner did not do
+  // to themselves, and the only one that happens without anybody acting.
+  if (enteredBy.toLowerCase() !== liveOwner.toLowerCase()) return 'sold';
+  return 'ejected';
+}
+
+/**
+ * The sentence the player actually reads. Names the bull, says what is true,
+ * and says who has to do what next — the loud-failure standard the currency
+ * work set when it deleted the silent `AUTO` skip.
+ */
+function explainYards(tokenId: number, problem: YardProblem, isYours: boolean): string {
+  const mine = isYours ? ' it is yours, so' : ' its owner has to do it, not you:';
+  switch (problem) {
+    case 'never':
+      return (
+        `bull #${tokenId} is not in the bull pit, and a bull that is out cannot be fought ` +
+        `at all.${mine} send it in from the duel page and it can fight straight away.`
+      );
+    case 'sold':
+      return (
+        `bull #${tokenId} changed hands, and a sale always voids a spot in the bull pit — ` +
+        'the pit remembers the wallet that sent the bull in, so a new owner starts out of ' +
+        `it.${mine} send it in again and it can fight straight away.`
+      );
+    case 'ejected':
+      return (
+        `bull #${tokenId} has been pulled out of the bull pit, so it cannot be fought.` +
+        `${mine} send it back in first.`
+      );
+    case 'leaving':
+      return (
+        `bull #${tokenId} is on its way out of the bull pit, so no new fight can be matched ` +
+        'against it. fights signed before the eject can still land until it goes, which is ' +
+        'why this one will not be signed. sending it back in cancels the departure on the spot.'
+      );
+  }
+}
+
 // ─── The route ───────────────────────────────────────────────────────
 
 export async function POST(request: Request) {
@@ -459,6 +518,12 @@ export async function POST(request: Request) {
   let body: {
     tokenA?: unknown;
     tokenB?: unknown;
+    /**
+     * One currency selector per token, travelling WITH its token id — `BNB`,
+     * `BNBULL` or `BOTH` (see `ASSET_SELECTORS`). The caller's own side is
+     * REQUIRED; the opponent's may be omitted and is always treated as `BOTH`,
+     * because a passive opponent never picks one.
+     */
     assetA?: unknown;
     assetB?: unknown;
     /**
@@ -600,10 +665,24 @@ export async function POST(request: Request) {
     const blockNumber = await client.getBlockNumber();
     const at = { blockNumber };
 
-    const [paused, authorizedRouter, allowSelfDuel] = await Promise.all([
+    const [paused, authorizedRouter, allowSelfDuel, yardsAddress] = await Promise.all([
       client.readContract({ address: env.duelAddress, abi: DuelAbi, functionName: 'paused', ...at }) as Promise<boolean>,
       client.readContract({ address: env.duelAddress, abi: DuelAbi, functionName: 'authorizedRouter', ...at }) as Promise<Address>,
       client.readContract({ address: env.duelAddress, abi: DuelAbi, functionName: 'allowSelfDuel', ...at }) as Promise<boolean>,
+      /*
+       * ⚠ THE ROSTER ADDRESS IS READ OFF `Duel`, NOT OFF AN ENV VAR, AND THAT
+       * IS DELIBERATE. `Duel._requireInYards` enforces membership against
+       * `_wire(Wire.Yards)` and nothing else, so reading the same slot makes
+       * this pre-check incapable of disagreeing with the contract. The
+       * alternative — a `NEXT_PUBLIC_YARDS` of our own — has one failure mode
+       * that is precisely the bug this check exists to close: an unset var
+       * would silently skip the check on a deployment where `Duel` DOES
+       * enforce it, and we would be back to signing fights that can never
+       * settle. Zero here genuinely means the gate is off on chain.
+       */
+      client
+        .readContract({ address: env.duelAddress, abi: DuelAbi, functionName: 'yardsContract', ...at })
+        .catch(() => null) as Promise<Address | null>,
     ]);
     if (paused) {
       return bad('duelling is paused on chain right now.', 409, 'PAUSED');
@@ -701,6 +780,7 @@ export async function POST(request: Request) {
         commit: standingRaw,
         allowSelfDuel,
         now: nowSec,
+        yardsAddress: yardsAddress && yardsAddress !== ZERO_ADDRESS ? yardsAddress : null,
       });
     }
     const decision = decideCommit({
@@ -799,6 +879,80 @@ export async function POST(request: Request) {
       }
     }
 
+    /*
+     * ══════════════════════════════════════════════════════════════════
+     * ⚠ THE BULL PIT (`Yards.sol`). NEITHER SIDE GETS SIGNED IF IT IS OUT.
+     * ══════════════════════════════════════════════════════════════════
+     *
+     * THIS IS THE CHECK WHOSE ABSENCE PRODUCED THE "gas limit too high" BUG,
+     * and the chain of symptoms is worth writing down because none of it points
+     * at the cause:
+     *
+     *   bull #16 was bought in a marketplace takeover
+     *     -> `Yards` membership requires `enteredBy == the LIVE owner`, so the
+     *        sale silently voided its entry, with no event and nothing on the
+     *        token to show it
+     *     -> this route quoted and SIGNED a result naming it anyway
+     *     -> `submitDuel` reverts `BullNotInYards(16)`
+     *     -> viem estimates gas on a reverting call and gets a garbage number
+     *     -> the rpc rejects THAT with "gas limit too high"
+     *
+     * The player is told their gas is wrong about a transaction that could
+     * never have succeeded at any gas price. A signature for a fight that can
+     * never settle is worse than a refusal, so this refuses, and names the bull
+     * and the reason.
+     *
+     * ⚠ FAILS **CLOSED**, unlike the marketplace check above, and the asymmetry
+     * is intended. There, an unreadable marketplace costs a stale listing check
+     * that `Duel._validate` re-runs for real. Here, the whole point is that the
+     * contract's own refusal is the thing the player cannot read. If the gate
+     * is wired and we cannot see through it, saying so beats handing over a
+     * signature we have no reason to believe in.
+     *
+     * ⚠ A PENDING EJECT COUNTS AS OUT **HERE**, THOUGH `inYards` STILL SAYS IN.
+     * That is the anti-dodge design working as designed, from both ends at
+     * once: the contract keeps the bull fightable so a loss that was ALREADY
+     * signed still lands, and the signer stops issuing NEW ones immediately.
+     * `Yards.sol` puts it exactly this way — "to every new opponent the bull is
+     * gone the moment the eject transaction confirms". Quoting into a departure
+     * would also hand the player a signature whose window can outlive the bull.
+     */
+    if (yardsAddress && yardsAddress !== ZERO_ADDRESS) {
+      let statuses: readonly [YardStatus, YardStatus];
+      try {
+        statuses = (await Promise.all([
+          client.readContract({
+            address: yardsAddress, abi: YardsAbi, functionName: 'statusOf', args: [BigInt(tokenA)], ...at,
+          }),
+          client.readContract({
+            address: yardsAddress, abi: YardsAbi, functionName: 'statusOf', args: [BigInt(tokenB)], ...at,
+          }),
+        ])) as unknown as readonly [YardStatus, YardStatus];
+      } catch (e) {
+        console.error('[run-duel] yards read failed (refusing to sign):', e);
+        return bad(
+          "couldn't check whether these bulls are in the bull pit, and a fight against one " +
+            'that is out can never settle. nothing was signed. try again in a moment.',
+          503,
+          'YARDS_UNREADABLE',
+        );
+      }
+
+      const sides = [
+        { tokenId: tokenA, owner: ownerA, status: statuses[0] },
+        { tokenId: tokenB, owner: ownerB, status: statuses[1] },
+      ];
+      for (const side of sides) {
+        const problem = yardsProblem(side.status, side.owner);
+        if (problem === null) continue;
+        return bad(
+          explainYards(side.tokenId, problem, side.owner.toLowerCase() === requesterLc),
+          409,
+          problem === 'leaving' ? 'LEAVING_YARDS' : 'NOT_IN_YARDS',
+        );
+      }
+    }
+
     // ── Stakes: read off `Duel.fighterCost`, never derived here ─────
     // The contract owns the dollar->BNB conversion and the discount now
     // (`DECISIONS.md §26`). No MintDrop address is passed any more: Duel does
@@ -862,7 +1016,7 @@ export async function POST(request: Request) {
         // what is owed and refunding the rest — so the submitter does not need
         // a WBNB balance at all. A PASSIVE opponent cannot: only `msg.sender`
         // can post value, so their side must come by allowance. That is
-        // physics, not policy (`Duel.sol:1029`).
+        // physics, not policy (`Duel.sol:1030`).
         let nativeHeld: bigint | null = null;
         if (info.kind === 'bnb' && isSubmitter) {
           nativeHeld = await client.getBalance({ address: owner });
@@ -886,8 +1040,9 @@ export async function POST(request: Request) {
                 `one fight needs ${need} bnb. you have ${formatToken(nativeHeld, info.decimals)} ` +
                 `bnb to send with the transaction, and ${held} wbnb with ${approved} of it ` +
                 'approved to the duel contract, so neither route covers it.'
-              : `one fight needs ${need} ${tok}. that wallet holds ${held} and has approved ` +
-                `${approved} to the duel contract.`,
+              : `one fight needs ${need} ${tok}. ${isSubmitter ? 'you hold' : 'that wallet holds'} ` +
+                `${held} and ${isSubmitter ? 'have' : 'has'} approved ${approved} to the duel ` +
+                'contract.',
           code: ready.balance < info.cost ? 'INSUFFICIENT_BALANCE' : 'NEEDS_APPROVAL',
         });
       }
@@ -1180,6 +1335,8 @@ async function readCommitFacts(args: {
   commit: DuelCommit;
   allowSelfDuel: boolean;
   now: number;
+  /** `Duel.yardsContract()`, or null when the membership gate is off on chain. */
+  yardsAddress: Address | null;
 }): Promise<CommitFacts> {
   const { client, env, commit } = args;
   const opponent = BigInt(commit.opponent);
@@ -1225,10 +1382,48 @@ async function readCommitFacts(args: {
     }
   }
 
+  /**
+   * ⚠ THE OPPONENT LEAVING THE BULL PIT HAS TO RELEASE THE SLOT, OR THE WALLET
+   * IS BENCHED FOR A DAY.
+   *
+   * A standing commit is served back verbatim until something releases it. Once
+   * the signer refuses to sign a fight against a bull that is out (see the main
+   * gate), a commit pinned to such a bull would answer 409 on every ask until
+   * the 24h backstop — the wallet could not fight anything, and nothing it did
+   * would help. Exactly the corner the owner hit with bull #16, whose entry a
+   * marketplace takeover had silently voided.
+   *
+   * ⚠ A PENDING EJECT RELEASES IT TOO. Otherwise the slot stalls for the whole
+   * eject delay against a bull no new fight may be matched to.
+   *
+   * ⚠ THE CHALLENGER'S OWN MEMBERSHIP IS DELIBERATELY **NOT** A RELEASE REASON,
+   * and `releaseReason`'s own rule is why: every release must be outside the
+   * challenger's control, or they can manufacture a re-roll and tear up a loss
+   * they do not fancy. Ejecting your own bull is your own action, and it is the
+   * exact parallel of the CHALLENGER'S LISTING already documented there — one
+   * transaction to undo, and `enter` is instant, so the fight stays theirs to
+   * settle. They get a 409 naming the bull and telling them to send it back in.
+   *
+   * Fails SAFE, like every read here: unreadable means "still eligible", which
+   * keeps the fight pinned. Failing open would hand an attacker a re-roll for
+   * the price of making one read fall over.
+   */
+  let oppInPit = true;
+  if (args.yardsAddress) {
+    try {
+      const [, leavesAt, live] = (await client.readContract({
+        address: args.yardsAddress, abi: YardsAbi, functionName: 'statusOf', args: [opponent],
+      })) as YardStatus;
+      oppInPit = live && leavesAt === 0n;
+    } catch {
+      oppInPit = true;
+    }
+  }
+
   return {
     now: args.now,
     liveSeq,
-    opponentEligible: oppAlive && !oppListed,
+    opponentEligible: oppAlive && !oppListed && oppInPit,
     challengerAlive: chalAlive,
     opponentOwner: oppOwner,
     allowSelfDuel: args.allowSelfDuel,

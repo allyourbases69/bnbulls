@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { BullSprite } from '@/components/BullSprite';
+import { BrandedBull } from '@/components/BrandedBull';
 import { JackpotPanel } from '@/components/JackpotPanel';
 import { PreLaunchNotice } from '@/components/PreLaunchNotice';
 import { getBull } from '@/lib/art/collection';
@@ -42,31 +42,28 @@ export default function HomePage() {
   return (
     <div className="bg-yard-grid relative flex min-h-[calc(100vh-4rem)] items-center justify-center overflow-hidden px-4 py-10 md:p-8">
       <div className="relative z-10 w-full max-w-3xl space-y-10 text-center">
-        {/* LORD WAGYU. Him alone, big, not in a grid, and with no caption
-            telling you who he is. He is the picture; the line is the pitch.
+        {/* LORD WAGYU, with the wordmark on the plinth under his feet. Him
+            alone, big, not in a grid, and still with no caption telling you who
+            he is. He is the picture; the line is the pitch.
 
-            ⚠ THE SIZE LIVES ON THE FRAME, NOT ON THE CANVAS. `fluid` makes the
-            sprite `width: 100%`, so its parent decides how big the king is;
-            a width class on the canvas gets overridden by that inline style
-            and he renders at his intrinsic 56px. The frame also RESERVES the
-            space via aspect-ratio, so the page cannot jump when the canvas
+            ⚠ THE MARK IS COMPOSITED ONTO A COPY OF THE TILE, NOT BAKED INTO
+            THE ART ENGINE (`@/components/BrandedBull`). Baking it would print
+            it on all 501 bulls, on every card and in every bot render. Nothing
+            else on the site renders through this component, so nothing else
+            changed.
+
+            ⚠ THE WIDTH LIVES ON THE PLATE AND IT IS A WHOLE MULTIPLE OF THE
+            TILE (71px x 3 / 4 / 5). The frame shrink-wraps it. That is what
+            keeps every pixel an exact square block at every breakpoint —
+            `image-rendering: pixelated` never blurs, but at a fractional scale
+            it rounds source pixels to 3- or 4-device-pixel blocks depending on
+            where they land, and uneven blocks across a one-pixel-stroke
+            wordmark look like a mistake. The plate also RESERVES its own box
+            and pre-paints the plinth, so the page cannot jump when the canvas
             paints. */}
         <div className="flex justify-center">
-          <div className="w-[236px] rounded-md border-2 border-bull-gold/70 p-1.5 shadow-[0_0_50px_-12px_rgb(var(--bull-gold)/0.6)] sm:w-[280px] md:w-[336px]">
-            {/* ⚠ THE PLATE IS PAINTED IN THE SPRITE'S OWN BACKGROUND COLOUR,
-                taken from the engine rather than typed in. `BullSprite` fills
-                its canvas in an effect, so on a cold load there is one frame
-                where nothing is drawn yet — and on THIS page the king is the
-                entire page, so that frame was a gold rectangle around a black
-                hole. Matching the tile's background turns the gap into an
-                empty plate nobody notices, and it re-themes itself if the
-                band palette ever moves. */}
-            <div
-              className="aspect-[56/64]"
-              style={{ backgroundColor: `rgb(${king.bg[0]} ${king.bg[1]} ${king.bg[2]})` }}
-            >
-              <BullSprite token={king} fluid />
-            </div>
+          <div className="rounded-md border-2 border-bull-gold/70 p-1.5 shadow-[0_0_50px_-12px_rgb(var(--bull-gold)/0.6)]">
+            <BrandedBull token={king} fluid className="w-[213px] sm:w-[284px] md:w-[355px]" />
           </div>
         </div>
 

@@ -151,9 +151,16 @@ export function BullsGrid() {
 
         <div className="mx-1 h-6 w-px bg-bull-border" />
 
+        {/* ⚠ THE LIFE FILTER IS LABELLED BY `DEATH`, NOT BY `PIT`, AND THAT IS
+            A CORRECTION RATHER THAN A RESKIN. It filters on `isDead`, so what
+            it actually counts is bulls that are not on the truck. It used to
+            read "in the yards", which was a harmless synonym while nothing on
+            the site read the arena roster — and is a lie now that it does. An
+            alive bull nobody has entered is NOT in the bull pit and cannot be
+            fought by anyone. */}
         <div className="flex flex-wrap items-center gap-2">
           <FilterTab
-            label="in the yards"
+            label={DEATH.standing}
             active={lifeFilter === 'alive'}
             onClick={() => updateFilter(setLifeFilter, 'alive')}
           />
@@ -216,7 +223,7 @@ export function BullsGrid() {
           ]}
         />
         <span className="ml-auto font-mono text-xs text-bull-text-faint">
-          {filtered.length} shown · {aliveCount} in the yards
+          {filtered.length} shown · {aliveCount} {DEATH.standing}
           {deadCount > 0 ? ` · ${deadCount} ${DEATH.listHeading}` : ''}
         </span>
       </div>
@@ -256,7 +263,7 @@ export function BullsGrid() {
           <p className="text-sm text-bull-text-dim">
             {ownerFilter === 'mine'
               ? 'nothing in your herd matches that.'
-              : 'nothing in the yards matches that.'}
+              : 'nothing in the herd matches that.'}
           </p>
           <p className="mt-2 text-sm text-bull-text-faint">
             try a different filter, or{' '}

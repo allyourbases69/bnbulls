@@ -39,6 +39,7 @@ import { TIER_COLOUR } from '@/lib/tierColour';
 import { useActiveListings, type ActiveListing } from '@/lib/hooks/useActiveListings';
 import { ListingCard } from './ListingCard';
 import { decodeBull, type BullRecord } from './bullRecord';
+import { decodeRevert } from '@/lib/revertDecode';
 
 /** Fefers: `type RarityFilter = 'all' | RarityTier`. bnbulls' `Band` has no
  *  king member — #501 is a legendary-band token flagged `king` — so the 1/1
@@ -185,8 +186,13 @@ export function MarketBrowse() {
             this is not an empty marketplace, we couldn&apos;t reach the chain. anything you
             have listed is still live on it.
           </p>
-          <p className="mb-4 break-words font-mono text-sm text-bull-text-faint">
-            {error.message}
+          {/* ⚠ DECODED, not `error.message`. This is a READ rather than a
+              write, so it is a milder case than the transaction paths — but a
+              raw viem blob is still a wall of stack trace where a sentence
+              belongs, and `decodeRevert` tells an unreachable node apart from a
+              contract that refused. */}
+          <p className="mb-4 break-words text-sm text-bull-text-faint">
+            {decodeRevert(error).message}
           </p>
           <button type="button" className="bull-btn bull-btn-secondary" onClick={refetch}>
             retry

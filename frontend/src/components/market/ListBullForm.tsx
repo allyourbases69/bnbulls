@@ -8,7 +8,10 @@ import { contractAddress, CHAIN_ID } from '@/lib/env';
 import { useMyBulls } from '@/lib/hooks/useMyBulls';
 import { useTokenDecimals } from '@/lib/hooks/useTokenDecimals';
 import { useWrongNetwork } from '@/lib/hooks/useWrongNetwork';
+import { usePreflight } from '@/lib/hooks/usePreflight';
 import { WrongNetworkNotice } from '@/components/shared/WrongNetwork';
+import { RevertNotice } from '@/components/shared/RevertNotice';
+import { decodeRevert, type DecodedRevert } from '@/lib/revertDecode';
 import { BullPicker, type PickableBull } from './BullPicker';
 import { decodeBull } from './bullRecord';
 
@@ -82,38 +85,65 @@ export function ListBullForm({ listedIds }: { listedIds: number[] }) {
     query: { enabled: !!marketAddress && selected !== null && !!account },
   });
 
-  const { writeContractAsync, isPending, data: txHash, error: txError } = useWriteContract();
+  const { writeContractAsync, isPending, data: txHash } = useWriteContract();
   const { isLoading: isConfirming, isSuccess: confirmed } = useWaitForTransactionReceipt({ hash: txHash });
+  const { preflight, checking } = usePreflight();
+  // ⚠ DECODED, NEVER `txError.message`. `list` reverts `BullIsDead` if the bull
+  // died since this form loaded, `NotTokenOwner` if it was sold or sent in
+  // another tab, `AlreadyListed` if it was listed elsewhere, and `NotApproved`
+  // if the approval was revoked. Every one of those is state that goes stale
+  // under a form nobody re-read.
+  const [revert, setRevert] = useState<DecodedRevert | null>(null);
 
   // ⚠ Both writes pin `chainId`. Neither carries native value, but an
   // `approve` broadcast on the wrong chain still hands a real NFT approval to
   // whatever contract sits at that address over there. See `useWrongNetwork`.
   async function handleApprove() {
     if (!bullsAddress || !marketAddress || selected === null || wrongNetwork) return;
-    await writeContractAsync({
+    setRevert(null);
+    const call = {
       address: bullsAddress,
       abi: BullsAbi,
-      chainId: CHAIN_ID,
-      functionName: 'approve',
-      args: [marketAddress, BigInt(selected)],
-    });
-    refetchApproval();
+      functionName: 'approve' as const,
+      args: [marketAddress, BigInt(selected)] as const,
+    };
+    const pre = await preflight(call);
+    if (!pre.ok) {
+      setRevert(pre.error);
+      return;
+    }
+    try {
+      await writeContractAsync({ ...call, chainId: CHAIN_ID });
+      refetchApproval();
+    } catch (e) {
+      setRevert(decodeRevert(e));
+    }
   }
 
   async function handleList() {
     if (!marketAddress || selected === null || !usd || wrongNetwork) return;
+    setRevert(null);
     const usdPrice1e18 = parseUnits(usd, 18);
     const bnbullPrice =
       bnbullMode === 'fixed' && bnbullAmount && bnbullDecimals !== undefined
         ? parseUnits(bnbullAmount, bnbullDecimals)
         : 0n;
-    await writeContractAsync({
+    const call = {
       address: marketAddress,
       abi: MarketplaceAbi,
-      chainId: CHAIN_ID,
-      functionName: 'list',
-      args: [BigInt(selected), usdPrice1e18, BNBULL_MODE[bnbullMode], bnbullPrice],
-    });
+      functionName: 'list' as const,
+      args: [BigInt(selected), usdPrice1e18, BNBULL_MODE[bnbullMode], bnbullPrice] as const,
+    };
+    const pre = await preflight(call);
+    if (!pre.ok) {
+      setRevert(pre.error);
+      return;
+    }
+    try {
+      await writeContractAsync({ ...call, chainId: CHAIN_ID });
+    } catch (e) {
+      setRevert(decodeRevert(e));
+    }
   }
 
   if (!marketAddress) return null;
@@ -206,26 +236,34 @@ export function ListBullForm({ listedIds }: { listedIds: number[] }) {
       {!isApproved ? (
         <button
           onClick={handleApprove}
-          disabled={isPending || isConfirming || !usd || wrongNetwork}
+          disabled={isPending || isConfirming || checking || !usd || wrongNetwork}
           className="mt-4 rounded-full border border-bull-gold px-4 py-1.5 text-xs font-medium text-bull-gold disabled:opacity-50"
         >
           {wrongNetwork
             ? 'wrong network'
-            : isPending || isConfirming
-              ? 'approving…'
-              : 'approve this bull'}
+            : checking
+              ? 'checking…'
+              : isPending || isConfirming
+                ? 'approving…'
+                : 'approve this bull'}
         </button>
       ) : (
         <button
           onClick={handleList}
-          disabled={isPending || isConfirming || !usd || wrongNetwork}
+          disabled={isPending || isConfirming || checking || !usd || wrongNetwork}
           className="mt-4 rounded-full border border-bull-gold bg-bull-gold px-4 py-1.5 text-xs font-semibold text-bull-gold-ink disabled:opacity-50"
         >
-          {wrongNetwork ? 'wrong network' : isPending || isConfirming ? 'listing…' : 'list'}
+          {wrongNetwork
+            ? 'wrong network'
+            : checking
+              ? 'checking…'
+              : isPending || isConfirming
+                ? 'listing…'
+                : 'list'}
         </button>
       )}
       {confirmed && <p className="mt-2 text-xs text-bull-gold">done.</p>}
-      {txError && <p className="mt-2 break-words text-xs text-bull-red">{txError.message}</p>}
+      <RevertNotice error={revert} className="mt-2" />
       <p className="mt-3 text-xs text-bull-text-faint">
         approval-based, not escrow. the bull stays in your wallet right up until it sells.
       </p>

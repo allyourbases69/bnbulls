@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import Link from 'next/link';
 import { MintPanel } from '@/components/mint/MintPanel';
 import { JackpotPanel } from '@/components/JackpotPanel';
 import { PreLaunchNotice } from '@/components/PreLaunchNotice';
@@ -37,9 +38,31 @@ export default function MintPage() {
         <p className="bull-header text-xs uppercase tracking-[0.2em] text-bull-text-faint">
           where the money goes
         </p>
+        {/* ⚠ THE QUALIFIER IS LOAD-BEARING, NOT PADDING. This used to read
+            "20% of every mint buys $BNBULL into one pot and 10% goes to the
+            other. neither has a withdraw function, for anybody." Both halves
+            are true of the POTS and neither is true of the 20% at launch:
+            `DECISIONS.md §29` says BNBULL cannot be bought while the four.meme
+            curve is filling, so that leg DEFERS into a pending bucket on
+            MintDrop, and `§45` is explicit that money in a bucket has not
+            reached a pot and IS recoverable (`withdrawPendingForManualBuy` is
+            onlyOwner and un-timelocked). `/about` has carried the honest
+            version all along; this is the page where somebody is about to
+            spend, so it cannot carry the stronger one. The no-withdraw
+            guarantee starts AT THE POT, and saying where the line is beats
+            letting a sceptic find it in the source. */}
         <p className="mt-2 max-w-xl text-sm text-bull-text-dim">
-          20% of every mint buys ${TICKER} into one pot and 10% goes to the other. neither has a
-          withdraw function, for anybody.
+          20% of every mint buys ${TICKER} into one pot and 10% goes to the other. once money
+          reaches a pot it can never come back out, for us or for anyone.
+        </p>
+        <p className="mt-2 max-w-xl text-sm text-bull-text-faint">
+          the one gap, while the curve is still filling: ${TICKER} cannot be bought yet, so that
+          20% waits in a holding bucket on the mint contract instead, and money in that bucket
+          has not reached a pot yet. the bnb leg has no such gap. the long version is on{' '}
+          <Link href="/about" className="text-bull-gold hover:underline">
+            how to play
+          </Link>
+          .
         </p>
         <div className="mt-4 grid gap-4 empty:hidden sm:grid-cols-2">
           <JackpotPanel pot="bnbull" />

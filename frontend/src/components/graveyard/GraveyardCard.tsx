@@ -9,7 +9,10 @@ import { formatToken, formatUsd1e18, formatDuration, shortAddr } from '@/lib/for
 import { useTokenDecimals, NATIVE_BNB_DECIMALS } from '@/lib/hooks/useTokenDecimals';
 import { useErc20Approval } from '@/lib/hooks/useErc20Approval';
 import { useWrongNetwork } from '@/lib/hooks/useWrongNetwork';
+import { usePreflight } from '@/lib/hooks/usePreflight';
 import { WrongNetworkNotice } from '@/components/shared/WrongNetwork';
+import { RevertNotice } from '@/components/shared/RevertNotice';
+import { decodeRevert, type DecodedRevert } from '@/lib/revertDecode';
 import { withCushion } from '@/lib/constants';
 import { BullSprite } from '@/components/BullSprite';
 import { getBull } from '@/lib/art/collection';
@@ -137,20 +140,70 @@ export function GraveyardCard({ tokenId }: { tokenId: number }) {
     dueForAsset[asset],
   );
 
-  const { writeContractAsync, isPending, data: txHash, error: txError } = useWriteContract();
+  const { writeContractAsync, isPending, data: txHash } = useWriteContract();
   const { isLoading: isConfirming, isSuccess: confirmed } = useWaitForTransactionReceipt({ hash: txHash });
+  const { preflight, checking } = usePreflight();
+  // ⚠ DECODED, NEVER `txError.message`. This card used to render the wallet's
+  // own string, which is how "gas limit too high" reaches a player.
+  const [revert, setRevert] = useState<DecodedRevert | null>(null);
+
+  // ⚠ Every branch pins `chainId`. Without it wagmi hands viem `chain: null`,
+  // viem skips `assertCurrentChain`, and the two BNB branches send `value` to
+  // a codeless address on whatever chain the wallet is on. See
+  // `useWrongNetwork`.
+  /**
+   * ⚠ THE SAME BUG CLASS AS THE FIGHT PAGE, AND THIS ONE SPENDS MORE MONEY.
+   *
+   * Every input to a revive is live chain state that can be invalidated
+   * underneath the card without any event the browser could listen for:
+   * somebody else revives the bull first (`NotDead`), the previous owner's head
+   * start has not run out (`OwnerPriority`), the bull is out of lives
+   * (`GoneForever`), the ladder rung moved (`CostTooHigh`), or the chainlink
+   * feed went stale between the quote and the click (`OracleStale`). Each of
+   * those has a precise, actionable sentence, and without a dry run the player
+   * would get the rpc's opinion about gas instead.
+   */
+  async function handlePay() {
+    if (!graveyardAddress || wrongNetwork) return;
+    const id = BigInt(tokenId);
+    setRevert(null);
+
+    const fn =
+      asset === 'bnb'
+        ? lane === 'owner'
+          ? 'resurrectWithBNB'
+          : 'resurrectAndClaimWithBNB'
+        : lane === 'owner'
+          ? 'resurrectWithBNBULL'
+          : 'resurrectAndClaimWithBNBULL';
+    const preValue =
+      asset === 'bnb' ? (bnbDue !== undefined ? withCushion(bnbDue) : 0n) : undefined;
+
+    const pre = await preflight({
+      address: graveyardAddress,
+      abi: GraveyardAbi,
+      functionName: fn,
+      args: [id],
+      value: preValue,
+    });
+    if (!pre.ok) {
+      setRevert(pre.error);
+      return;
+    }
+
+    try {
+      await sendPay(id);
+    } catch (e) {
+      setRevert(decodeRevert(e));
+    }
+  }
 
   // Built as explicit branches rather than a function-name lookup table: a
   // payable call (BNB) and a non-payable one (BNBULL) have different `value`
   // shapes in the generated ABI's type union, so one generic call object
   // cannot type-check across all four functions at once.
-  // ⚠ Every branch pins `chainId`. Without it wagmi hands viem `chain: null`,
-  // viem skips `assertCurrentChain`, and the two BNB branches send `value` to
-  // a codeless address on whatever chain the wallet is on. See
-  // `useWrongNetwork`.
-  async function handlePay() {
-    if (!graveyardAddress || wrongNetwork) return;
-    const id = BigInt(tokenId);
+  async function sendPay(id: bigint) {
+    if (!graveyardAddress) return;
     if (asset === 'bnb') {
       const value = bnbDue !== undefined ? withCushion(bnbDue) : 0n;
       if (lane === 'owner') {
@@ -271,8 +324,16 @@ export function GraveyardCard({ tokenId }: { tokenId: number }) {
           ) : lane === 'takeover' && !takeoverOpen ? null : asset !== 'bnb' && needsApproval ? (
             <button
               onClick={async () => {
-                await approve();
-                refetchAllowance();
+                // ⚠ CAUGHT. This used to be a bare `await approve()`, so a
+                // rejected or failing approval threw into an unhandled promise
+                // rejection and the player saw NOTHING AT ALL — the silent end
+                // of the same bug class as "gas limit too high".
+                try {
+                  await approve();
+                  refetchAllowance();
+                } catch (e) {
+                  setRevert(decodeRevert(e));
+                }
               }}
               disabled={isApproving || wrongNetwork}
               className="mt-3 rounded-full border border-bull-gold px-3 py-1.5 text-xs font-medium text-bull-gold disabled:opacity-50"
@@ -282,20 +343,22 @@ export function GraveyardCard({ tokenId }: { tokenId: number }) {
           ) : (
             <button
               onClick={handlePay}
-              disabled={isPending || isConfirming || wrongNetwork}
+              disabled={isPending || isConfirming || checking || wrongNetwork}
               className="mt-3 rounded-full border border-bull-gold bg-bull-gold px-3 py-1.5 text-xs font-semibold text-bull-gold-ink disabled:opacity-50"
             >
               {wrongNetwork
                 ? 'wrong network'
                 : isPending || isConfirming
                   ? 'sending…'
-                  : lane === 'owner'
-                    ? 'revive'
-                    : 'revive & claim'}
+                  : checking
+                    ? 'checking…'
+                    : lane === 'owner'
+                      ? 'revive'
+                      : 'revive & claim'}
             </button>
           )}
           {confirmed && <p className="mt-2 text-xs text-bull-gold">done.</p>}
-          {txError && <p className="mt-2 text-xs text-bull-red">{txError.message}</p>}
+          <RevertNotice error={revert} className="mt-2" />
         </div>
       )}
     </div>

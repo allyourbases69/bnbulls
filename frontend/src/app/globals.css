@@ -347,6 +347,7 @@
   }
 
   .pot-card {
+    container-type: inline-size;
     position: relative;
     overflow: hidden;
     border-color: rgb(var(--pot-ink) / 0.24);
@@ -412,7 +413,14 @@
     color: rgb(var(--pot-ink));
     line-height: 1;
     font-variant-numeric: tabular-nums;
-    font-size: clamp(1.9rem, 8.5vw, 3rem);
+    /* ⚠ THE BOX SIZES ITSELF TO THE NUMBER. A jackpot has no upper bound, so a
+       fixed clamp WILL eventually be too big for its container — that is how
+       `348,612.034` came to be clipped mid-digit. `cqi` scales the figure with
+       the card's own inline size, and `min-width: 0` + `overflow-wrap` stop a
+       long unbroken run forcing the card wider than the grid column. */
+    font-size: clamp(1.5rem, 11cqi, 3rem);
+    min-width: 0;
+    overflow-wrap: anywhere;
     animation: pot-figure-breathe 3.8s ease-in-out infinite;
   }
 
@@ -489,6 +497,410 @@
     .pot-ticker-chip {
       transition: none;
     }
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   THE PIT, ANIMATED. (`components/duel/DuelAnimation.tsx`)
+   ═══════════════════════════════════════════════════════════════════════
+   Ported beat for beat from fighting fefers' duel animation (its
+   "Duel animation keyframes" block). The SHAPES and the DURATIONS are
+   theirs and they are load-bearing: each one is sized to finish inside a
+   single event beat, so a swing never overlaps the next swing. Do not
+   lengthen one without reading `EVENT_BUDGET_MS` in the component.
+
+   ⚠ ONLY THE COLOURS ARE NEW, and they are read off the `:root` palette
+   at the top of this file rather than written here, so a reskin carries
+   the fight with it. Fefers strobes RAINBOW on a round start; this
+   palette is dark, gold and blood, and a rainbow across it reads as a
+   rendering bug. Same beat, bnbulls ink.
+
+   ⚠ NO GHOSTS AND NO HEADSTONES. `lib/brand.ts` DEATH says the one death
+   image is the back of the truck, and forbids a second metaphor. Fefers'
+   ghost-rise and RIP banner are therefore NOT ported: a bull that dies
+   slumps and gets hauled off frame instead.
+
+   ⚠ MOTION HERE IS DECORATION. The fight is driven by timers inside the
+   component, not by CSS, so the global reduced-motion brake at the bottom
+   of this file stops the flashing WITHOUT stopping the fight: hp bars
+   still drain, damage numbers still appear, the winner still lands.
+   ═════════════════════════════════════════════════════════════════════ */
+@layer utilities {
+  /* Damage / miss numbers. Each floater gets a fresh React key per hit, so
+     mounting re-runs this from 0%. */
+  @keyframes damage-float {
+    0% {
+      opacity: 0;
+      transform: translate(0, 10px);
+    }
+    15% {
+      opacity: 1;
+    }
+    100% {
+      opacity: 0;
+      transform: translate(0, -40px);
+    }
+  }
+  .animate-damage-float {
+    animation: damage-float 0.6s ease-out forwards;
+  }
+
+  /* The defender's recoil. */
+  @keyframes hit-shake {
+    0%,
+    100% {
+      transform: translateX(0);
+    }
+    20% {
+      transform: translateX(-6px);
+    }
+    40% {
+      transform: translateX(6px);
+    }
+    60% {
+      transform: translateX(-3px);
+    }
+    80% {
+      transform: translateX(3px);
+    }
+  }
+  .animate-hit-shake {
+    animation: hit-shake 0.22s ease-in-out;
+  }
+
+  /* The spark where two weapons meet, in the middle column. */
+  @keyframes clash-spark {
+    0% {
+      opacity: 0;
+      transform: scale(0.4) rotate(0deg);
+    }
+    40% {
+      opacity: 1;
+      transform: scale(1.6) rotate(180deg);
+    }
+    100% {
+      opacity: 0;
+      transform: scale(2.2) rotate(360deg);
+    }
+  }
+  .animate-clash-spark {
+    animation: clash-spark 0.28s ease-out forwards;
+  }
+
+  /* Round start. Fefers' `disco-strobe`, retuned: gold, then blood, then
+     bone. Same 0.38s, same one-shot, no rainbow. */
+  @keyframes round-strobe {
+    0% {
+      background: transparent;
+    }
+    20% {
+      background: rgb(var(--bull-gold) / 0.22);
+    }
+    50% {
+      background: rgb(var(--bull-blood) / 0.28);
+    }
+    75% {
+      background: rgb(var(--bull-text) / 0.1);
+    }
+    100% {
+      background: transparent;
+    }
+  }
+  .animate-round-strobe {
+    animation: round-strobe 0.38s ease-out forwards;
+  }
+
+  /* Crit / killing blow. Fefers throws lightning; bnbulls throws the same
+     bolt in gold, because the sky over a stockyard is the one thing both
+     scenes share. */
+  @keyframes strike-flash {
+    0% {
+      opacity: 0;
+    }
+    10% {
+      opacity: 1;
+      filter: drop-shadow(0 0 8px rgb(var(--bull-gold) / 0.9));
+    }
+    30% {
+      opacity: 0.3;
+    }
+    45% {
+      opacity: 1;
+      filter: drop-shadow(0 0 12px rgb(var(--bull-gold-hot) / 0.95));
+    }
+    100% {
+      opacity: 0;
+    }
+  }
+  .animate-strike-flash {
+    animation: strike-flash 0.35s ease-out forwards;
+  }
+
+  /* The whole arena jolts on a big hit. */
+  @keyframes arena-shake {
+    0%,
+    100% {
+      transform: translate(0, 0);
+    }
+    10% {
+      transform: translate(-4px, 2px);
+    }
+    20% {
+      transform: translate(4px, -2px);
+    }
+    30% {
+      transform: translate(-3px, 3px);
+    }
+    40% {
+      transform: translate(3px, -1px);
+    }
+    50% {
+      transform: translate(-2px, 2px);
+    }
+    60% {
+      transform: translate(2px, -3px);
+    }
+    70% {
+      transform: translate(-2px, 1px);
+    }
+    80% {
+      transform: translate(2px, -2px);
+    }
+    90% {
+      transform: translate(-1px, 1px);
+    }
+  }
+  .animate-arena-shake {
+    animation: arena-shake 0.22s ease-in-out;
+  }
+
+  @keyframes blood-splat {
+    0% {
+      opacity: 0;
+      transform: scale(0.5);
+    }
+    20% {
+      opacity: 1;
+      transform: scale(1.2);
+    }
+    60% {
+      opacity: 1;
+      transform: scale(1);
+    }
+    100% {
+      opacity: 0;
+      transform: scale(1);
+    }
+  }
+  .animate-blood-splat {
+    animation: blood-splat 0.35s ease-out forwards;
+  }
+
+  @keyframes outcome-drop {
+    0% {
+      opacity: 0;
+      transform: translateY(8px) scale(0.96);
+    }
+    60% {
+      opacity: 1;
+      transform: translateY(0) scale(1.02);
+    }
+    100% {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+  .animate-outcome-drop {
+    animation: outcome-drop 0.25s ease-out forwards;
+  }
+
+  /* Ranged shots. Animates `left` across the arena so the path scales with
+     the viewport; one-off and cheap enough that animating a layout prop is
+     fine. Keyed per shot in the component so back-to-back shots re-run it.
+     ⚠ 0.22s is not decorative — `ARROW_FLIGHT_MS` in the component delays
+     the damage by the same amount so the hit never reads before the shot
+     connects. Change both or neither. */
+  @keyframes shot-fly-right {
+    0% {
+      left: 12%;
+      opacity: 0;
+    }
+    12% {
+      opacity: 1;
+    }
+    100% {
+      left: 80%;
+      opacity: 1;
+    }
+  }
+  .animate-shot-fly-right {
+    animation: shot-fly-right 0.22s linear forwards;
+  }
+  @keyframes shot-fly-left {
+    0% {
+      left: 80%;
+      opacity: 0;
+    }
+    12% {
+      opacity: 1;
+    }
+    100% {
+      left: 12%;
+      opacity: 1;
+    }
+  }
+  .animate-shot-fly-left {
+    animation: shot-fly-left 0.22s linear forwards;
+  }
+
+  /* The Ring is a boomerang (`WEAPON_KIND`), so it spins on the way over. */
+  @keyframes shot-spin {
+    to {
+      transform: rotate(720deg);
+    }
+  }
+  .animate-shot-spin {
+    animation: shot-spin 0.22s linear forwards;
+  }
+
+  /* Idle breath. Suppressed during attacks, hits and death so the motion
+     that MEANS something stays readable. */
+  @keyframes float-idle {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-2px);
+    }
+  }
+  .animate-float-idle {
+    animation: float-idle 2.6s ease-in-out infinite;
+  }
+
+  /* ── the truck (`lib/brand.ts` DEATH) ────────────────────────────────
+     Replaces fefers' ghost-rise + rip-banner. The bull goes down, then
+     off frame, in the direction of the truck. No ghost, no headstone. */
+  @keyframes bull-slump {
+    0% {
+      opacity: 0;
+    }
+    100% {
+      opacity: 1;
+    }
+  }
+  .animate-bull-slump {
+    animation: bull-slump 0.3s ease-in forwards;
+  }
+
+  @keyframes bull-hauled {
+    0% {
+      opacity: 1;
+      transform: translate(0, 0) rotate(0deg);
+    }
+    25% {
+      transform: translate(0, 6px) rotate(-8deg);
+    }
+    100% {
+      opacity: 0;
+      transform: translate(0, 34px) rotate(-16deg);
+    }
+  }
+  .animate-bull-hauled {
+    animation: bull-hauled 0.85s ease-in forwards;
+  }
+
+  @keyframes truck-banner {
+    0% {
+      opacity: 0;
+      transform: translateY(-20px) scale(0.6);
+    }
+    40% {
+      opacity: 1;
+      transform: translateY(0) scale(1.15);
+    }
+    70% {
+      transform: translateY(0) scale(0.95);
+    }
+    100% {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+  .animate-truck-banner {
+    animation: truck-banner 0.45s ease-out forwards;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   THE PIT, DRESSED.
+   ═══════════════════════════════════════════════════════════════════════
+   Fefers puts its fighters on a painted backdrop (`/arena-forest.png`).
+   bnbulls has no such asset and is NOT getting one invented for it:
+   `VOICE-AND-BRAND.md §5` says no AI hero art and no stock art, and
+   `lib/art/**` is owner-approved and off limits. So the pit is built the
+   same way the landing hero already builds "the yards" — pure CSS rails,
+   a dirt floor and one torch pool, no image files.
+
+   The tier ink rides in on `--tier-ink` / `--tier-glow`, set inline per
+   fighter from `lib/rarity.ts`. No rarity hex is written here or in the
+   component: both point at the `--rarity-*` triplets at the top of this
+   file, so the fight is coloured by the same ladder as /ranks and the
+   browse grid.
+   ═════════════════════════════════════════════════════════════════════ */
+@layer components {
+  .duel-arena {
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* The floor: rails behind, dirt underfoot, one torch burning low-left. */
+  .duel-arena-floor::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background-image: linear-gradient(rgb(var(--bull-text) / 0.05) 2px, transparent 2px),
+      linear-gradient(90deg, rgb(var(--bull-text) / 0.035) 2px, transparent 2px);
+    background-size: 3.5rem 3.5rem;
+    mask-image: linear-gradient(180deg, #000 0%, #000 55%, transparent 88%);
+    -webkit-mask-image: linear-gradient(180deg, #000 0%, #000 55%, transparent 88%);
+  }
+  .duel-arena-floor::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background: radial-gradient(120% 90% at 12% 100%, rgb(var(--bull-gold) / 0.16), transparent 45%),
+      linear-gradient(
+        180deg,
+        rgb(var(--bull-bg) / 0.55) 0%,
+        rgb(var(--bull-bg) / 0.28) 45%,
+        rgb(var(--bull-bg) / 0.88) 100%
+      );
+  }
+
+  /* Once a bull is on the truck the torch goes out and the pit goes cold
+     and red. Same two layers, different light. */
+  .duel-arena-truck::after {
+    background: radial-gradient(120% 90% at 88% 100%, rgb(var(--bull-red) / 0.2), transparent 48%),
+      linear-gradient(180deg, rgb(var(--bull-bg) / 0.7) 0%, rgb(var(--bull-bg) / 0.94) 100%);
+  }
+
+  /* One fighter's frame. The glow is the tier's, at the tier's strength. */
+  .duel-portrait {
+    border: 2px solid rgb(var(--tier-ink) / 0.75);
+    background: radial-gradient(ellipse at center, rgb(var(--tier-ink) / 0.16) 0%, transparent 70%);
+    filter: drop-shadow(0 0 var(--tier-glow) rgb(var(--tier-ink) / 0.75));
+  }
+  .duel-portrait-winner {
+    box-shadow: 0 0 0 2px rgb(var(--bull-gold) / 0.8), 0 0 22px rgb(var(--bull-gold) / 0.55);
+  }
+  .duel-portrait-loser {
+    opacity: 0.62;
+    filter: grayscale(0.85);
   }
 }
 

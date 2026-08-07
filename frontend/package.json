@@ -14,7 +14,8 @@
     "verify:rarity": "node scripts/verify-rarity-port.ts",
     "verify:combat": "node scripts/verify-combat-port.ts",
     "verify:typed-data": "node scripts/verify-typed-data.ts",
-    "verify": "npm run verify:art && npm run verify:rarity && npm run verify:combat && npm run verify:typed-data",
+    "verify:reverts": "node scripts/verify-revert-decode.ts",
+    "verify": "npm run verify:art && npm run verify:rarity && npm run verify:combat && npm run verify:typed-data && npm run verify:reverts",
     "gen:abi": "node scripts/generate-abi.ts",
     "gen:brand": "node scripts/gen-brand-assets.ts",
     "gen:brand:proof": "node scripts/gen-brand-assets.ts --proof"

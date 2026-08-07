@@ -104,6 +104,155 @@ export const KING_FLAVOUR: TierFlavour = {
   line: 'one of one. the top of the grade, and the only bull with a title.',
 };
 
+// ─── the arena · THE BULL PIT (owner call, 2026-08-07) ───────────────
+//
+// Owner, verbatim: "OMG that is what the fighting area can be renamed to — the
+// bull pit, why didn't we think of that."
+//
+// ⚠ THIS IS A LABEL, AND ONLY A LABEL. The contract is `contracts/Yards.sol`,
+// it is DEPLOYED, and its whole surface is chain-facing and unrenameable:
+// `enter` / `eject` / `inYards` / `inYardsMany` / `statusOf` / `fightBlocked`,
+// the `EnteredYards` and `LeavingYards` events, `Duel.Wire.Yards` and the
+// `BullNotInYards` revert. Nothing under `contracts/`, `script/`, `test/` or
+// `lib/abi/` may be renamed to match this word, and the ABI is generated from
+// the forge artefact so it could not be anyway. The site already runs this
+// split: `/graveyard` is labelled "the butcher".
+//
+// ⚠ THE ROUTE STAYS `/duel`. Urls get shared and a 404 is worse than a label
+// that does not match a path — the same call `DEATH` records above.
+//
+// ⚠ ONE STRING IS DELIBERATELY LEFT SAYING "the yards": `HERO_LINE`. It is the
+// owner's own landing sentence, `DECISIONS.md §36` locks it, and `Yards.sol`'s
+// header quotes it as the reason the contract is called what it is. Changing an
+// owner-verbatim line is his call, not a sweep's. It is ONE word here if he
+// wants it.
+//
+// ⚠ "IN THE PIT" NOW MEANS SOMETHING EXACT, SO DO NOT REUSE IT FOR "ALIVE".
+// Several filters used to be labelled "in the yards" when what they actually
+// counted was bulls that are not dead. That was harmless while nothing read the
+// roster; it is a lie now, because an alive bull that was never entered is NOT
+// in the pit and cannot be fought. Those labels moved to `DEATH.standing`.
+
+export const PIT = {
+  /** Nav, page label, and anywhere the arena is named. */
+  label: 'the bull pit',
+  /** Page eyebrow. */
+  eyebrow: '⚔️ the bull pit',
+  /** A second mention in the same paragraph, where the full name drags. */
+  short: 'the pit',
+  /** Page h1 sits under the eyebrow. */
+  heading: 'the bull pit',
+  /** The one line under the h1. */
+  lead: 'pick your bull and hit fight. we find you an opponent on rating.',
+
+  // ── membership ─────────────────────────────────────────────────────
+
+  /** THE RULE. `Duel.submitDuel` reverts `BullNotInYards` on a bull that is
+   *  out, staked fight or free one, so this is not a soft gate. */
+  rule:
+    'a bull only fights while you have it in the pit. one that is out cannot be picked, cannot ' +
+    'be matched, and cannot be fought by anybody.',
+  /** The default is OUT, for a fresh mint too (`Yards.sol` header). */
+  defaultOut:
+    'nothing goes in by itself, a fresh mint included. a bull you have not sent in cannot be ' +
+    'dragged into a fight you never agreed to.',
+  /** Entry is instant, and batched. */
+  enterInstant:
+    'sending them in bites the moment the transaction lands, and one transaction covers as many ' +
+    'as you tick.',
+  enterCta: 'send into the pit',
+  enterAllCta: 'send them all in',
+  ejectCta: 'pull out of the pit',
+  ejectAllCta: 'pull them all out',
+  /** Per-bull status words. */
+  inLabel: 'in the pit',
+  outLabel: 'out of the pit',
+  leavingLabel: 'leaving',
+
+  // ── ⚠ THE DELAYED EJECT. DO NOT SOFTEN ANY OF THE NEXT FIVE STRINGS ──
+  //
+  // `Yards.eject` stamps `leavesAt = now + ejectDelay` and the bull STAYS
+  // FIGHTABLE until that stamp passes (`inYardsFor`: `lv == 0 || now < lv`).
+  // Rendering an ejected bull as instantly safe would be a lie the contract
+  // contradicts, and it would be the expensive kind: somebody would eject to
+  // duck a loss, watch it land anyway, and be right to be angry about what the
+  // screen told them.
+  //
+  // The delay is not caution, it is the anti-dodge bound. A duel settles when
+  // somebody submits a SIGNED result, BSC's mempool is public, so an instant
+  // eject would let the losing side front-run the submission and make the loss
+  // evaporate. `MIN_EJECT_DELAY` is exactly `MAX_DUEL_EXPIRY_SECONDS`, the
+  // ceiling on how long a fight signature may live, so by the time an eject
+  // bites every signature that could name that bull has already expired.
+  //
+  // ⚠ NEVER HARDCODE THE MINUTES. `ejectDelay` is an owner-settable value
+  // inside a bounded range. Read it off the contract; these strings are the
+  // words around the number, never the number.
+
+  /** Why the wait exists. Rendered next to the eject controls. */
+  ejectDelayed:
+    'pulling a bull out is not instant, and that is on purpose. the eject is stamped with a ' +
+    'time and the bull keeps fighting until it passes.',
+  ejectWhy:
+    'a fight settles when somebody submits a signed result, and on bnb chain everyone can see ' +
+    'that transaction coming. if eject were instant the losing side would yank their bull out ' +
+    'from under a loss they can already see. the wait is never shorter than the longest a fight ' +
+    'signature can live, so a loss that was already signed lands first and the bull leaves after.',
+  /** THE COUNTDOWN STATE. What is still true while it runs. */
+  ejectPending:
+    'still in the pit until this hits zero. a fight signed before you hit eject can still land ' +
+    'in that time, so this is not a way out of one.',
+  /** ...and what is already true, which is the good half. */
+  ejectImmediate:
+    'nothing new can be matched against it from now, though. the matchmaker drops a bull the ' +
+    'second an eject is stamped.',
+  /** Verified against `Yards.enter`, which writes `leavesAt: 0` unconditionally
+   *  and documents it: "Calling this on a bull that is already leaving CANCELS
+   *  the eject… cancelling an eject can only ever make the bull MORE available,
+   *  so it cannot duck anything." */
+  reenterCancels:
+    'changed your mind mid-countdown? send it back in and the departure is cancelled on the ' +
+    'spot. entry never waits, because entering can only ever expose you to more fights.',
+
+  // ── ⚠ THE ONE THAT HAS ALREADY BITTEN US IN TESTING ────────────────
+  //
+  // `Yards` stores `(enteredBy, leavesAt)` and membership requires `enteredBy
+  // == the LIVE owner`, so a transfer takes a bull out for free with no ERC-721
+  // hook. The flip side is that a BUYER gets a bull that looks fine and is
+  // silently unfightable. Say so where a buyer will actually see it.
+  saleVoidsEntry:
+    'buying a bull does not put it in the pit. the pit remembers the wallet that sent a bull ' +
+    'in, so the moment it changes hands that spot is void and the new owner has a bull nobody ' +
+    'can fight until they send it in themselves. every sale, here or anywhere else.',
+
+  // ── states ─────────────────────────────────────────────────────────
+
+  /** Nothing of yours is in. */
+  emptyMine: 'none of your herd is in the pit, so none of them can fight yet.',
+  /** Wallet holds nothing at all. */
+  emptyWallet: 'no living bulls in this wallet.',
+  /** The whole pit is empty. */
+  empty: 'the pit is empty. nobody has sent anything in yet.',
+  quiet: 'nothing has been settled yet. the pit is quiet.',
+  /** History, filtered to mine, with nothing in it. */
+  noneOfMineFought: 'none of your bulls have been in the pit yet.',
+  /** Leaders / anything ranked by fights. */
+  onlyFought: 'only bulls that have stepped into the pit.',
+  /** `<meta description>` for /leaders. */
+  leadersDescription:
+    'every bull that has stepped into the bull pit, ranked by rating. win against higher-rated ' +
+    'bulls to climb faster.',
+  /** The duel-picker dropdown instruction line. */
+  pickerHint: 'tick to send a bull into the pit · click a name to make it the one that fights next',
+  /** Post-mint. */
+  mintCta: 'send into the pit',
+  loading: 'checking who is in the pit…',
+  /** The read failed. Never render "out of the pit" off a failed read — that is
+   *  the same class of lie as rendering an ejected bull as safe. */
+  unreadable:
+    "couldn't read the pit off the chain just now, so nothing here claims to know who is in it.",
+} as const;
+
 // ─── death · THE BUTCHER (DECISIONS.md §35, CONFIRMED by the owner) ──
 //
 // This axis of the lore is SETTLED, not a sketch. Owner: "love the butcher and
@@ -149,6 +298,19 @@ export const DEATH = {
   /** The list of the dead. */
   listHeading: 'on the truck',
   listLoading: 'checking the yard…',
+  /**
+   * THE OPPOSITE POLE, and it lives here because it is the same axis: this is
+   * the label on every "not dead" filter and count, the pair to `listHeading`.
+   *
+   * ⚠ IT USED TO READ "in the yards" AND THAT IS NOW A LIE. `PIT` membership is
+   * a real on-chain fact (`Yards.inYards`), and an alive bull nobody has
+   * entered is emphatically not in it. A filter labelled with the arena's name
+   * while it actually counts heartbeats would send a player to the duel page
+   * with a herd the contract will not let fight.
+   */
+  standing: 'still standing',
+  /** Nothing is alive. Pairs with `standing`. */
+  noneStanding: 'nobody is still standing. every fighter on the board is on the truck.',
 } as const;
 
 // ─── the two pots ────────────────────────────────────────────────────
@@ -178,11 +340,20 @@ export const DEATH = {
 export const POTS = {
   bnbull: { label: '$BNBULL pot', symbolFallback: 'BNBULL', odds: '1-in-50' },
   bnb: { label: 'BNB pot', symbolFallback: 'WBNB', odds: '1-in-100' },
-  /** The trust story. This IS the brand (`VOICE-AND-BRAND.md §4`). */
-  trust:
-    'neither pot has a withdraw function. not for a player, not for us. the only way ' +
-    'money has ever left either pool is a logged, on-chain win. that is not a promise, ' +
-    'it is the bytecode.',
+  /**
+   * ⚠ THIS SLOT USED TO BE THE "no withdraw function" TRUST STORY. Owner,
+   * 2026-08-07: "get rid of the withdraw function and the way it's all worded,
+   * no need for trust story, just make hype jackpot or show how the pots grow."
+   *
+   * The fact has not changed and is not being hidden: the only way money leaves
+   * either pool is a logged on-chain win, and `/about` still says so plainly
+   * where a sceptic goes looking. It is simply not the PITCH. Players already
+   * accept it, so spending the loudest line on it buys nothing and reads
+   * defensive. Sell the climb instead.
+   */
+  grow:
+    'both pots only ever go one way between wins. every mint, every scrap and every ' +
+    'revive drops more in, and it sits there stacking until somebody rolls the number.',
   /** ⚠ BANNED: "win both pots". A fight rolls exactly ONE. */
   rule:
     'every decisive fight opens a ticket on both pools at their own odds, and the first ' +
@@ -272,9 +443,20 @@ export const PRELAUNCH = {
 
 export const DEAL = {
   eyebrow: 'the deal',
+  /**
+   * ⚠ THE FIGHT SLICE IS 3% AND IT IS NOT SPLIT BETWEEN THE POTS. `DECISIONS.md
+   * §23` was CORRECTED on 2026-08-06: it used to say "BNBULL pot 2% / BNB pot
+   * 1%" and that was wrong. `Duel.routePotSliceInline` routes per asset, whole,
+   * "no swap, no split and no second hop anywhere on this path" — the slice
+   * lands in the pot matching the currency that side actually paid in.
+   * Winner 90% · pot 3% · dev 7%, from `duelDefaultDevBps = 1000` and
+   * `potShareBps = 3000`.
+   */
   body:
     'every mint and every revive feeds two pots: 20% buys $BNBULL, 10% goes to BNB. ' +
-    'neither pot has a withdraw function, for anybody. winners only.',
+    'every fight feeds them too: the winner takes 90% of the money in the middle and 3% ' +
+    'drops into the pot for whichever currency was played. they stack until someone ' +
+    'hits, and the winner takes the lot.',
 } as const;
 
 // ─── safety refrain (VOICE-AND-BRAND §4, on every page footer) ───────
@@ -297,12 +479,13 @@ export interface NavEntry {
 /**
  * ⚠ ROUTES ARE URLS, LABELS ARE COPY. Rename the label freely; the route is a
  * shared, linkable thing. `/bulls` is labelled "browse", `/graveyard` is
- * labelled by `DEATH.label`, exactly the way fefers labels `/market`
- * "Marketplace".
+ * labelled by `DEATH.label`, `/duel` by `PIT.label`, exactly the way fefers
+ * labels `/market` "Marketplace".
  */
 export const NAV: readonly NavEntry[] = [
   { href: '/mint', label: 'mint' },
-  { href: '/duel', label: 'duel' },
+  { href: '/duel', label: PIT.label },
+  { href: '/history', label: 'history' },
   { href: '/graveyard', label: DEATH.label },
   { href: '/market', label: 'marketplace' },
   // Fefers' nav order puts the two ranking pages between marketplace and

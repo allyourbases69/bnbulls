@@ -1474,6 +1474,19 @@ export const DuelAbi = [
     "stateMutability": "view"
   },
   {
+    "type": "function",
+    "name": "yardsContract",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
     "type": "event",
     "name": "AllowSelfDuelChanged",
     "inputs": [
@@ -1727,6 +1740,25 @@ export const DuelAbi = [
         "type": "uint64",
         "indexed": false,
         "internalType": "uint64"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "JackpotResolveFailed",
+    "inputs": [
+      {
+        "name": "pot",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "reason",
+        "type": "bytes4",
+        "indexed": false,
+        "internalType": "bytes4"
       }
     ],
     "anonymous": false
@@ -2235,6 +2267,17 @@ export const DuelAbi = [
   {
     "type": "error",
     "name": "BullNotAlive",
+    "inputs": [
+      {
+        "name": "tokenId",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "BullNotInYards",
     "inputs": [
       {
         "name": "tokenId",

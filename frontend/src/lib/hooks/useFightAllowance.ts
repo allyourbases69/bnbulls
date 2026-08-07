@@ -28,11 +28,17 @@ import { useErc20Approval } from './useErc20Approval';
  * the WBNB `balanceOf` + `allowance` path below it, reverting
  * `StakeNotApproved` if there is no allowance.
  *
- * ⚠ AND IT FAILS SILENTLY, WHICH IS THE REAL DAMAGE. `/api/run-duel`'s
- * `resolveSide` walks its candidate assets and simply `continue`s past a side
- * that is not `erc20Ready`. On the default `AUTO` pick that means a bull whose
- * owner has no WBNB allowance is never matched, never errors, and never
- * explains itself — the owner just watches their bulls sit there.
+ * ⚠ IT USED TO FAIL SILENTLY, AND THAT WAS THE REAL DAMAGE. `/api/run-duel`'s
+ * `resolveSide` walked its candidate assets and simply `continue`d past a side
+ * that was not `erc20Ready`. On the old default `AUTO` pick a bull whose owner
+ * had no WBNB allowance was never matched, never errored and never explained
+ * itself — the owner just watched their bulls sit there.
+ *
+ * `AUTO` is gone (owner call, 2026-08-07) and the skip went with it: every
+ * currency the signer tries now comes back in the error with its own reason, so
+ * a missing allowance reads as "bull #N cannot be drawn into this fight, it
+ * holds X and has approved Y". THIS HOOK IS STILL THE FIX, not a leftover — the
+ * error tells you after the fact, the numbers below tell you before.
  *
  * ── WHAT "ALLOWED" ACTUALLY MEANS ────────────────────────────────────
  *

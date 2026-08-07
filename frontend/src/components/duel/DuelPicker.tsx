@@ -31,13 +31,23 @@
  * ⚠ WHERE THE CONTRACT LAYER DIFFERS FROM FEFERS — READ BEFORE EDITING
  * ═══════════════════════════════════════════════════════════════════════
  *
- * 1. FEFERS' STEP 2 HAS TWO LEGS: an arena-entry transaction
- *    (`ArenaOptOut.setChoiceBatch([...], In)`) and the ERC-20 approval. THIS
- *    FILE BUILDS ONLY THE APPROVAL LEG. `contracts/Yards.sol` is the bnbulls
- *    arena roster and is being written by another agent right now; it is
- *    deliberately NOT wired here and NOT stubbed. When it lands, step 2 gains
- *    its "send them in" write and the ticks below become that call's argument
- *    list — the selection state is already shaped for it (`ticked`).
+ * 1. STEP 2 HAS TWO LEGS, AND IT NOW BUILDS BOTH. The arena-entry transaction
+ *    (`Yards.enter`, fefers' `ArenaOptOut.setChoiceBatch`) and the ERC-20
+ *    approval. `contracts/Yards.sol` is the bnbulls arena roster — THE BULL PIT
+ *    in player copy (`brand.PIT`) — and `PitPanel` is the entry leg.
+ *
+ *    ⚠ THIS LEG IS NOT OPTIONAL AND ITS ABSENCE WAS AN OUTAGE.
+ *    `Duel._requireInYards` runs on EVERY duel, staked or free, and reverts
+ *    `BullNotInYards`. While this page had no pit control and the matchmaker
+ *    had no pit filter, it happily offered fights against bulls that were out —
+ *    and the way that surfaced was unreadable: gas estimation on a reverting
+ *    call returns a garbage number, so the wallet reported "gas limit too high"
+ *    about a transaction whose gas was never the problem.
+ *
+ *    ⚠ AND MEMBERSHIP LAPSES ON ITS OWN. Entry is `(enteredBy, leavesAt)` and
+ *    requires `enteredBy == the live owner`, so a MARKETPLACE SALE voids it
+ *    with no event. A bull bought here is out of the pit until its new owner
+ *    sends it in, which is exactly how the bug above got made.
  *
  * 2. THE QUEUE IS SEQUENTIAL AND THE CONTRACT IS WHY. `Duel.sol`'s header:
  *    "at most one signed result naming a given wallet can ever settle… a holder
@@ -60,11 +70,12 @@
  *    to the WBNB `balanceOf` + `allowance` path underneath it — reverting
  *    `StakeNotApproved` with no allowance.
  *
- *    ⚠ AND IT FAILS SILENTLY. `/api/run-duel`'s `resolveSide` just `continue`s
- *    past a side that is not `erc20Ready`, so on the default AUTO pick those
- *    bulls are never matched, never error, and never explain themselves. A
- *    player told "bnb needs no approval" would have bulls that can never be
- *    fought in bnb and no way to find out why.
+ *    ⚠ IT USED TO FAIL SILENTLY. `/api/run-duel`'s `resolveSide` `continue`d
+ *    past a side that was not `erc20Ready`, so on the old AUTO pick those bulls
+ *    were never matched, never errored and never explained themselves. AUTO is
+ *    gone and every unusable currency now reports a named blocker, but the
+ *    underlying fact is unchanged: a player told "bnb needs no approval" still
+ *    ends up with bulls nobody can pick.
  *
  *    So step 2 carries an allowance block for BOTH currencies, and the gate on
  *    step 3 is deliberately NOT the same thing — see `moneyReady`.
@@ -81,11 +92,13 @@ import { useTokenDecimals, NATIVE_BNB_DECIMALS } from '@/lib/hooks/useTokenDecim
 import { useFightAllowance, type FightAllowance } from '@/lib/hooks/useFightAllowance';
 import { useDismissOnOutside } from '@/lib/hooks/useDismissOnOutside';
 import { rankOpponents, pickOpponent, ratingGap } from '@/lib/matchmaking';
+import { usePitPool } from '@/lib/hooks/useYards';
 import { QUOTE_REFRESH_MS } from '@/lib/constants';
 import { NotDeployed } from '@/components/shared/NotDeployed';
 import { BullCard } from '@/components/bulls/BullCard';
 import { FightAction, type PayAsset } from '@/components/duel/FightAction';
-import { CURRENCY } from '@/lib/brand';
+import { PitPanel } from '@/components/duel/PitPanel';
+import { CURRENCY, PIT } from '@/lib/brand';
 
 const ZERO = '0x0000000000000000000000000000000000000000' as const;
 const APPROVE_FIGHT_OPTIONS = [1, 5, 10, 25, 50] as const;
@@ -244,9 +257,9 @@ export function DuelPicker() {
    * `owner_ == msg.sender` — i.e. your own side, on a fight YOU submit. When
    * somebody else picks one of your bulls you are the PASSIVE side and
    * settlement drops to the WBNB `balanceOf` + `allowance` path, reverting
-   * `StakeNotApproved` without one. Worse, `/api/run-duel` silently skips an
-   * unfunded side on `AUTO`, so those bulls are never matched and never
-   * explain why. See `useFightAllowance` for the full note.
+   * `StakeNotApproved` without one. `/api/run-duel` used to skip such a side
+   * silently on `AUTO`; it now names the blocker instead. See
+   * `useFightAllowance` for the full note.
    */
   const bnbAllowance = useFightAllowance(
     wbnbAddr as `0x${string}` | undefined,
@@ -268,6 +281,19 @@ export function DuelPicker() {
   // pre-filtering here would silently double-apply a rule that is settable on
   // chain.
   const alive = useMemo(() => roster.all.filter((b) => !b.isDead), [roster.all]);
+
+  /**
+   * ⚠ THE PIT FILTER. Without it this page offers fights that cannot settle.
+   *
+   * `usePitPool` costs one `inYardsMany` over the whole living roster, then
+   * `statusOf` only over what came back IN — so the per-bull read is bounded by
+   * the size of the pit, not the size of the drop. It returns `null` until both
+   * reads land, and `rankOpponents` treats null as "no filter": an rpc hiccup
+   * must never be allowed to say "there is nobody left to fight".
+   */
+  const aliveIds = useMemo(() => alive.map((b) => b.id), [alive]);
+  const pit = usePitPool(aliveIds);
+
   const ranked = useMemo(
     () =>
       challenger
@@ -277,9 +303,10 @@ export function DuelPicker() {
             myAddress: account?.toLowerCase() ?? null,
             allowSelfDuel: allowSelfDuel === true,
             exclude: queue,
+            matchable: pit.matchable,
           })
         : [],
-    [challenger, alive, account, allowSelfDuel, queue],
+    [challenger, alive, account, allowSelfDuel, queue, pit.matchable],
   );
   const opponent = pickOpponent(ranked, rerolls);
 
@@ -294,6 +321,23 @@ export function DuelPicker() {
     query: { enabled: !!marketAddress && !!opponent },
   });
 
+  /**
+   * IS THE BULL THAT FIGHTS NEXT ACTUALLY IN THE PIT?
+   *
+   * `null` means the reads have not landed — deliberately not `false`, because
+   * "we do not know yet" and "it is out" are different facts and only one of
+   * them is worth blocking a button over.
+   *
+   * ⚠ `matchable` EXCLUDES A BULL WITH AN EJECT COUNTING DOWN, and that is the
+   * right gate even for your OWN fighter. On chain it is still `inYards` so an
+   * already-signed loss lands, but `/api/run-duel` will not issue a NEW
+   * signature naming it, so a fight button that stayed lit would dead-end on a
+   * refusal. Sending it back in cancels the departure instantly.
+   */
+  const challengerInPit: boolean | null =
+    currentId === null || pit.matchable === null ? null : pit.matchable.has(currentId);
+  const challengerLeaving = currentId !== null && pit.inPit.has(currentId) && challengerInPit === false;
+
   // Everything the page already knows would make `submitDuel` revert, collapsed
   // into one sentence. The signer re-checks every one of these against live
   // chain state and the contract enforces them for real — this is the polite
@@ -301,18 +345,22 @@ export function DuelPicker() {
   const blockedReason: string | null = !account
     ? 'connect a wallet to fight.'
     : roster.mine.length === 0
-      ? 'no living bulls in this wallet.'
+      ? PIT.emptyWallet
       : pending.length === 0
         ? 'tick a bull in step 1 to send it in.'
         : !challenger
           ? 'that bull is no longer available to fight.'
-          : ranked.length === 0
-            ? allowSelfDuel === true
-              ? 'there is nobody else alive to fight yet.'
-              : 'every other living bull is in your own wallet, and a wallet cannot fight itself.'
-            : oppListed === true
-              ? `#${opponent?.id} just got listed on the marketplace and cannot fight. reroll.`
-              : null;
+          : challengerInPit === false
+            ? challengerLeaving
+              ? `#${currentId} is on its way out of ${PIT.label}, so no new fight can be matched for it. send it back in to cancel the departure.`
+              : `#${currentId} is not in ${PIT.label}, and a bull that is out cannot be fought at all. send it in above.`
+            : ranked.length === 0
+              ? allowSelfDuel === true
+                ? `there is nobody in ${PIT.label} to fight yet.`
+                : `every other bull in ${PIT.label} is in your own wallet, and a wallet cannot fight itself.`
+              : oppListed === true
+                ? `#${opponent?.id} just got listed on the marketplace and cannot fight. reroll.`
+                : null;
 
   // Step 2 is "done" once the money can actually move: BNB always can (it rides
   // with the transaction), BNBULL needs an allowance covering at least one
@@ -324,7 +372,13 @@ export function DuelPicker() {
   // because you can start a bnb fight without one.
   const moneyReady = myAsset === 'BNBULL' ? bnbullAllowance.fightsAllowed >= 1 : true;
   const step1Done = pending.length > 0;
-  const fightReady = step1Done && moneyReady && !blockedReason;
+  // ⚠ Step 2 is only done when BOTH its legs are: the bull is in the pit AND
+  // the money can move. The pit leg is the harder gate of the two, because it
+  // is the one the contract refuses outright rather than merely reverting on
+  // payment. `null` (unread) does not mark the step done, and does not block
+  // it either — `blockedReason` above owns the actual refusal.
+  const pitReady = challengerInPit === true;
+  const fightReady = step1Done && pitReady && moneyReady && !blockedReason;
 
   function onSettled() {
     if (currentId === null) return;
@@ -388,6 +442,8 @@ export function DuelPicker() {
               ticked={ticked}
               currentId={currentId}
               settledIds={settled}
+              inPit={pit.inPit}
+              matchable={pit.matchable}
               open={open}
               onOpenChange={setOpen}
               onToggle={toggle}
@@ -399,13 +455,17 @@ export function DuelPicker() {
                 : ''}
               tick any of yours to send them in alongside it. they fight one after another.
             </p>
+            {/* ⚠ SAID HERE AS WELL AS IN STEP 2, because this is the list where
+                somebody picks a bull, and picking one that is out is how the
+                whole "gas limit too high" mess started. */}
+            <p className="mt-1 text-[11px] text-bull-text-faint">{PIT.rule}</p>
           </>
         )}
       </section>
 
       {/* ─── STEP 2 ─────────────────────────────────────────────── */}
       <section className="rounded border border-bull-border bg-bull-panel p-4">
-        <StepHeading n={2} title="send them in" done={moneyReady && step1Done} />
+        <StepHeading n={2} title="send them in" done={pitReady && moneyReady && step1Done} />
 
         <p className="mt-2 text-sm text-bull-text-dim">
           {challenger ? (
@@ -426,6 +486,17 @@ export function DuelPicker() {
             </>
           )}
         </p>
+
+        {/* ─── LEG ONE: THE BULL PIT ────────────────────────────────
+            The on-chain roster. `Duel` refuses a fight naming a bull that is
+            not in it, so this is not a preference panel — it is the gate. The
+            eject side of it is deliberately DELAYED and says so in words; see
+            `PitPanel` and `Yards.sol`'s anti-dodge section. */}
+        {account && roster.mine.length > 0 && (
+          <div className="mt-4 border-t border-bull-border pt-4">
+            <PitPanel bulls={roster.mine} onChanged={pit.refetch} />
+          </div>
+        )}
 
         <p className="mt-3 text-sm text-bull-text-dim">
           {lossesToDie !== undefined ? Number(lossesToDie) : 'five'} losses in a row, no win and
@@ -454,10 +525,22 @@ export function DuelPicker() {
               disabled={bnbullCost === undefined || bnbullCost === 0n}
               disabledTitle={CURRENCY.bnbullPending}
             />
+            {/* ⚠ "both" IS A MATCHMAKING PREFERENCE, NOT A SPLIT PAYMENT, AND IT
+                CANNOT BE ONE. `Duel.DuelResult` carries exactly one asset per
+                side (`assetA`/`assetB`) and `_takeSide` pulls ONE asset from ONE
+                owner, so "half in each" is not expressible in the struct that
+                gets signed. It would be a contract change, not a button.
+
+                This replaced "whatever i can pay", which was the `AUTO` selector.
+                AUTO did not just guess, it FAILED SILENTLY: `run-duel`'s
+                `resolveSide` hit a side that could not pay and simply
+                `continue`d, so the bull was never matched and the player had no
+                way to find out why. Every currency that cannot be used now
+                reports a named blocker instead. */}
             <PayTab
-              label="whatever i can pay"
-              active={myAsset === 'AUTO'}
-              onClick={() => setMyAsset('AUTO')}
+              label="both"
+              active={myAsset === 'BOTH'}
+              onClick={() => setMyAsset('BOTH')}
             />
           </div>
         </div>
@@ -468,10 +551,9 @@ export function DuelPicker() {
             msg.sender`, so it covers YOUR side on a fight YOU submit and
             nothing else. When somebody else picks one of your bulls you are
             the passive side and settlement needs a WBNB allowance or it
-            reverts `StakeNotApproved` — and `/api/run-duel` skips such a side
-            silently on AUTO, so the bulls simply never get matched. Telling a
-            player "bnb needs no approval" is what makes that unfixable from
-            their side of the screen. */}
+            reverts `StakeNotApproved`. `/api/run-duel` used to skip such a side
+            silently; it now says so. Telling a player "bnb needs no approval"
+            is still what makes that unfixable from their side of the screen. */}
         <div className="mt-5 border-t border-bull-border pt-4">
           <p className="font-mono text-[11px] uppercase tracking-wide text-bull-text-faint">
             how many fights your pack is allowed
@@ -896,6 +978,8 @@ function FighterDropdown({
   ticked,
   currentId,
   settledIds,
+  inPit,
+  matchable,
   open,
   onOpenChange,
   onToggle,
@@ -905,6 +989,11 @@ function FighterDropdown({
   ticked: readonly number[];
   currentId: number | null;
   settledIds: readonly number[];
+  /** In the yards right now, countdown or not. */
+  inPit: ReadonlySet<number>;
+  /** In the yards AND not leaving. `null` until the reads land — a row must
+   *  not be branded "out" off a read that has not answered. */
+  matchable: ReadonlySet<number> | null;
   open: boolean;
   onOpenChange: (v: boolean) => void;
   onToggle: (id: number) => void;
@@ -953,12 +1042,24 @@ function FighterDropdown({
           className="absolute left-0 right-0 z-20 mt-1 max-h-80 overflow-y-auto rounded border border-bull-gold/50 bg-bull-bg shadow-lg"
         >
           <p className="border-b border-bull-border px-3 py-2 text-[11px] text-bull-text-faint">
-            tick to send a bull into the yards · click a name to make it the one that fights next
+            {PIT.pickerHint}
           </p>
           {bulls.map((b) => {
             const isNext = b.id === currentId;
             const isTicked = ticked.includes(b.id);
             const isSettled = settledIds.includes(b.id);
+            // ⚠ THREE-VALUED ON PURPOSE. `null` while the pit reads are in
+            // flight, so a row never says "out of the pit" off a read that has
+            // not answered — that would send somebody to enter a bull that is
+            // already in.
+            const pitState: 'in' | 'leaving' | 'out' | null =
+              matchable === null
+                ? null
+                : matchable.has(b.id)
+                  ? 'in'
+                  : inPit.has(b.id)
+                    ? 'leaving'
+                    : 'out';
             return (
               <div
                 key={b.id}
@@ -983,6 +1084,15 @@ function FighterDropdown({
                     {b.wins}w / {b.losses}l / {b.ties}t
                   </span>
                 </button>
+                {pitState !== null && pitState !== 'in' && (
+                  <span
+                    className={`shrink-0 font-mono text-[10px] ${
+                      pitState === 'leaving' ? 'text-bull-gold' : 'text-bull-red'
+                    }`}
+                  >
+                    {pitState === 'leaving' ? PIT.leavingLabel : PIT.outLabel}
+                  </span>
+                )}
                 <span
                   className={`shrink-0 rounded-full px-2 py-0.5 font-mono text-[10px] ${
                     isNext

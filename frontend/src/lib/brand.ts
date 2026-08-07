@@ -60,10 +60,15 @@ export const HERO_LINE =
 export const TAGLINE = 'pixel bull pvp on bnb chain. real money in the middle.';
 
 /** The one-liner that goes in <meta description>, the footer, and the og card.
- *  Kept to one sentence on purpose. */
+ *  Kept to one sentence on purpose.
+ *
+ *  ⚠ NO "nobody can withdraw from". That was the retired trust-story pitch and
+ *  it survived here, in the footer of every page, after the owner ordered the
+ *  angle dead (2026-08-07: "drop all the crap about nobody can withdraw from
+ *  it"). Sell the climb: the pots stack until somebody rolls the number. */
 export const DESCRIPTION =
-  'bnbulls: mint a bull, fight for real money, and every mint fattens two pots ' +
-  'nobody can withdraw from. permadeath pixel pvp on bnb chain. 🐂⚔️';
+  'bnbulls: mint a bull, fight for real money, and every fight rolls two jackpots ' +
+  'that stack until somebody hits. permadeath pixel pvp on bnb chain. 🐂⚔️';
 
 // ─── emoji (VOICE-AND-BRAND §3) · never stacked ──────────────────────
 

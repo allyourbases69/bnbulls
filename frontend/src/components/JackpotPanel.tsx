@@ -55,7 +55,44 @@ export function JackpotPanel({ pot, compact = false, className = '' }: JackpotPa
   // is still in flight — an empty string there is deliberate.
   const symbol = potSymbol(read, meta.symbolFallback);
 
-  if (!read.configured) return null;
+  /**
+   * PRE-LAUNCH: the real panel, at zero — never `null`.
+   *
+   * Owner, 2026-08-07: "on the prod site the BNBULL and BNB pots can be shown
+   * but just cosmetically show them at $0 so people can see." Returning null
+   * here left the production homepage with no pots at all. The zero is TRUE
+   * (nothing exists to hold a balance), the odds come from `POTS` (the same
+   * place /pots' pre-launch card reads), and the moment an address is
+   * configured this branch is dead and everything below reads live.
+   */
+  if (!read.configured) {
+    return (
+      <div
+        className={`pot-card bull-card ${pot === 'bnbull' ? 'pot-bnbull' : 'pot-bnb'} rounded p-4 ${className}`}
+      >
+        <div className="flex items-baseline justify-between gap-2">
+          <p className="bull-header text-xs uppercase tracking-[0.18em] text-bull-text-dim">
+            {meta.label}
+          </p>
+          <span className="pot-chip font-mono text-[10px] uppercase tracking-wide">
+            {meta.odds}
+          </span>
+        </div>
+        <div className="pot-plate mt-3 p-3">
+          <p className="font-mono text-[10px] uppercase tracking-wider text-bull-text-faint">
+            next winner takes
+          </p>
+          <p className="pot-figure bull-header mt-1">
+            0 <span className="text-base font-normal">{meta.symbolFallback}</span>
+          </p>
+        </div>
+        <p className="mt-3 text-[11px] text-bull-text-faint">
+          starts filling on fight one. every mint, every scrap and every revive drops more
+          in, and it sits there stacking until somebody rolls the number.
+        </p>
+      </div>
+    );
+  }
 
   // The bar. `pendingPayout / pool` as a percentage, clamped, and simply
   // absent while either half is unknown — a bar drawn off a guess is worse

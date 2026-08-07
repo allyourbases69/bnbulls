@@ -95,19 +95,33 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
  *          already-signed fight naming it still settles, exactly as if nothing
  *          had happened.
  *
- *      `MIN_EJECT_DELAY` is 15 minutes and that number is not a taste: it is
+ *      `MIN_EJECT_DELAY` is 5 minutes and that number is not a taste: it is
  *      `MAX_DUEL_EXPIRY_SECONDS` from `frontend/src/lib/serverEnv.ts`, the hard
  *      ceiling on how long the signer is allowed to make a duel signature live
  *      (the launch default there is 180 seconds). So by the time an eject
  *      bites, EVERY signature that could possibly name that bull has already
  *      expired. A dodge is not merely discouraged, it is arithmetically
- *      impossible — while a genuine eject still completes inside a quarter of
- *      an hour.
+ *      impossible — while a genuine eject still completes inside five minutes.
+ *
+ *      ⚠ WHY THIS IS 5 MINUTES AND NOT THE 15 IT LAUNCHED AT. Both numbers
+ *      satisfied the safety property; 15 was simply the wrong one to pick. The
+ *      floor only has to outlive the LONGEST signature the signer may ever
+ *      issue, and that ceiling was 900s while the value actually in use —
+ *      `DEFAULT_DUEL_EXPIRY_SECONDS` — has always been 180s. So the delay was
+ *      sized against a worst case nobody runs, and every honest player paid 15
+ *      minutes for a 3-minute risk. Lowering the CEILING to 300 and the floor
+ *      with it keeps the identical guarantee (a signature still cannot outlive
+ *      an eject) at a fifth of the cost to the player. The margin over the
+ *      180s default is still 120 seconds.
  *
  *      ⚠ IF THAT TTL CEILING IS EVER RAISED, RAISE `ejectDelay` FIRST. The two
  *      numbers are one safety property split across two repositories; the
  *      constant floor here is what stops the owner-settable value drifting
- *      under it.
+ *      under it. `DuelYards.t.sol` now READS `serverEnv.ts` and fails if the
+ *      two ever disagree, so the pair can no longer drift silently — but the
+ *      ORDER still matters on a live system: raise the floor (which means a
+ *      redeploy of this contract, it is a `constant`) and get it wired BEFORE
+ *      the signer starts issuing longer-lived signatures.
  *
  *      The other half is off chain and needs no delay: the signer reads this
  *      contract before it quotes, so a bull with a pending eject is unmatchable
@@ -222,7 +236,7 @@ contract Yards is Ownable {
      * @notice Floor on the eject delay. **THIS IS THE ANTI-DODGE BOUND** and
      *         it is the one number in this contract the owner may not move.
      *
-     * @dev 15 minutes == `MAX_DUEL_EXPIRY_SECONDS` (900) in
+     * @dev 5 minutes == `MAX_DUEL_EXPIRY_SECONDS` (300) in
      *      `frontend/src/lib/serverEnv.ts`, the hard ceiling on how long the
      *      signer may make a duel signature live. Any eject delay at or above
      *      that outlives every signature that could name the bull, so a pending
@@ -230,15 +244,23 @@ contract Yards is Ownable {
      *      lands, then the bull leaves. Set it below and "eject" becomes
      *      "cancel the fight I am losing", which is worth more than the bull.
      *
+     *      ⚠ THESE TWO NUMBERS MOVE TOGETHER OR NOT AT ALL. They are one
+     *      safety property that happens to be spelled in two languages, in two
+     *      repositories, and no compiler checks across that seam.
+     *      `test_theEjectFloorMatchesTheSignersSignatureCeiling` closes it by
+     *      reading the TypeScript source from Solidity at test time.
+     *
      *      ⚠ The linter flags `block.timestamp` comparisons as
      *      validator-manipulable, and here that is answered rather than
      *      suppressed: a BSC validator can nudge a timestamp by seconds, and
-     *      the margin this bound has to survive is FIFTEEN MINUTES. Nothing a
-     *      block producer can do to the clock moves a departure across that
-     *      gap, and the same reasoning is why `Duel`'s own `expiry` check has
-     *      always carried the identical warning without a mitigation.
+     *      the margin this bound has to survive is FIVE MINUTES. That is still
+     *      four orders of magnitude more than the couple of seconds a block
+     *      producer can shift, so the conclusion is unchanged by the retune —
+     *      nothing they can do to the clock moves a departure across that gap.
+     *      The same reasoning is why `Duel`'s own `expiry` check has always
+     *      carried the identical warning without a mitigation.
      */
-    uint64 public constant MIN_EJECT_DELAY = 15 minutes;
+    uint64 public constant MIN_EJECT_DELAY = 5 minutes;
 
     /**
      * @notice Ceiling on the eject delay.
@@ -276,7 +298,11 @@ contract Yards is Ownable {
     /// @notice How long an eject takes to bite. A player-facing number, so a
     ///         bounded owner setter rather than a constant — but bounded BELOW
     ///         by the anti-dodge floor, which is the part that is not policy.
-    uint64 public ejectDelay = 15 minutes;
+    /// @dev Launches AT the floor deliberately. The floor is already the
+    ///      smallest value the safety property permits, so any larger default
+    ///      would just be a tax on the player with nothing bought for it; the
+    ///      setter exists to go UP if the signer's TTL ceiling ever rises.
+    uint64 public ejectDelay = 5 minutes;
 
     // ─── Socials (DECISIONS §5) ──────────────────────────────────────────
 

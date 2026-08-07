@@ -16,6 +16,7 @@ import { useWrongNetwork } from '@/lib/hooks/useWrongNetwork';
 import { WrongNetworkNotice } from '@/components/shared/WrongNetwork';
 import { RevertNotice } from '@/components/shared/RevertNotice';
 import { NotDeployed } from '@/components/shared/NotDeployed';
+import { PitRoster } from '@/components/pit/PitRoster';
 
 /**
  * WHO OF YOURS IS IN THE BULL PIT, AND THE TWO BUTTONS THAT MOVE THEM.
@@ -166,6 +167,18 @@ export function PitPanel({
           />
         ))}
       </ul>
+
+      {/* ── AND WHO ELSE IS IN THERE ──────────────────────────────
+          The panel above is the two buttons; this is the field they put a
+          bull into. It reads its OWN membership live off `inYardsMany` rather
+          than inferring one from the rows above, because those rows only
+          cover this wallet and the pit is everybody's.
+
+          ⚠ IT DOES NOT CACHE, AND THAT IS THE BUG THIS FIXES. A sale voids a
+          pit spot silently — no event, no ERC-721 hook — so a roster built
+          once and kept will happily offer a fight that cannot settle. See
+          `PitRoster` for the full argument. */}
+      <PitRoster className="mt-5 border-t border-bull-border pt-4" />
 
       {/* ── THE RULES, IN THE ORDER THEY BITE ─────────────────────── */}
       <div className="mt-3 space-y-1.5 text-[11px] text-bull-text-faint">

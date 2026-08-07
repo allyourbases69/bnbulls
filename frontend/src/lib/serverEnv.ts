@@ -39,7 +39,27 @@ import { CHAIN_ID, contractAddress, rpcUrls } from './env';
  */
 export const DEFAULT_DUEL_EXPIRY_SECONDS = 180;
 export const MIN_DUEL_EXPIRY_SECONDS = 30;
-export const MAX_DUEL_EXPIRY_SECONDS = 900;
+/**
+ * ⚠ THIS NUMBER IS HALF OF AN ON-CHAIN SAFETY PROPERTY. DO NOT RAISE IT ALONE.
+ *
+ * `Yards.MIN_EJECT_DELAY` — the floor on how long taking a bull out of the
+ * yards takes to bite — is pinned to exactly this value, because an eject that
+ * bit SOONER than a signature can expire would let a player cancel a fight they
+ * could already see themselves losing in the mempool. The invariant is
+ * `Yards.MIN_EJECT_DELAY >= MAX_DUEL_EXPIRY_SECONDS`, always.
+ *
+ * `MIN_EJECT_DELAY` is a Solidity `constant`, so raising this number is not a
+ * config change — it requires REDEPLOYING AND REWIRING `Yards`, and the wire
+ * into `Duel` is timelocked (24h). Raise the floor and get it live FIRST, then
+ * raise this. `test/DuelYards.t.sol` reads this file and fails if the two
+ * disagree, so `forge test` is the thing that catches the mistake.
+ *
+ * Was 900 at launch. Lowered to 300 with the matching `Yards` redeploy: the
+ * ceiling was sized for a worst case nobody runs (the value actually in use is
+ * the 180s default above), and the eject delay it forced was 5x longer than the
+ * safety property needed.
+ */
+export const MAX_DUEL_EXPIRY_SECONDS = 300;
 
 export function duelExpirySeconds(): number {
   const raw = process.env.DUEL_SIGNATURE_TTL_SECONDS?.trim();

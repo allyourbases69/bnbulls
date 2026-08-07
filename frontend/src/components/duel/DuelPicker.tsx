@@ -116,10 +116,22 @@ export function DuelPicker() {
   const [settled, setSettled] = useState<number[]>([]);
   const [rerolls, setRerolls] = useState(0);
   const [myAsset, setMyAsset] = useState<PayAsset>('BNB');
-  // One picked count PER CURRENCY — the allowances are separate on chain, so
-  // the controls are separate here.
-  const [approveFightsBnb, setApproveFightsBnb] = useState<number>(5);
-  const [approveFightsBnbull, setApproveFightsBnbull] = useState<number>(5);
+  /**
+   * ⚠ ONE COUNT FOR THE WHOLE PAGE. Owner, 2026-08-07: *"they just need to say
+   * how many fights they are keen for."*
+   *
+   * It used to be one picked count per currency, on the reasoning that the two
+   * allowances are separate on chain. They are, but the QUESTION is not: "how
+   * many fights am i up for" has one answer, and asking it twice is how a
+   * player ended up signing an approve for bnb and then another for bnbull
+   * before a single fight had happened. One number, applied to whichever
+   * currency is actually being approved, and it sizes the approve that
+   * `FightAction` would otherwise have to top up mid-fight.
+   *
+   * Ten by default: the approve is the leg people trip on, so it is bought
+   * down once and every fight after it is a single confirm.
+   */
+  const [fightsWanted, setFightsWanted] = useState<number>(10);
   const [open, setOpen] = useState(false);
   const autoPicked = useRef(false);
 
@@ -265,14 +277,25 @@ export function DuelPicker() {
     wbnbAddr as `0x${string}` | undefined,
     duelAddress ?? undefined,
     wbnbCost,
-    approveFightsBnb,
+    fightsWanted,
   );
   const bnbullAllowance = useFightAllowance(
     bnbullAddr as `0x${string}` | undefined,
     duelAddress ?? undefined,
     bnbullCost,
-    approveFightsBnbull,
+    fightsWanted,
   );
+
+  /**
+   * THE ONE CURRENCY THIS PLAYER IS ASKED TO SIGN FOR.
+   *
+   * `BOTH` lands on bnb because that is what `/api/run-duel` resolves it to
+   * first (`DECISIONS.md §29`, and `§39` deleted the fight discount that used
+   * to make bnbull worth trying first), so the primary approval matches the
+   * currency the fight will actually settle in. The other one is still
+   * reachable, one disclosure down, and nothing on the page requires it.
+   */
+  const primaryIsBnbull = myAsset === 'BNBULL';
 
   // ── matchmaking ──────────────────────────────────────────────────
   //
@@ -545,57 +568,108 @@ export function DuelPicker() {
           </div>
         </div>
 
-        {/* ─── HOW MANY FIGHTS THE PACK IS ALLOWED ────────────────
-            ⚠ BOTH CURRENCIES GET ONE, INCLUDING BNB. `Duel._takeSide` only
-            lets raw `msg.value` cover a WBNB stake when `owner_ ==
-            msg.sender`, so it covers YOUR side on a fight YOU submit and
-            nothing else. When somebody else picks one of your bulls you are
-            the passive side and settlement needs a WBNB allowance or it
-            reverts `StakeNotApproved`. `/api/run-duel` used to skip such a side
-            silently; it now says so. Telling a player "bnb needs no approval"
-            is still what makes that unfixable from their side of the screen. */}
+        {/* ─── HOW MANY FIGHTS ARE YOU UP FOR ─────────────────────
+            ⚠ ONE APPROVAL, IN THE CURRENCY YOU PICKED. This block used to
+            render TWO live approve buttons side by side, one per currency, and
+            the owner signed both before his first fight. It is one now, sized
+            by the count below, and the second currency is a disclosure.
+
+            ⚠ WHAT AN ALLOWANCE IS ACTUALLY FOR, BECAUSE IT IS NOT REDUNDANT.
+            `Duel._takeSide` only lets raw `msg.value` cover a WBNB stake when
+            `owner_ == msg.sender`, so it covers YOUR side on a fight YOU
+            submit and nothing else. When somebody else picks one of your bulls
+            you are the PASSIVE side and settlement needs a WBNB allowance or it
+            reverts `StakeNotApproved` — native bnb cannot be pulled out of your
+            wallet by another player's transaction. So this is what lets your
+            herd be challenged while you are offline. Deleting it would quietly
+            make everybody's bulls unpickable, which is exactly how
+            `/api/run-duel`'s old silent skip felt from the player's side. */}
         <div className="mt-5 border-t border-bull-border pt-4">
           <p className="font-mono text-[11px] uppercase tracking-wide text-bull-text-faint">
-            how many fights your pack is allowed
+            how many fights are you up for
           </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {APPROVE_FIGHT_OPTIONS.map((n) => (
+              <PayTab
+                key={n}
+                label={`${n} fight${n === 1 ? '' : 's'}`}
+                active={fightsWanted === n}
+                onClick={() => setFightsWanted(n)}
+              />
+            ))}
+          </div>
           <p className="mt-2 text-sm text-bull-text-dim">
-            approvals are per wallet and per currency: one covers every bull you send in, and
-            each duel takes one fight&apos;s worth. you stop when the approval or the balance
-            runs dry, or when a bull dies.
+            one signature, sized for that many. the chain remembers it, so every fight after it
+            is a single confirm until the run is used up. each duel takes one fight&apos;s worth,
+            and you stop when the approval or the balance runs dry, or when a bull dies.
           </p>
 
-          <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            <AllowanceBlock
-              label="bnb"
-              tokenLabel="wbnb"
-              allowance={bnbAllowance}
-              decimals={wbnbDecimals}
-              fights={approveFightsBnb}
-              setFights={setApproveFightsBnb}
-              packSize={pending.length}
-              unavailableNote="no bnb fight cost is registered on the duel contract yet."
-            />
-            <AllowanceBlock
-              label="bnbull"
-              tokenLabel="bnbull"
-              allowance={bnbullAllowance}
-              decimals={bnbullDecimals}
-              fights={approveFightsBnbull}
-              setFights={setApproveFightsBnbull}
-              packSize={pending.length}
-              unavailableNote={CURRENCY.bnbullPending}
-            />
+          <div className="mt-3">
+            {primaryIsBnbull ? (
+              <AllowanceRow
+                label="bnbull"
+                tokenLabel="bnbull"
+                allowance={bnbullAllowance}
+                decimals={bnbullDecimals}
+                fights={fightsWanted}
+                packSize={pending.length}
+                nativeSelfPay={false}
+                unavailableNote={CURRENCY.bnbullPending}
+              />
+            ) : (
+              <AllowanceRow
+                label="bnb"
+                tokenLabel="wbnb"
+                allowance={bnbAllowance}
+                decimals={wbnbDecimals}
+                fights={fightsWanted}
+                packSize={pending.length}
+                nativeSelfPay
+                unavailableNote="no bnb fight cost is registered on the duel contract yet."
+              />
+            )}
           </div>
+
+          <details className="mt-3">
+            <summary className="cursor-pointer font-mono text-[11px] uppercase tracking-wide text-bull-text-faint">
+              also let people challenge you in {primaryIsBnbull ? 'bnb' : 'bnbull'}
+            </summary>
+            <p className="mt-2 text-[11px] text-bull-text-faint">
+              you do not need this to fight. it only widens which currency somebody else can
+              pick your bulls in, and it is a second signature, so it is down here rather than
+              in front of you.
+            </p>
+            <div className="mt-2">
+              {primaryIsBnbull ? (
+                <AllowanceRow
+                  label="bnb"
+                  tokenLabel="wbnb"
+                  allowance={bnbAllowance}
+                  decimals={wbnbDecimals}
+                  fights={fightsWanted}
+                  packSize={pending.length}
+                  nativeSelfPay
+                  unavailableNote="no bnb fight cost is registered on the duel contract yet."
+                />
+              ) : (
+                <AllowanceRow
+                  label="bnbull"
+                  tokenLabel="bnbull"
+                  allowance={bnbullAllowance}
+                  decimals={bnbullDecimals}
+                  fights={fightsWanted}
+                  packSize={pending.length}
+                  nativeSelfPay={false}
+                  unavailableNote={CURRENCY.bnbullPending}
+                />
+              )}
+            </div>
+          </details>
 
           <p className="mt-3 text-[11px] text-bull-text-faint">
             it is one shared pool, not a budget per bull. send ten in and allow one fight, and
-            the first fight by any one of them uses the lot — the other nine cannot fight until
-            you top it up.
-          </p>
-          <p className="mt-1 text-[11px] text-bull-text-faint">
-            paying for your OWN fight in bnb still needs no approval: the amount rides with the
-            transaction and the contract wraps exactly what is owed and refunds the rest. the
-            allowance above is what lets somebody else pick your bulls.
+            the first fight by any one of them uses the lot, and the other nine cannot fight
+            until you top it up.
           </p>
         </div>
 
@@ -727,7 +801,11 @@ export function DuelPicker() {
             oppTokenId={opponent?.id ?? null}
             blockedReason={blockedReason}
             myAsset={myAsset}
-            approveFights={Math.max(1, pending.length)}
+            // ⚠ THE SAME COUNT THE PLAYER PICKED, not the queue length. If the
+            // fight in front of them ever does need a top-up (the oracle moved
+            // between the standing approval and the quote), it is sized for the
+            // whole run so it is asked ONCE, not once per fight.
+            approveFights={fightsWanted}
             onSettled={onSettled}
           />
         </div>
@@ -772,7 +850,13 @@ export function DuelPicker() {
 
 /**
  * One currency's standing allowance: how many fights the WHOLE PACK is still
- * allowed in it, the approve control, and the revoke.
+ * allowed in it, ONE approve control sized by the count above, and the revoke.
+ *
+ * ⚠ THE APPROVE BUTTON DISAPPEARS ONCE THE CHAIN COVERS THE RUN. That is the
+ * owner's actual request ("sign ONCE and onchain will remember"), and a button
+ * that stayed up would be inviting a second signature for permission that is
+ * already recorded. `covers` is computed off the live allowance read, and an
+ * unread allowance is deliberately NOT treated as covered.
  *
  * ⚠ THE COUNT IS LIMITED BY BALANCE AS WELL AS BY APPROVAL, because
  * `Duel._takeSide` checks both before it will pull a passive stake
@@ -781,28 +865,37 @@ export function DuelPicker() {
  * would be exactly the kind of confident wrong number this page exists to
  * avoid. When the balance is the binding constraint it says so, because
  * approving more would change nothing.
+ *
+ * ⚠ `nativeSelfPay` IS NOT COSMETIC. On the bnb leg a short allowance does NOT
+ * stop you fighting: your own side rides in as `msg.value`. It stops OTHER
+ * people picking your bulls. On the bnbull leg it stops both. Saying "N of them
+ * cannot fight" on the bnb row would be false, and false in the direction that
+ * makes somebody sign a transaction they did not need.
  */
-function AllowanceBlock({
+function AllowanceRow({
   label,
   tokenLabel,
   allowance,
   decimals,
   fights,
-  setFights,
   packSize,
+  nativeSelfPay,
   unavailableNote,
 }: {
   label: string;
   tokenLabel: string;
   allowance: FightAllowance;
   decimals: number | undefined;
+  /** The one page-wide "how many fights are you up for" count. */
   fights: number;
-  setFights: (n: number) => void;
   /** Bulls currently ticked and still to fight. */
   packSize: number;
+  /** Can this currency cover YOUR OWN side with raw bnb and no allowance? */
+  nativeSelfPay: boolean;
   unavailableNote: string;
 }) {
-  const { configured, fightsAllowed, limitedByBalance, approvalTotal, isApproving } = allowance;
+  const { configured, fightsAllowed, limitedByBalance, approvalTotal, isApproving, covers, hasAny } =
+    allowance;
 
   if (!configured) {
     return (
@@ -814,14 +907,14 @@ function AllowanceBlock({
   }
 
   // ⚠ THE WARNING THE OWNER ASKED FOR BY NAME: "10 bulls in, 1 fight
-  // approved" means nine of them cannot fight, and nothing else on the page
-  // would ever tell you that.
+  // approved" means nine of them cannot be drawn into a fight, and nothing
+  // else on the page would ever tell you that.
   const short = packSize > 0 && fightsAllowed < packSize;
 
   return (
     <div
       className={`rounded border bg-bull-bg p-3 ${
-        fightsAllowed > 0 ? 'border-bull-border' : 'border-bull-gold/40'
+        covers ? 'border-bull-gold/40' : 'border-bull-border'
       }`}
     >
       <p className="flex flex-wrap items-center justify-between gap-2 font-mono text-xs">
@@ -832,7 +925,7 @@ function AllowanceBlock({
         ) : (
           <span className="text-bull-text-faint">{label}: no fights allowed yet</span>
         )}
-        {(allowance.allowance ?? 0n) > 0n && (
+        {hasAny && (
           <button
             type="button"
             onClick={async () => {
@@ -853,45 +946,51 @@ function AllowanceBlock({
         </p>
       )}
 
-      {short && (
-        <p className="mt-1.5 text-[11px] text-bull-red">
-          {packSize} bull{packSize === 1 ? '' : 's'} sent in but only {fightsAllowed} fight
-          {fightsAllowed === 1 ? '' : 's'} allowed in {label}, so{' '}
-          {packSize - fightsAllowed} of them cannot fight in it until you top this up.
+      {short &&
+        (nativeSelfPay ? (
+          <p className="mt-1.5 text-[11px] text-bull-text-faint">
+            {packSize} bull{packSize === 1 ? '' : 's'} in, {fightsAllowed} covered by this
+            approval. you can still start fights yourself in bnb, the amount rides with the
+            transaction. this is what lets somebody else pick the other{' '}
+            {packSize - fightsAllowed}.
+          </p>
+        ) : (
+          <p className="mt-1.5 text-[11px] text-bull-red">
+            {packSize} bull{packSize === 1 ? '' : 's'} sent in but only {fightsAllowed} fight
+            {fightsAllowed === 1 ? '' : 's'} allowed in {label}, so {packSize - fightsAllowed} of
+            them cannot fight in it until you top this up.
+          </p>
+        ))}
+
+      {covers ? (
+        <p className="mt-2 text-[11px] text-bull-text-faint">
+          signed and remembered by the chain. nothing more to approve in {label} until this run
+          is spent.
         </p>
+      ) : (
+        <button
+          type="button"
+          onClick={async () => {
+            await allowance.approve();
+            allowance.refetch();
+          }}
+          disabled={isApproving || approvalTotal === undefined}
+          className="mt-2 w-full rounded-full border border-bull-gold px-3 py-1.5 text-xs font-medium text-bull-gold disabled:opacity-40"
+        >
+          {isApproving
+            ? 'approving…'
+            : `approve ${fights} fight${fights === 1 ? '' : 's'} · ${
+                approvalTotal !== undefined ? formatToken(approvalTotal, decimals) : '—'
+              } ${tokenLabel}`}
+        </button>
       )}
 
-      <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
-        <span className="text-bull-text-dim">allow</span>
-        <select
-          value={fights}
-          onChange={(e) => setFights(Number(e.target.value))}
-          className="rounded border border-bull-border bg-bull-panel px-2 py-1 font-mono text-sm"
-        >
-          {APPROVE_FIGHT_OPTIONS.map((n) => (
-            <option key={n} value={n}>
-              {n} fight{n === 1 ? '' : 's'}
-            </option>
-          ))}
-        </select>
-        <span className="font-mono text-xs text-bull-gold">
-          = {approvalTotal !== undefined ? formatToken(approvalTotal, decimals) : '—'} {tokenLabel}
-        </span>
-      </div>
-
-      <button
-        type="button"
-        onClick={async () => {
-          await allowance.approve();
-          allowance.refetch();
-        }}
-        disabled={isApproving || approvalTotal === undefined}
-        className="mt-2 w-full rounded-full border border-bull-gold px-3 py-1.5 text-xs font-medium text-bull-gold disabled:opacity-40"
-      >
-        {isApproving ? 'approving…' : `approve ${fights} fight${fights === 1 ? '' : 's'} of ${tokenLabel}`}
-      </button>
-
       <p className="mt-1.5 text-[11px] text-bull-text-faint">
+        {nativeSelfPay
+          ? 'paying for your own fight in bnb never needs this: the amount rides with the transaction and the contract wraps what is owed and refunds the rest. only the wallet sending a transaction can put raw bnb in with it, so this is the bit that lets anyone else pick your bulls.'
+          : 'this covers your own side and lets somebody else pick your bulls, because bnbull can only ever move by allowance.'}
+      </p>
+      <p className="mt-1 text-[11px] text-bull-text-faint">
         revoking sets it to zero for the whole wallet, so it pulls every bull you have sent in
         out of {label} at once.
       </p>

@@ -36,7 +36,15 @@ contract DuelYardsTest is DuelGraveyardBase {
 
     /// @notice `MAX_DUEL_EXPIRY_SECONDS` in `frontend/src/lib/serverEnv.ts`.
     ///         The eject floor is pinned to it — see the test at the bottom.
-    uint64 internal constant SIGNER_MAX_TTL_SECONDS = 900;
+    /// @dev ⚠ This is a MIRROR, not the source of truth, and a mirror is
+    ///      exactly how the two halves would drift apart. So the test does not
+    ///      trust it: it reads the real declaration out of the TypeScript and
+    ///      checks this number against it too.
+    uint64 internal constant SIGNER_MAX_TTL_SECONDS = 300;
+
+    /// @notice The other half of the safety property, in another language, in
+    ///         another repository. `foundry.toml` grants read access to `./`.
+    string internal constant SERVER_ENV_PATH = "frontend/src/lib/serverEnv.ts";
 
     function setUp() public override {
         super.setUp();
@@ -231,7 +239,7 @@ contract DuelYardsTest is DuelGraveyardBase {
 
     /// @dev The same signature, one second past the departure. The gate is
     ///      absolute once it bites — note the harness signs a ONE HOUR expiry,
-    ///      far longer than the signer's 900-second ceiling, so this proves the
+    ///      far longer than the signer's 300-second ceiling, so this proves the
     ///      on-chain refusal rather than relying on expiry to do the work.
     function test_theEjectBitesOnceTheDelayElapses() public {
         _bothIn();
@@ -249,23 +257,91 @@ contract DuelYardsTest is DuelGraveyardBase {
 
     /**
      * @dev THE NUMBER THAT MAKES THE DODGE IMPOSSIBLE RATHER THAN MERELY
-     *      AWKWARD, pinned. `MIN_EJECT_DELAY` is the signer's
-     *      `MAX_DUEL_EXPIRY_SECONDS`, so no signature can outlive an eject
-     *      request. If that TTL ceiling is ever raised in `serverEnv.ts`, this
-     *      test is what fails.
+     *      AWKWARD, pinned — and pinned against the ACTUAL TypeScript, not
+     *      against a copy of it kept in this file.
+     *
+     *      ⚠ WHY THIS TEST READS A `.ts` FILE FROM SOLIDITY. The safety
+     *      property is `Yards.MIN_EJECT_DELAY >= MAX_DUEL_EXPIRY_SECONDS`, and
+     *      those two numbers live in different languages in different
+     *      repositories with no compiler, type system or import between them.
+     *      Nothing but a human noticing stood between "raise the signer's TTL
+     *      ceiling" and a silently duckable eject — at which point a losing
+     *      player front-runs the settlement out of the public mempool and the
+     *      loss evaporates. A mirrored constant here would NOT have closed
+     *      that: whoever raised the ceiling would have had no reason to open
+     *      this file. Reading the real declaration is what makes `forge test`
+     *      fail on a change made entirely inside the frontend.
      */
     function test_theEjectFloorMatchesTheSignersSignatureCeiling() public view {
+        uint64 ceiling = _serverEnvMaxDuelExpiry();
+
+        // ── THE SAFETY PROPERTY. Never relax this one. ──────────────────
+        assertGe(
+            yards.MIN_EJECT_DELAY(),
+            ceiling,
+            "serverEnv.ts raised MAX_DUEL_EXPIRY_SECONDS above the eject floor: "
+            "a signed loss can now outlive an eject, so the eject cancels the fight. "
+            "Redeploy + rewire Yards with a higher MIN_EJECT_DELAY BEFORE raising the TTL."
+        );
+
+        // ── Tidiness, not safety: they are meant to be the SAME number. A
+        //    floor above the ceiling is safe but charges the player for
+        //    nothing, so it should still be deliberate. ───────────────────
         assertEq(
             yards.MIN_EJECT_DELAY(),
-            SIGNER_MAX_TTL_SECONDS,
-            "raise DUEL TTL and you must raise this floor with it"
+            ceiling,
+            "the floor and the TTL ceiling are meant to be equal - if you truly "
+            "want the floor higher, loosen THIS assert and keep the assertGe above"
         );
+        assertEq(SIGNER_MAX_TTL_SECONDS, ceiling, "the mirror in this file went stale");
         assertGe(yards.ejectDelay(), yards.MIN_EJECT_DELAY(), "the launch value clears the floor");
     }
 
+    /**
+     * @dev Pull `MAX_DUEL_EXPIRY_SECONDS` out of the TypeScript source.
+     *
+     *      Deliberately matches on `export const MAX_DUEL_EXPIRY_SECONDS = `
+     *      including the `export const`, so the many prose mentions of the name
+     *      in that file's comments cannot be mistaken for the declaration. If
+     *      the declaration is ever renamed, moved, or turned into an
+     *      expression, this reverts rather than quietly passing — a test that
+     *      cannot find its subject must fail, not shrug.
+     */
+    function _serverEnvMaxDuelExpiry() internal view returns (uint64 value) {
+        bytes memory src = bytes(vm.readFile(SERVER_ENV_PATH));
+        bytes memory needle = bytes("export const MAX_DUEL_EXPIRY_SECONDS = ");
+
+        uint256 at = type(uint256).max;
+        for (uint256 i; i + needle.length <= src.length; ++i) {
+            bool hit = true;
+            for (uint256 j; j < needle.length; ++j) {
+                if (src[i + j] != needle[j]) {
+                    hit = false;
+                    break;
+                }
+            }
+            if (hit) {
+                at = i + needle.length;
+                break;
+            }
+        }
+        require(at != type(uint256).max, "serverEnv.ts: MAX_DUEL_EXPIRY_SECONDS decl not found");
+
+        uint256 digits;
+        for (uint256 i = at; i < src.length; ++i) {
+            uint8 c = uint8(src[i]);
+            if (c < 0x30 || c > 0x39) break;
+            value = value * 10 + uint64(c - 0x30);
+            unchecked {
+                ++digits;
+            }
+        }
+        require(digits != 0, "serverEnv.ts: MAX_DUEL_EXPIRY_SECONDS is not a plain literal");
+    }
+
     function test_setEjectDelayIsBoundedBothWays() public {
-        vm.expectRevert(abi.encodeWithSelector(Yards.EjectDelayOutOfRange.selector, uint64(899)));
-        yards.setEjectDelay(899);
+        vm.expectRevert(abi.encodeWithSelector(Yards.EjectDelayOutOfRange.selector, uint64(299)));
+        yards.setEjectDelay(299);
 
         vm.expectRevert(
             abi.encodeWithSelector(Yards.EjectDelayOutOfRange.selector, uint64(24 hours + 1))

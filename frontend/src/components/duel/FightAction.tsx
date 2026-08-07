@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   useAccount,
   useReadContract,
@@ -23,19 +23,48 @@ import { CURRENCY } from '@/lib/brand';
 import { decodeRevert, type DecodedRevert } from '@/lib/revertDecode';
 
 /**
- * The fight button.
+ * The fight button. TWO PRESSES, and the second one is the wallet.
  *
- * Three steps, and they are deliberately visible rather than collapsed into one
- * "FIGHT" that does everything, because each one fails differently:
- *
- *   1. SIGN IN — one `personal_sign`, cached for a day. Not a transaction.
- *   2. ROLL — `POST /api/run-duel`. Returns a fully signed, submittable result
- *      with the winner already in it. Your wallet holds ONE of these at a time:
+ *   1. QUOTE — one press. Signs in if needed (`personal_sign`, cached for a
+ *      day, not a transaction) and `POST /api/run-duel`. Returns a fully
+ *      signed, submittable result. Your wallet holds ONE of these at a time:
  *      asking again gives the same fight back until it settles, which is what
  *      stops anyone rolling until they find a win and dropping the rest.
- *   3. SETTLE — `Duel.submitDuel(result, signature)` from your own wallet,
- *      preceded by an ERC-20 approval when the stake is not being paid in raw
- *      BNB.
+ *   2. FIGHT — one press, inside the arena gate. Opens the wallet, sends
+ *      `Duel.submitDuel(result, signature)`, and the fight plays across the
+ *      confirmation window.
+ *
+ * ═══════════════════════════════════════════════════════════════════════
+ * ⚠ THERE USED TO BE A THIRD SCREEN BETWEEN THEM. DO NOT PUT IT BACK.
+ * ═══════════════════════════════════════════════════════════════════════
+ * The quote used to land on a card with an "into the pit" button, which mounted
+ * the arena, which had its OWN "put it in and fight" button, which opened the
+ * wallet. Two presses for one decision. Owner, 2026-08-07: *"then into the pit
+ * (but it already says the outcome above it??) then put it into a fight and
+ * another approval."*
+ *
+ * The arena now mounts the moment the quote lands, gated, and the gate's button
+ * is the only thing that opens the wallet. ⚠ THAT GATE IS NOT DECORATION AND IT
+ * CANNOT BE AUTOMATED AWAY: a native wallet deep link only opens from inside a
+ * user-gesture callback, so firing the write from an effect does nothing at all
+ * on a phone. Exactly one gesture, and it has to be a real one.
+ *
+ * ═══════════════════════════════════════════════════════════════════════
+ * ⚠ THE OUTCOME IS NOT ON THE PRE-FIGHT CARD, AND THAT IS THE POINT.
+ * ═══════════════════════════════════════════════════════════════════════
+ * The card used to print "bull #6 wins · 5 rounds" in the step BEFORE the
+ * animation. The whole reason the fight plays live is so somebody can watch
+ * their bull win or die, and printing the winner above the arena hands them the
+ * ending first.
+ *
+ * ⚠ HIDDEN, NEVER DESTROYED. The signed result is the player's PROOF the fight
+ * was real and the signer did not lie, and this project's rule is that the seed
+ * is public so anyone can re-run it and catch a lying signer. So the winner,
+ * the rounds, the seed, the signature, the nonce and the tx all live in
+ * `FightProof` — a `details` disclosure that only exists AFTER the animation has
+ * played, the way fefers does it. What stays on the pre-fight card is only what
+ * a player needs before they sign: what they put in, in which currency, and how
+ * long the quote is good for.
  *
  * ⚠ THE COUNTDOWN IS NOT DECORATION. The signed struct carries the EXACT amount
  * each side is charged, and on the BNB leg that number was converted from a
@@ -163,9 +192,11 @@ export function FightAction({
   blockedReason: string | null;
   myAsset: PayAsset;
   /**
-   * How many fights the approval should cover. The contract settles one fight
-   * per wallet at a time, so this batches NOTHING on chain — it just sizes the
-   * single allowance so a queue of N fights needs one approve instead of N.
+   * How many fights the approval should cover — the player's own "how many
+   * fights are you up for" pick, handed down from the picker. The contract
+   * settles one fight per wallet at a time, so this batches NOTHING on chain:
+   * it sizes the single allowance so a run of N fights needs one approve
+   * instead of N.
    */
   approveFights?: number;
   /** Fired once, when this pair's fight has actually settled on chain. */
@@ -278,6 +309,11 @@ export function FightAction({
   const roll = useCallback(async () => {
     if (myTokenId === null || oppTokenId === null || chosen === null) return;
     setError(null);
+    // A re-quote on the SAME pair does not trip the pair effect below, so the
+    // arena has to be un-hidden and the outcome re-hidden from here or a
+    // second roll would open with the previous fight's ending on screen.
+    setHidden(false);
+    setWatched(false);
     const session = await ensureSession();
     if (!session) return;
     setRolling(true);
@@ -316,6 +352,19 @@ export function FightAction({
         setError(typeof json?.error === 'string' ? json.error : `run-duel failed (${res.status})`);
         return;
       }
+      /**
+       * ⚠ THE PREVIOUS FIGHT'S RECEIPT HAS TO GO WITH THE NEW QUOTE.
+       *
+       * `useWaitForTransactionReceipt` keeps answering for whatever hash it was
+       * last given, so a re-quote on the SAME pair would mount the arena in the
+       * `settled` state, playing the NEW fight's events under the OLD fight's
+       * transaction. That was survivable while a second button stood between
+       * the quote and the arena; it is not now that the arena comes up with the
+       * quote. The re-quote button is disabled while a transaction is actually
+       * in flight, so this only ever drops a receipt that is already history.
+       */
+      setTxHash(null);
+      setRevert(null);
       setQuote(json as RunDuelJson);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -326,11 +375,16 @@ export function FightAction({
 
   const { writeContractAsync, isPending: isSubmitting } = useWriteContract();
   const [txHash, setTxHash] = useState<`0x${string}` | null>(null);
-  /** True from the moment the player commits to settling. The arena mounts
-   *  gated, and its own button is what actually opens the wallet — a native
-   *  wallet deep link only opens from inside a user gesture, so firing the
-   *  write from an effect silently does nothing on a phone. */
-  const [showFight, setShowFight] = useState(false);
+  /**
+   * The player pressed "hide the fight". The arena is otherwise up from the
+   * moment a quote exists — there is no separate "into the pit" press any
+   * more, so this is the ONLY reason it would not be on screen.
+   */
+  const [hidden, setHidden] = useState(false);
+  /** The animation has played out. Only then is the outcome allowed on screen.
+   *  ⚠ This is what keeps the ending off the pre-fight card. */
+  const [watched, setWatched] = useState(false);
+  const showFight = quote !== null && !hidden;
   /**
    * ⚠ `isSuccess` MEANS "A RECEIPT ARRIVED", NOT "IT WORKED". viem resolves this
    * hook for a REVERTED transaction too — it does not throw. Read on its own,
@@ -360,7 +414,8 @@ export function FightAction({
     setError(null);
     setRevert(null);
     setTxHash(null);
-    setShowFight(false);
+    setHidden(false);
+    setWatched(false);
   }, [myTokenId, oppTokenId, account]);
 
   // Changing the currency invalidates the quote but NOT a settled fight: the
@@ -369,6 +424,7 @@ export function FightAction({
     setQuote(null);
     setError(null);
     setRevert(null);
+    setWatched(false);
   }, [chosen]);
 
   // Tell the page once, when this fight is genuinely on chain. The ref is what
@@ -509,6 +565,30 @@ export function FightAction({
     !blockedReason &&
     !wrongNetwork;
 
+  /**
+   * The one button that opens the wallet, and every reason it might not be
+   * able to, in the words for that reason.
+   *
+   * ⚠ `checking` IS NAMED OUT LOUD rather than left as a frozen button: the
+   * dry run is what stops a doomed transaction reaching the wallet, and a
+   * button that just goes dead for a second reads as broken.
+   */
+  const gateLabel = wrongNetwork
+    ? 'wrong network'
+    : settled
+      ? 'settled'
+      : expired
+        ? 'expired, re-quote above'
+        : needsErc20 && needsApproval
+          ? `approve ${approveSymbol} first`
+          : isConfirming
+            ? 'settling…'
+            : checking
+              ? 'checking it will work…'
+              : isSubmitting
+                ? 'check your wallet…'
+                : 'put it in and fight';
+
   return (
     <div className="space-y-4">
       {needsChoice && (
@@ -560,7 +640,10 @@ export function FightAction({
         <button
           type="button"
           onClick={roll}
-          disabled={!canRoll || rolling || isSigning}
+          // ⚠ NOT WHILE A FIGHT IS ACTUALLY LANDING. Re-quoting mid-flight
+          // would swap the events out from under the arena and orphan the
+          // receipt the queue is waiting on.
+          disabled={!canRoll || rolling || isSigning || isSubmitting || isConfirming}
           className="bull-btn"
         >
           {isSigning
@@ -627,40 +710,28 @@ export function FightAction({
             </p>
           )}
 
-          <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
-            <div>
-              <dt className="font-mono text-xs text-bull-text-faint">outcome</dt>
-              <dd>
-                {quote.winnerId === null
-                  ? 'draw'
-                  : quote.winnerId === myTokenId
-                    ? `your bull #${quote.winnerId} wins`
-                    : `bull #${quote.winnerId} wins`}{' '}
-                <span className="text-bull-text-faint">
-                  · {quote.rounds} round{quote.rounds === 1 ? '' : 's'}
+          {/* ⚠ WHAT A PLAYER NEEDS BEFORE THEY SIGN, AND NOTHING ELSE. The
+              outcome used to sit next to this and it is gone on purpose — see
+              the header. What is left is the money, the currency and how long
+              the number is good for. */}
+          <dl className="mt-3 text-sm">
+            <dt className="font-mono text-xs text-bull-text-faint">you put in</dt>
+            <dd className="font-mono text-bull-gold">
+              {mySide ? `${formatToken(mySide.amount, mySide.decimals)} ${mySide.symbol}` : '—'}
+              {mySide?.oracle && (
+                <span className="ml-1 font-sans text-[11px] font-normal text-bull-text-faint">
+                  (priced off the chainlink feed at quote time)
                 </span>
-              </dd>
-            </div>
-            <div>
-              <dt className="font-mono text-xs text-bull-text-faint">you put in</dt>
-              <dd className="font-mono text-bull-gold">
-                {mySide ? `${formatToken(mySide.amount, mySide.decimals)} ${mySide.symbol}` : '—'}
-                {mySide?.oracle && (
-                  <span className="ml-1 font-sans text-[11px] font-normal text-bull-text-faint">
-                    (priced off the chainlink feed at quote time)
-                  </span>
-                )}
-                {/* ⚠ A `BOTH` pick resolves to ONE currency and the player has to
-                    see WHICH before they sign, or "both" is just the old silent
-                    AUTO with a friendlier button. */}
-                {chosen === 'BOTH' && mySide && (
-                  <div className="mt-1 font-sans text-[11px] font-normal text-bull-text-faint">
-                    you said either would do · this one settles in{' '}
-                    {mySide.symbol.toLowerCase()}
-                  </div>
-                )}
-              </dd>
-            </div>
+              )}
+              {/* ⚠ A `BOTH` pick resolves to ONE currency and the player has to
+                  see WHICH before they sign, or "both" is just the old silent
+                  AUTO with a friendlier button. */}
+              {chosen === 'BOTH' && mySide && (
+                <div className="mt-1 font-sans text-[11px] font-normal text-bull-text-faint">
+                  you said either would do · this one settles in {mySide.symbol.toLowerCase()}
+                </div>
+              )}
+            </dd>
           </dl>
 
           <p className="mt-3 font-mono text-[11px] text-bull-text-faint">
@@ -669,8 +740,13 @@ export function FightAction({
               : `valid for ${secondsLeft}s`}
           </p>
 
-          <div className="mt-4 flex flex-wrap items-center gap-3">
-            {needsErc20 && needsApproval && (
+          {/* ⚠ A TOP-UP, NOT A ROUTINE STEP. The standing approval in step 2 is
+              sized for the whole run, so this only appears when the quoted
+              amount has outgrown it — the chainlink number moves between the
+              approval and the quote. It asks for the whole run again rather
+              than this one fight, so it can never become a per-fight prompt. */}
+          {needsErc20 && needsApproval && (
+            <div className="mt-4">
               <button
                 type="button"
                 onClick={async () => {
@@ -687,57 +763,13 @@ export function FightAction({
                 disabled={isApproving || wrongNetwork}
                 className="rounded border border-bull-gold px-4 py-2 text-sm font-semibold text-bull-gold transition hover:bg-bull-gold/10 disabled:opacity-40"
               >
-                {isApproving ? 'approving…' : `approve ${approveSymbol}`}
+                {isApproving ? 'approving…' : `top up your ${approveSymbol} approval`}
               </button>
-            )}
-            <button
-              type="button"
-              onClick={() => setShowFight(true)}
-              disabled={
-                expired ||
-                isSubmitting ||
-                isConfirming ||
-                checking ||
-                (needsErc20 && needsApproval) ||
-                settled ||
-                wrongNetwork
-              }
-              className="rounded bg-bull-gold px-4 py-2 text-sm font-semibold text-bull-gold-ink transition hover:bg-bull-gold-hover disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              {wrongNetwork
-                ? 'wrong network'
-                : settled
-                  ? 'settled'
-                  : isConfirming
-                    ? 'settling…'
-                    : isSubmitting
-                      ? 'confirm in your wallet…'
-                      : // The dry run. Named out loud rather than left as a
-                        // frozen button, because it is the step that stops a
-                        // doomed transaction reaching the wallet.
-                        checking
-                        ? 'checking it will work…'
-                        : // ⚠ THIS BUTTON OPENS THE ARENA, NOT THE WALLET. The
-                          // gate inside it is what fires the write, so a label
-                          // promising to settle would be describing the step
-                          // after the one it actually does.
-                          nativeValue > 0n
-                          ? 'into the pit (pays in BNB)'
-                          : 'into the pit'}
-            </button>
-          </div>
-
-          {txHash && (
-            <p className="mt-3 text-xs">
-              <a
-                href={`${explorerBaseUrl()}/tx/${txHash}`}
-                target="_blank"
-                rel="noreferrer"
-                className="text-bull-gold hover:underline"
-              >
-                view the transaction
-              </a>
-            </p>
+              <p className="mt-1.5 text-[11px] text-bull-text-faint">
+                your standing approval does not stretch to this one. this signs for the whole run
+                again, so it is asked once and not again per fight.
+              </p>
+            </div>
           )}
 
           {/* ⚠ THE REPLAY PLAYS HERE, IT IS NOT A DOWNLOAD LINK. This used to be
@@ -752,27 +784,179 @@ export function FightAction({
               before any money moved; playing it on the RECEIPT is the GIF, which
               is a highlight reel rather than watching your bull win or die.
               `DuelReplayInline` below is the RECEIPT and stays put — this is the
-              fight, that is the proof. */}
+              fight, that is the proof.
+
+              ⚠ IT MOUNTS ON THE QUOTE, NOT ON A SECOND BUTTON. The gate is up
+              until the wallet answers, so nothing is spoiled by it being on
+              screen early, and the gate's own button is the single user gesture
+              that opens the wallet. See the header. */}
           {showFight && (
-            <DuelAnimation
-              aTokenId={Number(quote.result.tokenA)}
-              bTokenId={Number(quote.result.tokenB)}
-              events={quote.events}
-              status={fightStatus}
-              signingMessage="put your half in the middle"
-              signingAction={{
-                label: isSubmitting ? 'check your wallet…' : 'put it in and fight',
-                onTap: () => void submit(),
-                disabled:
-                  isSubmitting || expired || wrongNetwork || (needsErc20 && needsApproval),
-              }}
-              onClose={() => setShowFight(false)}
-            />
+            <div className="mt-4">
+              <DuelAnimation
+                aTokenId={Number(quote.result.tokenA)}
+                bTokenId={Number(quote.result.tokenB)}
+                events={quote.events}
+                status={fightStatus}
+                // The amount goes in the headline, the way fefers does it, so
+                // the one thing a player checks before signing is on the button
+                // they are about to press rather than in a card above it.
+                signingMessage={
+                  mySide
+                    ? `put your ${formatToken(mySide.amount, mySide.decimals)} ${mySide.symbol} in the middle`
+                    : 'put your half in the middle'
+                }
+                signingAction={{
+                  label: gateLabel,
+                  onTap: () => void submit(),
+                  disabled:
+                    isSubmitting ||
+                    isConfirming ||
+                    checking ||
+                    settled ||
+                    expired ||
+                    wrongNetwork ||
+                    (needsErc20 && needsApproval),
+                }}
+                onFinished={() => setWatched(true)}
+                onClose={() => setHidden(true)}
+                // ⚠ THE OUTCOME LIVES HERE AND ONLY HERE. `finishedOverlay`
+                // renders inside the outcome panel, which the animation only
+                // puts up once the last event has played.
+                finishedOverlay={
+                  <FightProof quote={quote} myTokenId={myTokenId} txHash={txHash} />
+                }
+              />
+            </div>
+          )}
+
+          {/* "hide the fight" is `DuelAnimation`'s own control and it has no
+              matching "show it again", so the way back lives here. Without it a
+              player who hid the arena would have no button on screen that opens
+              their wallet at all, and the quote would just sit there. */}
+          {!showFight && (
+            <button
+              type="button"
+              onClick={() => setHidden(false)}
+              className="mt-4 font-mono text-xs text-bull-gold hover:underline"
+            >
+              {settled || reverted ? 'show the fight' : 'back to the fight'}
+            </button>
+          )}
+
+          {/* Hidden the arena mid-fight? The proof does not go with it. */}
+          {!showFight && (watched || settled || reverted) && (
+            <div className="mt-3">
+              <FightProof quote={quote} myTokenId={myTokenId} txHash={txHash} />
+            </div>
+          )}
+
+          {txHash && !showFight && (
+            <p className="mt-3 text-xs">
+              <a
+                href={`${explorerBaseUrl()}/tx/${txHash}`}
+                target="_blank"
+                rel="noreferrer"
+                className="text-bull-gold hover:underline"
+              >
+                view the transaction
+              </a>
+            </p>
           )}
 
           {settled && txHash && <DuelReplayInline txHash={txHash} className="mt-3" />}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * THE OUTCOME, AND THE PROOF IT WAS REAL. AFTER THE FIGHT, NEVER BEFORE IT.
+ *
+ * ═══════════════════════════════════════════════════════════════════════
+ * ⚠ THIS IS WHERE THE SPOILER WENT. IT WAS NOT DELETED.
+ * ═══════════════════════════════════════════════════════════════════════
+ * The pre-fight card used to print the winner and the round count above the
+ * arena, which handed the player the ending before they had watched a single
+ * swing. It is all still here, one disclosure down, and it now carries MORE
+ * than it did: the seed and the signature as well as the winner.
+ *
+ * That matters, because the seed being public is the whole trust story on this
+ * project — `/api/run-duel` simulates the fight off chain and signs the result,
+ * the contract verifies the signature and never re-runs the fight, so the only
+ * thing standing between a player and a lying signer is that anybody can take
+ * the seed and re-run it themselves. A player who cannot copy the seed out of
+ * the page cannot check that, and "trust us" is not the deal.
+ *
+ * Collapsed by default and titled plainly, the way fefers tucks everything
+ * behind one `details` under its victory panel: one primary out, everything
+ * else folded away.
+ */
+function FightProof({
+  quote,
+  myTokenId,
+  txHash,
+}: {
+  quote: RunDuelJson;
+  myTokenId: number | null;
+  txHash: `0x${string}` | null;
+}) {
+  const r = quote.result;
+  const outcome =
+    quote.winnerId === null
+      ? 'a draw'
+      : quote.winnerId === myTokenId
+        ? `your bull #${quote.winnerId} won it`
+        : `bull #${quote.winnerId} won it`;
+
+  return (
+    <details className="text-left">
+      <summary className="cursor-pointer font-mono text-[11px] uppercase tracking-wide text-bull-text-faint hover:text-bull-gold">
+        details
+      </summary>
+      {/* The overlay this sits in is an absolute panel over the arena from md
+          up, so an expanded block has to scroll inside itself rather than
+          spill out of a container with `overflow-hidden` on it. */}
+      <div className="mt-2 max-h-56 overflow-y-auto">
+        <dl className="space-y-1.5 font-mono text-[11px]">
+          <ProofRow label="outcome">
+            {outcome} · {quote.rounds} round{quote.rounds === 1 ? '' : 's'}
+          </ProofRow>
+          <ProofRow label="seed">
+            <span className="break-all">{r.seed}</span>
+          </ProofRow>
+          <ProofRow label="signature">
+            <span className="break-all">{quote.signature}</span>
+          </ProofRow>
+          <ProofRow label="nonce">{r.nonce}</ProofRow>
+          {txHash && (
+            <ProofRow label="tx">
+              <a
+                href={`${explorerBaseUrl()}/tx/${txHash}`}
+                target="_blank"
+                rel="noreferrer"
+                className="break-all text-bull-gold hover:underline"
+              >
+                {txHash}
+              </a>
+            </ProofRow>
+          )}
+        </dl>
+        <p className="mt-2 text-[11px] leading-relaxed text-bull-text-faint">
+          the fight ran off chain from that seed and the signer signed the result. the contract
+          checks the signature, it never re-runs the fight. the seed is public, so anyone can
+          re-run it and catch a lying signer.
+        </p>
+      </div>
+    </details>
+  );
+}
+
+function ProofRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="grid grid-cols-[4.5rem_1fr] gap-2">
+      <dt className="text-bull-text-faint">{label}</dt>
+      <dd className="min-w-0 text-bull-text-dim">{children}</dd>
     </div>
   );
 }

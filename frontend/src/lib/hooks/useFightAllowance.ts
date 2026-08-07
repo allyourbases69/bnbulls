@@ -55,6 +55,20 @@ import { useErc20Approval } from './useErc20Approval';
  * any one of them consumes the whole allowance, leaving the other nine
  * unfightable until it is topped up. That is the owner's own description of
  * the behaviour he wants, and it is what the ERC-20 allowance already does.
+ *
+ * ── ONE APPROVAL, SIZED FOR THE RUN (owner call, 2026-08-07) ─────────
+ *
+ * Owner, verbatim: *"they should be able to sign BNB or BNBULL ONCE and onchain
+ * will remember they have done that approval, then they just need to say how
+ * many fights they are keen for."*
+ *
+ * `fights` IS that control, and `covers` is what makes it stick: once the
+ * standing allowance already reaches the picked number, the approve button goes
+ * away entirely instead of sitting there inviting another signature for
+ * permission the chain has already recorded. Nothing here batches on chain and
+ * nothing pretends to — `Duel.sol` settles one signed fight per wallet at a
+ * time. What this collapses is the SIGNING, from one approve per fight down to
+ * one per run.
  */
 export interface FightAllowance {
   /** True once we know the token and what a fight costs in it. */
@@ -70,6 +84,15 @@ export interface FightAllowance {
   readonly limitedByBalance: boolean;
   /** What the approve transaction will ask for, at the currently picked count. */
   readonly approvalTotal: bigint | undefined;
+  /**
+   * The standing allowance already reaches the picked run, so there is nothing
+   * to sign. This is the whole point of sizing the approve: it turns the button
+   * off rather than leaving one up that would re-approve what the chain already
+   * remembers.
+   */
+  readonly covers: boolean;
+  /** An allowance exists at all, whatever size. Gates the revoke control. */
+  readonly hasAny: boolean;
   readonly approve: () => Promise<unknown>;
   readonly revoke: () => Promise<unknown>;
   readonly isApproving: boolean;
@@ -113,15 +136,22 @@ export function useFightAllowance(
         ? Number(byAllowance)
         : Number(byAllowance < byBalance ? byAllowance : byBalance);
 
+  const current = allowance as bigint | undefined;
+
   return {
     configured: !!token && priced,
     perFight,
-    allowance: allowance as bigint | undefined,
+    allowance: current,
     balance: bal,
     fightsAllowed,
     limitedByBalance:
       byAllowance !== undefined && byBalance !== undefined && byBalance < byAllowance,
     approvalTotal,
+    // ⚠ UNDEFINED IS NOT "COVERED". An allowance read that has not landed must
+    // never switch the approve button off — that would hide the one control a
+    // player needs, off a read that simply has not answered yet.
+    covers: approvalTotal !== undefined && current !== undefined && current >= approvalTotal,
+    hasAny: current !== undefined && current > 0n,
     approve,
     revoke,
     isApproving,

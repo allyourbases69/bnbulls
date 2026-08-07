@@ -170,6 +170,17 @@ export interface DuelFighter {
    *  in that window; the bar itself still reads correctly, because a bull
    *  nobody has hit yet is at 100% of whatever its maximum turns out to be. */
   readonly maxHpKnown: boolean;
+  /**
+   * The rating this bull is carrying INTO the fight, off `getBull().elo`.
+   *
+   * ⚠ BEFORE, NEVER AFTER. The read is issued at mount, which is before the
+   * transaction is sent, so it cannot have moved yet. The rating AFTER is
+   * `newEloA` / `newEloB` on the signed result and it is the SIGNER's
+   * arithmetic — `core/elo.ts` explains why nothing may recompute it. Null
+   * until the read lands, and the victory card prints no rating at all in that
+   * window rather than a stand-in.
+   */
+  readonly elo: number | null;
 }
 
 /**
@@ -301,6 +312,7 @@ export function useDuelFighters(
         weapon,
         maxHp: resolvedHp ?? 1,
         maxHpKnown: resolvedHp !== null,
+        elo: onchain ? Number(onchain.elo) : null,
       };
     };
 

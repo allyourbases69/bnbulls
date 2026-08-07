@@ -672,11 +672,45 @@ export function DuelPicker() {
                   onMakeNext={makeNext}
                 />
                 <div className="space-y-1 text-[11px] text-bull-text-faint">
+                  {/* ⚠ "12 in the pit" NEXT TO A MOSTLY-BENCHED LIST READS AS A
+                      BUG, and the owner read it as one: "it says 12 of yours in
+                      the pit but when picking my fighters it shows only 3
+                      queued, 1 fighting next and the rest benched — something
+                      is up there?" Nothing was up: ticks start empty and the
+                      queue is exactly what you tick. This button closes the gap
+                      between the advertised herd and the default queue in one
+                      press instead of twelve. */}
+                  {pit.matchable !== null &&
+                    roster.mine.filter(
+                      (b) => pit.matchable?.has(b.id) && !ticked.includes(b.id),
+                    ).length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setTicked((prev) => {
+                            const add = roster.mine
+                              .map((b) => b.id)
+                              .filter((id) => pit.matchable?.has(id) && !prev.includes(id));
+                            return [...prev, ...add];
+                          })
+                        }
+                        className="rounded-full border border-bull-border px-3 py-1 font-mono text-[11px] text-bull-text-dim transition hover:border-bull-gold hover:text-bull-gold"
+                      >
+                        queue everyone in the pit (
+                        {
+                          roster.mine.filter(
+                            (b) => pit.matchable?.has(b.id) && !ticked.includes(b.id),
+                          ).length
+                        }
+                        )
+                      </button>
+                    )}
                   <p>
                     {alive.length > roster.mine.length
                       ? `${alive.length - roster.mine.length} more alive in the full herd. `
                       : ''}
                     tick any of yours to send them in alongside it. they fight one after another.
+                    a benched bull is just an unticked one.
                   </p>
                   {/* ⚠ SAID HERE AS WELL AS IN STEP 2, because this is the list
                       where somebody picks a bull, and picking one that is out is
@@ -1593,7 +1627,16 @@ function FighterDropdown({
                         : 'text-bull-text-faint'
                   }`}
                 >
-                  {isNext ? 'fighting next' : isSettled ? 'fought' : isTicked ? 'queued' : 'benched'}
+                  {/* ⚠ NOT BARE "benched" — that read as a state the game
+                      imposed. It is simply an unticked box, and the label
+                      says the action that changes it. */}
+                  {isNext
+                    ? 'fighting next'
+                    : isSettled
+                      ? 'fought'
+                      : isTicked
+                        ? 'queued'
+                        : 'benched · tick to queue'}
                 </span>
               </div>
             );

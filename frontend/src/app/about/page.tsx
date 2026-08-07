@@ -639,31 +639,28 @@ export default function AboutPage() {
       </section>
 
       {/* ── the roadmap ──────────────────────────────────────────────
-          ⚠ TWO PHASES ARE DECIDED AND THE THIRD IS NOT, AND THAT IS WHAT THIS
-          SECTION SAYS. Owner asked for the phases on this page; the honest
-          answer is that `DECISIONS.md` defines exactly two.
+          ⚠ FOUR PHASES, OWNER-DECIDED 2026-08-08: "Phase 1 obviously is deploy
+          everything we are doing now. Phase two calves (same as eggs). Phase 3
+          opensea. Phase 4 multiplayer PVP and tournaments." This supersedes the
+          earlier stance that only two phases existed — that stance was honesty
+          about an absence of decisions, and the decisions have now been made.
 
           Phase 1 is `§29`: BNB-only at launch, every BNBULL leg present in the
           contracts and switched off until four.meme's curve fills (`§28.1`).
           Phase 2 is `§24`: calves, with batch mint as a HARD design constraint
           on phase 1 rather than a phase 2 feature, plus `§35`/`§36`'s breeding
-          lore, which is why it needs no stretching to fit.
-
-          ⚠ THERE IS NO PHASE 3. The only "phase 3" in the repo is a note in
-          `VOICE-AND-BRAND.md §5` to write the OpenSea contractURI / royalty /
-          listing runbook when we actually run it. That is an ops task, not a
-          product phase, and printing it as one on the page a sceptic reads
-          first would be inventing a promise. The third block below says
-          nothing is locked, because nothing is.
+          lore. Phase 3 is the OpenSea listing (the `VOICE-AND-BRAND.md §5`
+          contractURI / royalty runbook is its ops half). Phase 4 is multiplayer
+          and tournaments, worded as direction because the design is not written.
 
           ⚠ NO DATES ANYWHERE (`VOICE-AND-BRAND.md §1`). Not a month, not a
-          quarter, not "soon-ish". "when it is ready" or nothing. */}
+          quarter, not "soon-ish". "when it is ready" or nothing. The order is a
+          promise; the calendar is not. */}
       <section className="space-y-4">
-        <h2 className="bull-header text-xl text-bull-gold md:text-2xl">what happens when</h2>
+        <h2 className="bull-header text-xl text-bull-gold md:text-2xl">the roadmap</h2>
         <p className="text-sm leading-relaxed text-bull-text-dim md:text-base">
-          two phases are decided. anything past them is not, and this page is not going to
-          pretend otherwise. there are no dates on any of it, and there will not be: it ships
-          when it is done.
+          four phases, in order. no dates on any of it, and there will not be: each one ships
+          when it is done, and the order is the only promise being made.
         </p>
 
         <div className="space-y-4">
@@ -701,14 +698,28 @@ export default function AboutPage() {
             </p>
           </Phase>
 
-          <Phase tag="not locked" title="past that">
+          <Phase tag="then" title="phase 3 · opensea">
             <p>
-              nothing is decided, so nothing is claimed. no third phase has been signed off and
-              you are not going to find one invented on this page to fill the gap.
+              the herd goes up on opensea: collection page, royalties, the lot. the bulls are
+              standard erc-721s already, so nothing about the game changes and nothing has to
+              migrate. what phase 3 adds is the shopfront the wider nft crowd already knows how
+              to browse.
             </p>
             <p className="text-bull-text-faint">
-              when something is locked it lands in the public decisions log first and on this
-              page second, the same way these two did.
+              the in-game marketplace stays, and stays cheaper. opensea is the front window, not
+              a replacement.
+            </p>
+          </Phase>
+
+          <Phase tag="the big one" title="phase 4 · multiplayer and tournaments">
+            <p>
+              multiplayer pvp and tournaments. brackets, entry lists, a last-bull-standing run
+              with the whole field watching. the duel engine already settles one fight at a time
+              on chain; phase 4 is that engine with a crowd around it.
+            </p>
+            <p className="text-bull-text-faint">
+              direction, not design. when the design is locked it lands in the public decisions
+              log first and on this page second, the same way everything above did.
             </p>
           </Phase>
         </div>

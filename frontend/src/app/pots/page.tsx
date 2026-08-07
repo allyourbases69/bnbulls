@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { PotsPanel } from '@/components/pots/PotsPanel';
+import { PreLaunchNotice } from '@/components/PreLaunchNotice';
 import { EMOJI, POTS } from '@/lib/brand';
 
 export const metadata: Metadata = {
@@ -18,6 +19,7 @@ export default function PotsPage() {
       <p className="mt-3 max-w-2xl text-bull-text-dim">
         the currency you pay in decides which pot fattens. {POTS.rule}
       </p>
+      <PreLaunchNotice className="mt-8" />
       <div className="mt-10">
         <PotsPanel />
       </div>

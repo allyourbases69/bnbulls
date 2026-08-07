@@ -50,6 +50,19 @@ interface IMarketplaceListing {
     function isListed(uint256 tokenId) external view returns (bool);
 }
 
+/// @dev The yards roster (`Yards.sol`) — arena membership, per bull, bound to
+///      the live owner. One question, one staticcall, answered out of storage
+///      alone so it can never fault a fight.
+/// @dev Both live owners are passed IN rather than looked up, because
+///      `submitDuel` has already read them and a second `ownerOf` pair would be
+///      two more cold reads for an answer it is holding.
+interface IDuelYards {
+    function fightBlocked(uint256 tokenA, address ownerA, uint256 tokenB, address ownerB)
+        external
+        view
+        returns (uint256 blockedToken);
+}
+
 /// @dev Wrapped BNB. `deposit()` is a 1:1 wrap — no router, no liquidity, no
 ///      slippage — which is why a native-BNB stake still costs the player
 ///      nothing extra and still settles as an ERC-20.
@@ -176,6 +189,49 @@ interface IWrappedBNB is IERC20 {
  *      This flag NARROWS the affordability case but does not close it, which
  *      is why the per-wallet sequence exists as well: two of my bulls fighting
  *      two DIFFERENT opponents still draw on one balance.
+ *
+ *      ══════════════════════════════════════════════════════════════════════
+ *      NO CONSENT, NO FIGHT — THE YARDS (`Yards.sol`), Wire.Yards
+ *      ══════════════════════════════════════════════════════════════════════
+ *      A bull may only be fought while its CURRENT owner has explicitly sent
+ *      it into the yards. Checked here, at settlement, off the same live
+ *      `ownerOf` pair every other ownership rule uses.
+ *
+ *      Before that wire existed, arena membership was the ERC-20 ALLOWANCE —
+ *      `_takeSide` says so itself, "A passive opponent stakes by allowance,
+ *      always". It gated the wrong thing in two ways. It is WALLET-WIDE, so
+ *      one `approve` sent to fight a common also volunteered the legendary
+ *      sitting beside it. And **a zero-stake duel skips it entirely**:
+ *      `_takeSide` returns on `stake == 0` BEFORE it reads any allowance, so a
+ *      fight with no assets and no stakes touches nothing a holder controls,
+ *      yet still runs `applyDuelResult`, still moves ELO, still increments
+ *      `consecutiveLosses` — and the `lossesToDie`-th consecutive loss kills.
+ *      `DECISIONS.md §25` stopped such a fight buying a jackpot TICKET; it did
+ *      not stop it killing a bull. Only the signer's off-chain policy did, and
+ *      `§16` is the standing ruling that a protection which matters belongs in
+ *      the bytecode, not in whatever bot happens to be running.
+ *
+ *      ⚠ THE CHECK IS UNCONDITIONAL, WHICH IS THE POINT. It sits in
+ *      `submitDuel`, not in `_takeSide`, so it covers the staked path and the
+ *      free path identically. A promotional zero-stake fight is still legal —
+ *      against a bull whose owner put it in the yards.
+ *
+ *      ⚠ AN EJECT IS DELAYED AND THAT IS DELIBERATE. The owner's requirement
+ *      is "eject if not in a fight and haven't paid the money". A signed
+ *      result carries `winnerId` and BSC's mempool is public, so an instant
+ *      eject would let a losing side front-run the submission and delete the
+ *      loss — every fight becomes optional, and only wins land. `Yards` gives
+ *      leaving a floor of 15 minutes, which is `MAX_DUEL_EXPIRY_SECONDS` in
+ *      the signer, so every signature that could name the bull has expired by
+ *      the time the eject bites. `fightSeq` does NOT cover this: it bounds how
+ *      many results can settle, not whether a particular one does, and it is
+ *      consumed at settlement so nothing on chain marks a wallet as busy.
+ *
+ *      An UNWIRED slot means no check — the same shape as `marketplace`. That
+ *      is a deploy-preflight obligation, not a shrug: `Wire.Yards` must be
+ *      bootstrapped before the first duel is signed or the eject is decorative.
+ *      A future escrowing router must enter the bulls it holds; it becomes
+ *      their live owner, so it can, and no carve-out is needed here.
  *
  *      ══════════════════════════════════════════════════════════════════════
  *      STAKE ASSETS: BNB AND BNBULL (`DECISIONS.md §26`)
@@ -384,7 +440,25 @@ contract Duel is Ownable, Pausable, ReentrancyGuard, EIP712 {
         /// to become one. With only BNB and BNBULL left, EVERY dev-cut slice is
         /// already a prize token and goes straight into its own pot; there is
         /// no third asset for that route to carry.
-        MintDrop
+        MintDrop,
+        /// The yards roster (`Yards.sol`) — per-bull arena membership. Zero
+        /// disables the check, so this MUST be bootstrapped at deploy or the
+        /// eject does nothing.
+        ///
+        /// ⚠ TIMELOCKED, unlike `marketplace` and `authorizedRouter`, which
+        /// are plain setters. Those two are plain because a hot-path
+        /// dependency that starts reverting has to be removable in one
+        /// transaction. `Yards.fightBlocked` reads storage and nothing else —
+        /// no external call, no `ownerOf`, no revert — so there is no liveness
+        /// case to answer, and an eject that one compromised-key transaction
+        /// could switch off for the whole collection would not be a guarantee.
+        /// `DECISIONS.md §18`'s lesson pointed at a safety gate rather than a
+        /// money slot.
+        ///
+        /// ⚠ Appended to the END of this enum on purpose. The existing members
+        /// keep their indices, so every `bootstrapWire`/`proposeWire` call
+        /// already written in `script/` and `test/` still names the same slot.
+        Yards
     }
 
     // ─── Immutable refs ──────────────────────────────────────────────────
@@ -582,6 +656,14 @@ contract Duel is Ownable, Pausable, ReentrancyGuard, EIP712 {
     event JackpotTicketOpened(uint256 indexed tokenId, address indexed winner, uint256 ticketId);
     /// @notice The pot call reverted and was swallowed. The duel still settled.
     event JackpotRollFailed(uint256 indexed tokenId);
+    /// @notice ⚠ A POT'S `resolve` REVERTED AND WAS SWALLOWED — SO THE QUEUE
+    ///         DID NOT MOVE, AND IT WILL NOT MOVE ON THE NEXT FIGHT EITHER.
+    ///         The fight still settled; nothing a player did is affected. This
+    ///         is the only trace such a fault leaves anywhere. See
+    ///         `_resolveOnly` for why it cannot be emitted by the pot itself.
+    /// @param reason The 4-byte selector of the revert, or zero when the pot
+    ///        returned nothing (a bare `revert()`, or out of gas).
+    event JackpotResolveFailed(address indexed pot, bytes4 reason);
     /// @notice A pot claimed the exclusive right to pay out for a duel.
     event DuelJackpotClaimed(uint256 indexed duelKey, address indexed pot);
     /// @notice A dev-cut slice reached a pot.
@@ -625,6 +707,9 @@ contract Duel is Ownable, Pausable, ReentrancyGuard, EIP712 {
     error InvalidWinnerId();
     error BullNotAlive(uint256 tokenId);
     error BullIsListed(uint256 tokenId);
+    /// @dev This bull's owner has not put it in the yards (or has ejected it),
+    ///      so it cannot be fought at any stake — including a stake of zero.
+    error BullNotInYards(uint256 tokenId);
     error NotOwnerOfEither();
     error OnlyAuthorizedRouter();
     error SelfFight();
@@ -744,6 +829,7 @@ contract Duel is Ownable, Pausable, ReentrancyGuard, EIP712 {
         address ownerA = bulls.ownerOf(result.tokenA);
         address ownerB = bulls.ownerOf(result.tokenB);
         _authorize(ownerA, ownerB);
+        _requireInYards(result.tokenA, ownerA, result.tokenB, ownerB);
 
         // The per-wallet commit. Consumed SEQUENTIALLY, which also makes the
         // router case fall out for free: with both bulls escrowed by a router,
@@ -844,6 +930,34 @@ contract Duel is Ownable, Pausable, ReentrancyGuard, EIP712 {
             if (oA == oB && !allowSelfDuel) revert SelfDuelBlocked(oA);
             if (oA != msg.sender && oB != msg.sender) revert NotOwnerOfEither();
         }
+    }
+
+    /**
+     * @dev Both bulls must be in the yards under their LIVE owners.
+     *
+     *      Runs on EVERY duel, staked or free, before a sequence number is
+     *      consumed or a token moves — the zero-stake path is the one the
+     *      allowance gate never covered (see the header), so a check that
+     *      lived in `_takeSide` would miss exactly the case that matters.
+     *
+     *      ⚠ `code.length`, and the skip on an empty slot, are both load
+     *      bearing. `fightBlocked` returns a value, so solc emits an
+     *      `extcodesize` check before the call; a slot pointing at a WALLET
+     *      would revert every duel in the game until the wiring timelock could
+     *      be walked — the same trap `_rollOnePool` documents on the ticket
+     *      leg. Treating a non-contract as "no yards" makes a mis-wire a
+     *      degraded check instead of a dead game, and a compromised key trying
+     *      to use it as a back door still has to propose an EOA, publish an
+     *      ETA and wait out `wiringDelay` in the open.
+     */
+    function _requireInYards(uint256 tokenA, address ownerA, uint256 tokenB, address ownerB)
+        private
+        view
+    {
+        address y = _wire(Wire.Yards);
+        if (y == address(0) || y.code.length == 0) return;
+        uint256 blocked = IDuelYards(y).fightBlocked(tokenA, ownerA, tokenB, ownerB);
+        if (blocked != 0) revert BullNotInYards(blocked);
     }
 
     /// @dev The per-wallet commit, consumed. See the header.
@@ -1203,14 +1317,67 @@ contract Duel is Ownable, Pausable, ReentrancyGuard, EIP712 {
         }
     }
 
-    /// @dev Drain a few already-decided tickets on the way past. Never opens
-    ///      one. Any duel traffic pays for resolving earlier winners' tickets,
-    ///      so the queues drain themselves on a busy day.
+    /**
+     * @dev Drain a few already-decided tickets on the way past. Never opens
+     *      one. Any duel traffic pays for resolving earlier winners' tickets,
+     *      so the queues drain themselves on a busy day.
+     *
+     *      ⚠ THE TRY/CATCH IS RIGHT AND IT WAS ALSO SILENT. THAT WAS THE BUG.
+     *      A pot fault must never revert a fight, so the swallow stays. But
+     *      `Jackpot.resolve` walks a CURSOR, and any revert inside it rolls
+     *      that cursor back — so the same ticket is retried, and fails, on
+     *      every duel afterwards. The queue stops dead and **nothing anywhere
+     *      says so**: the fight settles, the player sees nothing, no error is
+     *      raised, and the pot has no withdraw path to inspect. Measured live
+     *      on chain 97: one winning BNBULL ticket against a token whose
+     *      `tradingEnabled` was still false (the real launch state,
+     *      `DECISIONS.md §29`) wedged 77 more behind it while the game read
+     *      perfectly healthy. The whitelist is one cause; a blacklisted
+     *      winner, a paused prize token or an outright bug are the others, and
+     *      they all present identically — as silence.
+     *
+     *      ⛔ AND THE EVENT CANNOT LIVE ON THE POT. That is not a preference:
+     *      a revert discards every log written in the frame it reverts, which
+     *      is exactly what `BNBull._update` documents about the anti-bot
+     *      auto-blacklist that "never existed" (`DECISIONS.md §19`). A pot
+     *      cannot report its own failure for the same reason it cannot record
+     *      a rejected transfer — the rejection is what erases the record. Only
+     *      the frame that SWALLOWS the revert survives to log it, and that
+     *      frame is this one. A keeper calling `Jackpot.resolve` directly does
+     *      see the revert, because its own transaction fails; this path is the
+     *      one where nobody was ever told.
+     *
+     *      The reason travels as the 4-byte selector, not the whole payload:
+     *      it is what an alert bot switches on (`TradingNotEnabled()` and
+     *      `AddrBlacklisted(address)` are different pages of the runbook) and
+     *      it costs one word. Copying the returndata at all is safe here for
+     *      the same reason `DuelGuzzlerJackpot` is: a hostile pot can already
+     *      burn this frame's gas under EIP-150, so a returndata bomb adds no
+     *      capability it did not have.
+     */
     function _resolveOnly(address pot) private {
         // Same reason as `_rollOnePool`: `resolve` returns a value, so the
         // `extcodesize` check solc emits for it lives OUTSIDE the try/catch.
         if (pot.code.length == 0) return;
-        try IDuelJackpot(pot).resolve(jackpotResolvePerDuel) {} catch {}
+        try IDuelJackpot(pot).resolve(jackpotResolvePerDuel) {}
+        catch (bytes memory reason) {
+            emit JackpotResolveFailed(pot, _revertSelector(reason));
+        }
+    }
+
+    /// @dev First four bytes of a revert payload, zero when there are not four
+    ///      of them. The mask matters: `bytes4` is left-aligned in a word and
+    ///      an unmasked `mload` would leave the rest of the revert data in the
+    ///      low bytes, which is not what gets logged.
+    function _revertSelector(bytes memory reason) private pure returns (bytes4 sel) {
+        if (reason.length < 4) return bytes4(0);
+        assembly ("memory-safe") {
+            sel :=
+                and(
+                    mload(add(reason, 0x20)),
+                    0xffffffff00000000000000000000000000000000000000000000000000000000
+                )
+        }
     }
 
     /**
@@ -1334,6 +1501,15 @@ contract Duel is Ownable, Pausable, ReentrancyGuard, EIP712 {
     /// @notice The wired Graveyard.
     function graveyardContract() external view returns (address) {
         return _wire(Wire.Graveyard);
+    }
+
+    /// @notice The wired yards roster. Zero means the membership check is OFF
+    ///         — the deploy preflight must assert this is non-zero.
+    /// @dev A separate getter rather than a fifth return on `wires()`, because
+    ///      widening that tuple would break every existing caller in `script/`
+    ///      and `test/` for no gain.
+    function yardsContract() external view returns (address) {
+        return _wire(Wire.Yards);
     }
 
     /// @notice Every live wiring address in one call — the read the deploy

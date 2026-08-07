@@ -218,7 +218,7 @@ contract PancakeV2LiquidityForkTest is ForkBase {
         // Force an accrual by un-wiring the pot, then re-wire and sweep.
         _accrueBnbullLeg();
 
-        vm.prank(keeper);
+        vm.prank(owner);
         vm.expectRevert(MintDrop.BlindSwapRefused.selector);
         drop.sweepBnbullPot(MintDrop.PotSource.Native, 0, 0);
     }
@@ -240,14 +240,14 @@ contract PancakeV2LiquidityForkTest is ForkBase {
         uint256 honest = v2Router.getAmountsOut(pending, _pathWbnbTo(CAKE))[1];
 
         // Impossible floor: 1% better than the pool can pay.
-        vm.prank(keeper);
+        vm.prank(owner);
         vm.expectRevert();
         drop.sweepBnbullPot(MintDrop.PotSource.Native, pending, (honest * 101) / 100);
 
         assertEq(drop.pendingBnbullBuyNative(), pending, "a failed sweep consumed the accrual");
 
         // Honest floor: 1% of slack.
-        vm.prank(keeper);
+        vm.prank(owner);
         uint256 funded =
             drop.sweepBnbullPot(MintDrop.PotSource.Native, pending, (honest * 99) / 100);
 

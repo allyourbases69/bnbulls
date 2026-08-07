@@ -107,8 +107,15 @@ export default function HomePage() {
         {/* The honest pre-launch state, and the only paragraph allowed on this
             page: the site is live while the contracts are not, so it has to
             say so. It renders NOTHING once they are wired, which is also why
-            it is safe to keep here. */}
-        <PreLaunchNotice />
+            it is safe to keep here.
+
+            ⚠ `compact` DELIBERATELY. `DECISIONS.md §36` cut this page to the
+            picture and one line and was explicit about not stacking
+            explanatory copy under it, so the front page gets the shortest true
+            version of "not open yet" and the links out. The full statement,
+            with what launches first and why, is on every game page and on
+            /about. */}
+        <PreLaunchNotice compact className="mx-auto max-w-xl" />
       </div>
     </div>
   );

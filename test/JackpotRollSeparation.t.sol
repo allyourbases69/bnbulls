@@ -44,6 +44,11 @@ contract JackpotRollSeparationTest is BnbullsBase {
     /// @dev The measurement size quoted in DECISIONS §10.
     uint256 internal constant DUELS = 600;
 
+    /// @dev `Jackpot.MIN_ODDS_ONE_IN`. The cheapest legal odds, used by the
+    ///      throwaway single-ticket pots so a winning word is one keccak-sweep
+    ///      away rather than fifty.
+    uint256 internal constant STANDALONE_ODDS = 10;
+
     /// @dev Fixed inputs shared by both pools, exactly as a real duel supplies
     ///      them. Varying them per duel is what makes the sample a sample.
     address internal constant WINNER = address(0xA11CE);
@@ -58,13 +63,41 @@ contract JackpotRollSeparationTest is BnbullsBase {
         bnbull.mint(owner, 1e30);
         bnbull.approve(address(potBnbull), type(uint256).max);
         potBnbull.topUp(1e28);
-        potBnbull.setPayoutBps(1);
+        // Deploy-day write of the three payout numbers, at each pot's REAL odds
+        // (§13: 1-in-50 and 1-in-100 — the divisibility that made the original
+        // bug total). `setPayoutBps` is gone; this is its one-time replacement.
+        potBnbull.bootstrapPayoutParams(50, 1, 0);
 
         vm.deal(owner, 1e24);
         wbnb.deposit{value: 1e22}();
         wbnb.approve(address(potBnb), type(uint256).max);
         potBnb.topUp(1e22);
-        potBnb.setPayoutBps(1);
+        potBnb.bootstrapPayoutParams(100, 1, 0);
+    }
+
+    /**
+     * @dev Search for a VRF word that makes ticket `id` a WINNER on `pot`.
+     *      Mirrors the shipped preimage exactly, which is the same reason this
+     *      whole file models it: edit the preimage and these searches stop
+     *      finding words, loudly.
+     *
+     *      ⚠ REPLACES `setOdds(1)`. Odds of one is `H % 1 == 0` for every word
+     *      — a certain win — and is now refused by `MIN_ODDS_ONE_IN`. Forcing a
+     *      win by searching the word keeps both pots at 50 and 100 throughout,
+     *      which is what this file is actually about.
+     */
+    function _wordThatWins(
+        address pot,
+        uint256 entropy,
+        uint256 tokenId,
+        address winner,
+        uint256 id,
+        uint256 odds
+    ) internal pure returns (uint256) {
+        for (uint256 word = 1; word < 100_000; word++) {
+            if (_roll(word, entropy, tokenId, winner, id, pot, odds) == 0) return word;
+        }
+        revert("no winning word found");
     }
 
     // ─── Roll arithmetic, mirrored from the contract ──────────────────────
@@ -290,16 +323,18 @@ contract JackpotRollSeparationTest is BnbullsBase {
     // ══════════════════════════════════════════════════════════════════════
 
     function test_onePotPerDuel_secondPotIsDeniedAndSaysSo() public {
-        potBnbull.setOdds(1);
-        potBnb.setOdds(1); // force BOTH to win the same duel
-
         duel.open(address(potBnbull), alice, 1, 0xAAA, 99);
         duel.open(address(potBnb), alice, 1, 0xAAA, 99);
 
+        // Force BOTH to win the same duel — at their real 50 and 100 odds, one
+        // searched word per pot, because each pot gets its own VRF request.
+        uint256 wA = _wordThatWins(address(potBnbull), 0xAAA, 1, alice, 0, 50);
+        uint256 wB = _wordThatWins(address(potBnb), 0xAAA, 1, alice, 0, 100);
+
         uint256 rA = potBnbull.requestResolve(1);
         uint256 rB = potBnb.requestResolve(1);
-        coord.fulfill(rA, 1);
-        coord.fulfill(rB, 1);
+        coord.fulfill(rA, wA);
+        coord.fulfill(rB, wB);
 
         potBnbull.resolve(1);
 
@@ -315,16 +350,16 @@ contract JackpotRollSeparationTest is BnbullsBase {
     /// @dev `duelKey == 0` disables the check — the standalone-pool escape used
     ///      by tests and by any future single-pot deployment.
     function test_duelKeyZeroSkipsTheExclusivityCheck() public {
-        potBnbull.setOdds(1);
-        potBnb.setOdds(1);
-
         duel.open(address(potBnbull), alice, 1, 0xAAA, 0);
         duel.open(address(potBnb), alice, 1, 0xAAA, 0);
 
+        uint256 wA = _wordThatWins(address(potBnbull), 0xAAA, 1, alice, 0, 50);
+        uint256 wB = _wordThatWins(address(potBnb), 0xAAA, 1, alice, 0, 100);
+
         uint256 rA = potBnbull.requestResolve(1);
         uint256 rB = potBnb.requestResolve(1);
-        coord.fulfill(rA, 1);
-        coord.fulfill(rB, 1);
+        coord.fulfill(rA, wA);
+        coord.fulfill(rB, wB);
         potBnbull.resolve(1);
         potBnb.resolve(1);
 
@@ -337,12 +372,13 @@ contract JackpotRollSeparationTest is BnbullsBase {
     ///      the invariant that matters. Cost of being wrong this way: a payout
     ///      that rolls back into the pool, visible on chain.
     function test_unreachableLockIsTreatedAsDenied() public {
-        potBnbull.setOdds(1);
         duel.setClaimReverts(true);
 
         duel.open(address(potBnbull), alice, 1, 0xAAA, 5);
+        // A WINNING roll, or the test proves nothing: only a win reaches the
+        // lock at all (`if (won && t.duelKey != 0)`).
         uint256 r = potBnbull.requestResolve(1);
-        coord.fulfill(r, 1);
+        coord.fulfill(r, _wordThatWins(address(potBnbull), 0xAAA, 1, alice, 0, 50));
         potBnbull.resolve(1);
 
         assertEq(potBnbull.awardCount(), 0, "paid out with an unreachable lock");
@@ -361,7 +397,14 @@ contract JackpotRollSeparationTest is BnbullsBase {
         vm.prank(silent);
         pot.recordWin(alice, 1, 1, 42);
         uint256 r = pot.requestResolve(1);
-        coord.fulfillTo(address(pot), r, 1);
+        uint256 word = _wordThatWins(address(pot), 1, 1, alice, 0, STANDALONE_ODDS);
+        coord.fulfillTo(address(pot), r, word);
+
+        // `roll == 0` is the ticket genuinely winning; `won == false` is the
+        // silent lock denying it. Without this the test would pass on a LOSING
+        // roll and would never touch `_claimDuel` at all.
+        vm.expectEmit(true, true, true, true, address(pot));
+        emit Jackpot.TicketResolved(0, alice, 1, 0, STANDALONE_ODDS, false);
         pot.resolve(1);
 
         assertEq(pot.pendingTickets(), 0, "the resolve loop reverted on empty returndata");
@@ -419,7 +462,11 @@ contract JackpotRollSeparationTest is BnbullsBase {
         vm.prank(garbage);
         pot.recordWin(alice, 1, 1, 42);
         uint256 r = pot.requestResolve(1);
-        coord.fulfillTo(address(pot), r, 1);
+        // A WINNING roll, or `_claimDuel` is never called and the garbage
+        // answer is never decoded.
+        coord.fulfillTo(
+            address(pot), r, _wordThatWins(address(pot), 1, 1, alice, 0, STANDALONE_ODDS)
+        );
 
         // Resolves cleanly now. The garbage word reads as "denied", which is
         // the documented fail-safe: we could not prove the other pot had not
@@ -431,8 +478,12 @@ contract JackpotRollSeparationTest is BnbullsBase {
         assertGt(pot.pool(), 0, "the money rolls over into the pool, not out of it");
     }
 
+    /// @dev ⚠ At the odds FLOOR, not at 1. The constructor enforces
+    ///      `MIN_ODDS_ONE_IN` as well as the setters do, so a pot that wins on
+    ///      every word cannot be deployed at all — its callers search for a
+    ///      winning word instead.
     function _standalonePot() internal returns (Jackpot pot) {
-        pot = new Jackpot(address(bnbull), address(0), address(coord), 1);
+        pot = new Jackpot(address(bnbull), address(0), address(coord), STANDALONE_ODDS);
         pot.setVrfConfig(KEY_HASH, 1, 3, 200_000, true);
         bnbull.mint(address(pot), 1_000e18);
     }

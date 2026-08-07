@@ -4,6 +4,7 @@ pragma solidity 0.8.24;
 import {console2} from "forge-std/console2.sol";
 import {BnbullsConfig} from "./lib/BnbullsConfig.sol";
 
+import {BNBull} from "../contracts/BNBull.sol";
 import {Bulls} from "../contracts/Bulls.sol";
 import {MintDrop} from "../contracts/MintDrop.sol";
 import {Duel} from "../contracts/Duel.sol";
@@ -61,6 +62,23 @@ import {PotSplitter} from "../contracts/lib/PotSplitter.sol";
  *         Without the second one a listed bull can be sent into a fight, die,
  *         and leave the buyer holding a corpse.
  *
+ *      8. **`BNBull.setWhitelist` on every contract that moves BNBULL.**
+ *         ⛔ THE WORST OF THE LOT, AND IT WAS NOT IN THIS FILE AT ALL —
+ *         `setWhitelist` was called only by `script/anvil/DeployLocal.s.sol`,
+ *         so the real deploy path whitelisted nothing. `tradingEnabled` ships
+ *         FALSE, which is the LAUNCH STATE and not an error state
+ *         (`DECISIONS.md §29`), so a WINNING jackpot ticket's `safeTransfer`
+ *         reverts `TradingNotEnabled`, `Duel._resolveOnly` swallows it exactly
+ *         as it must, and the ticket queue wedges with nothing reverting for a
+ *         player and nothing logged. Observed live on chain 97: the queue
+ *         stopped at the first winning ticket and 77 more piled up behind it
+ *         while the game read perfectly healthy.
+ *
+ *      9. **`Jackpot.setTimeouts` on both pots.** The contract's own default
+ *         used to be SHORTER than a measured VRF fulfilment, so a keeper
+ *         obeying it cancelled requests that were about to land. Nothing set
+ *         it here, which is `DECISIONS.md §40`'s bug for the third time.
+ *
  *      ══════════════════════════════════════════════════════════════════════
  *      RE-RUNNABLE ON PURPOSE
  *      ══════════════════════════════════════════════════════════════════════
@@ -114,6 +132,7 @@ abstract contract WireCore is BnbullsConfig {
         _wireSplitter(c, d, PotSplitter(d.reviveSplitter), "ReviveBuySplitter", true);
         _wireSplitter(c, d, PotSplitter(d.marketSplitter), "MarketPotSplitter", false);
         _wireMarketSplitterPolicy(d);
+        wireTokenWhitelist(c, d);
 
         console2.log("");
         console2.log("== wiring summary ==");
@@ -297,6 +316,16 @@ abstract contract WireCore is BnbullsConfig {
         // BNB fight quote reverts `OracleNotWired` — fail-closed, but the BNB
         // fight does not exist until it is set.
         _duelWire(du, Duel.Wire.MintDrop, d.mintDrop, "Duel.MintDrop (oracle)");
+        // ⚠⚠ THE CONSENT GATE, AND IT IS THE ONE WHOSE MISS IS SILENT IN THE
+        // MOST DANGEROUS DIRECTION. Every other slot in this file fails toward
+        // "the money went somewhere else"; this one fails toward "there is no
+        // check at all". `Duel._requireInYards` reads the slot and RETURNS
+        // EARLY when it is zero, so an unwired Yards does not close the arena,
+        // it opens it: every bull in the collection is fightable by anyone who
+        // can get a signature, including on the zero-stake path that touches no
+        // allowance and still kills a bull on its `lossesToDie`-th loss.
+        // `test_anUnwiredYardsSlotLeavesEveryDuelUngated` runs exactly that.
+        _duelWire(du, Duel.Wire.Yards, d.yards, "Duel.Yards (THE consent gate)");
 
         // ⚠ THE NATIVE FIGHT PATH. Miss this and `submitDuel` reverts
         // `UnsupportedAsset` on every WBNB stake — the BNB fight does not
@@ -425,6 +454,26 @@ abstract contract WireCore is BnbullsConfig {
             _conflict(string.concat(tag, ".duel"), d.duel, p.duel());
         }
 
+        // ⛔ SPEND THE ONE FREE PAYOUT-PARAM WRITE, HERE, ON DEPLOY DAY.
+        //
+        // `oddsOneIn` / `payoutBps` / `minPoolToFire` decide WHO wins and HOW
+        // MUCH they take, so they are money slots: once `payoutParamsBootstrapped`
+        // is set, every later change is propose -> wait `wiringDelay` -> commit,
+        // in public, with an ETA. Leaving the free instant write UNSPENT on a
+        // live pot leaves a one-shot, no-notice change to the payout terms
+        // sitting available to whoever holds the owner key — which is the whole
+        // thing the timelock exists to remove.
+        //
+        // The values re-assert what the constructor already set (50 / 100) plus
+        // the contract defaults, so this changes no behaviour. It only closes
+        // the door behind them. `Verify` asserts it happened.
+        if (!p.payoutParamsBootstrapped()) {
+            p.bootstrapPayoutParams(p.oddsOneIn(), p.payoutBps(), p.minPoolToFire());
+            _note(string.concat(tag, ".payoutParams bootstrapped"), true);
+        } else {
+            _note(string.concat(tag, ".payoutParams bootstrapped"), false);
+        }
+
         // THE FUNDER ROLES. Every one of these is a silent deferral if missed.
         _funder(p, d.mintDrop, string.concat(tag, ".funder MintDrop"));
         _funder(p, d.duel, string.concat(tag, ".funder Duel"));
@@ -470,6 +519,27 @@ abstract contract WireCore is BnbullsConfig {
             }
         } else {
             _note(string.concat(tag, ".vrfConfig"), false);
+        }
+
+        // ⚠ THE TWO TIMEOUTS, WRITTEN EXPLICITLY. `DECISIONS.md §40` for the
+        // third time: nothing set these, so the contract's own defaults shipped
+        // by accident — and `requestTimeoutBlocks` defaulted to 1,200 blocks
+        // (~9 minutes at ~0.45s) when the FIRST live chain-97 fulfilment took
+        // **3,169 blocks, ~24 minutes**. A keeper obeying that number cancels a
+        // request that is about to be answered: the subscription payment is
+        // spent, and the word that finally arrives is DISCARDED because its id
+        // no longer matches. Both numbers now come from the config, and
+        // `setTimeouts` writes them together because that is its signature.
+        if (
+            p.requestTimeoutBlocks() != c.params.vrfRequestTimeoutBlocks
+                || p.publicRequestDelayBlocks() != c.params.vrfPublicRequestDelayBlocks
+        ) {
+            p.setTimeouts(
+                c.params.vrfRequestTimeoutBlocks, c.params.vrfPublicRequestDelayBlocks
+            );
+            _note(string.concat(tag, ".setTimeouts (VRF stall + dead-keeper)"), true);
+        } else {
+            _note(string.concat(tag, ".setTimeouts (VRF stall + dead-keeper)"), false);
         }
 
         // ⚠ THE COORDINATOR IS BOOTSTRAPPED IN THE CONSTRUCTOR and is
@@ -682,6 +752,118 @@ abstract contract WireCore is BnbullsConfig {
         s.bootstrapWire(slot, target);
         _note(label, true);
     }
+
+    // ─── 8. The BNBULL transfer whitelist ───────────────────────────────
+
+    /**
+     * @notice ⛔ LET THE GAME MOVE BNBULL WHILE THE LAUNCH GATE IS SHUT.
+     *
+     * @dev THE DEFECT THIS CLOSES, exactly as it happened on chain 97.
+     *      `BNBull` ships `tradingEnabled = false` and whitelists only the
+     *      initial owner and holder. That is the real launch state, not a
+     *      mistake — `DECISIONS.md §29` launches BNB-first and opens BNBULL
+     *      after the curve. But `_update` then refuses any transfer with
+     *      neither side whitelisted, so the moment a BNBULL jackpot ticket
+     *      WINS, `prizeToken.safeTransfer(winner, paid)` reverts
+     *      `TradingNotEnabled`. `Duel._resolveOnly` swallows that — correctly,
+     *      a pot fault must never revert a fight — and the queue stops dead at
+     *      that ticket with **nothing reverting for a player and nothing
+     *      logged**. 77 tickets piled up behind the first winner while every
+     *      dashboard read healthy.
+     *
+     *      ⚠ WHY THIS IS A NO-OP ON MAINNET, AND WHY THAT IS PROBED RATHER
+     *      THAN ASSUMED. `DECISIONS.md §4` launches on four.meme, whose token
+     *      is theirs and has no whitelist to write — so this must be a skip,
+     *      not a revert that stops the wiring half way through. The probe is a
+     *      `staticcall` of `whitelisted(address)`, because a chain-id test
+     *      would be wrong the day we self-issue on mainnet and right for the
+     *      wrong reason on chain 97.
+     *
+     *      ⚠ AND OWNERSHIP IS CHECKED BEFORE WRITING. A BNBULL that HAS a
+     *      whitelist but is not ours cannot be written to, and the whole point
+     *      of this file is that a broadcast which dies half way through is far
+     *      worse than one that reports a gap. Reported as a CONFLICT, loudly,
+     *      and `Verify` fails on the missing entries afterwards.
+     *
+     *      Read-first / skip / bulk-write, so a re-run costs nothing and a
+     *      partial run resumes — the same idiom as every other step here. The
+     *      write is ONE `setWhitelistBulk` rather than ten `setWhitelist`
+     *      transactions, because the reads that make it idempotent are free.
+     */
+    function wireTokenWhitelist(Cfg memory c, Deployment memory d) internal {
+        console2.log("");
+        console2.log("-- BNBULL transfer whitelist --");
+
+        if (!tokenHasWhitelist(d.bnbull)) {
+            console2.log("  [info] this BNBULL has no whitelist (four.meme's - DECISIONS 4).");
+            console2.log("         Nothing to write, and nothing to miss. Skipped.");
+            return;
+        }
+
+        BNBull token = BNBull(d.bnbull);
+        if (token.owner() != c.roles.deployer) {
+            wiresConflicted++;
+            console2.log("");
+            console2.log("  /!\\ THIS BNBULL HAS A WHITELIST AND WE DO NOT OWN IT.");
+            console2.log("      token owner:", token.owner());
+            console2.log("      broadcaster:", c.roles.deployer);
+            console2.log("      setWhitelist is onlyOwner, so every entry below is unwritable");
+            console2.log("      from here. Until they are set, a WINNING BNBULL jackpot ticket");
+            console2.log("      reverts TradingNotEnabled, Duel swallows it, and the ticket");
+            console2.log("      queue wedges with no error anywhere. Verify fails on this.");
+            console2.log("");
+            return;
+        }
+
+        (address[] memory movers, string[] memory labels) = bnbullMovers(d);
+
+        // ⚠ THE ROUTER IS NOT A MOVER AND IS LISTED ANYWAY. No game leg needs
+        // it — `_update` passes on ONE whitelisted side, so a pair-to-MintDrop
+        // swap output already clears — but an LP seed moves BNBULL through it
+        // in amounts far over the launch window's 1%/0.5% caps, and those caps
+        // bite whitelisted-neither transfers even after `enableTrading()`. It
+        // is deliberately outside `bnbullMovers` so `Verify` treats a missing
+        // router as a warning and a missing POT as a failure.
+        //
+        // The PAIR is not listed because it does not exist yet: it is created
+        // by the first `addLiquidity`. Whitelist it by hand at launch if the
+        // caps are still active.
+        address[] memory want = new address[](movers.length + 1);
+        for (uint256 i = 0; i < movers.length; i++) {
+            want[i] = movers[i];
+        }
+        want[movers.length] = c.ext.routerV2;
+
+        address[] memory missing = new address[](want.length);
+        uint256 n;
+        for (uint256 i = 0; i < want.length; i++) {
+            string memory label = i < movers.length
+                ? string.concat("BNBULL whitelist: ", labels[i])
+                : "BNBULL whitelist: PancakeSwap v2 router";
+            if (want[i] == address(0)) {
+                // A zero here means the deployment record is incomplete. The
+                // token would happily whitelist address(0) and teach nobody
+                // anything, so say so instead.
+                wiresConflicted++;
+                console2.log("  /!\\ ZERO ADDRESS in the whitelist set:", label);
+                continue;
+            }
+            if (tokenWhitelists(d.bnbull, want[i])) {
+                _note(label, false);
+                continue;
+            }
+            missing[n++] = want[i];
+            _note(label, true);
+        }
+
+        if (n == 0) return;
+        address[] memory batch = new address[](n);
+        for (uint256 i = 0; i < n; i++) {
+            batch[i] = missing[i];
+        }
+        token.setWhitelistBulk(batch, true);
+        console2.log("  [set]   setWhitelistBulk entries written:", n);
+    }
 }
 
 /**
@@ -692,6 +874,16 @@ abstract contract WireCore is BnbullsConfig {
 contract Wire is WireCore {
     function run() external {
         address deployer = msg.sender;
+
+        // ⚠ THIS SCRIPT BROADCASTS, SO IT GETS THE SAME GATES `Deploy` DOES.
+        // It used to have none: no key discipline, no chain assertion, no
+        // mainnet confirmation. Every money route in the game is set here, and
+        // several slots are bootstrap-once — pointing one at the wrong address
+        // because `--rpc-url` resolved somewhere unexpected costs a redeploy,
+        // not a re-run.
+        keyGuard();
+        chainGuard();
+
         Cfg memory c = loadConfig(deployer);
         Deployment memory d = readDeployment();
 

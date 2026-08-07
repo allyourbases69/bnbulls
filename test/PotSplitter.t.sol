@@ -436,7 +436,10 @@ contract PotSplitterTest is SplitterBase {
      *      floor on dust.
      */
     function test_aFloorThatRoundsToZeroIsRefusedAsABlindSwap() public {
-        vm.prank(keeper);
+        // ⛔ The OWNER writes these. A keeper cannot: `keeperFloorDropBps`
+        //    refuses a cut this big, which is the leash working. The point
+        //    under test is what happens once such a rate EXISTS.
+        vm.prank(owner);
         mintSplit.setFloors(1, 1); // absurdly low but non-zero rates
 
         _sendNativeAndAssertNothingLost(mintSplit, 1000 wei);
@@ -827,7 +830,7 @@ contract PotSplitterTest is SplitterBase {
         dex.setRevertOnSwap(false);
 
         vm.prank(keeper);
-        mintSplit.sweepBnbullPot(PotSplitter.PotSource.Native, 0.5 ether, 1);
+        mintSplit.sweepBnbullPot(PotSplitter.PotSource.Native, 0.5 ether, _bnbullFromBnb(0.5 ether));
         assertEq(mintSplit.pendingBnbullBuyNative(), 1.5 ether);
 
         vm.prank(keeper);

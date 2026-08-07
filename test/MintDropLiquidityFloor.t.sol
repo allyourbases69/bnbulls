@@ -188,7 +188,10 @@ contract MintDropLiquidityFloorTest is BnbullsBase {
         router.setPairMissing(false);
         router.setPairReserves(0.01 ether, 1e24);
 
-        vm.prank(keeper);
+        // ⛔ The OWNER drives it: a priced sweep on `MintDrop` is owner-only,
+        //    because this contract carries no published floor to measure a
+        //    keeper's `minOut` against. See `MintDrop.sweepBnbullPot`.
+        vm.prank(owner);
         vm.expectRevert(
             abi.encodeWithSelector(MintDrop.PoolTooThin.selector, 0.01 ether, 1 ether)
         );
@@ -198,7 +201,7 @@ contract MintDropLiquidityFloorTest is BnbullsBase {
         // Graduation: 17.64 WBNB against 200,000,000 tokens, the figure measured
         // on three mainnet-fork graduations.
         router.setPairReserves(17.64 ether, 200_000_000e18);
-        vm.prank(keeper);
+        vm.prank(owner);
         uint256 funded = drop.sweepBnbullPot(
             MintDrop.PotSource.Native, 0, 1 ether * BNBULL_PER_BNB
         );
@@ -289,7 +292,7 @@ contract MintDropLiquidityFloorTest is BnbullsBase {
 
         // Raise the tolerance above the tax and the same buy goes through.
         d.setInlineSlippageBps(1_500);
-        vm.prank(keeper);
+        vm.prank(owner);
         uint256 funded = d.sweepBnbullPot(MintDrop.PotSource.Native, 0, 1);
 
         assertEq(funded, (2 ether * BNBULL_PER_BNB * 90) / 100, "booked POST-tax, as measured");

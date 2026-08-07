@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { MarketPanel } from '@/components/market/MarketPanel';
+import { PreLaunchNotice } from '@/components/PreLaunchNotice';
 import { DEATH } from '@/lib/brand';
 
 /**
@@ -14,7 +15,10 @@ export const metadata: Metadata = {
 
 export default function MarketPage() {
   return (
-    <div className="mx-auto max-w-4xl px-4 py-8 md:px-8">
+    // `max-w-7xl px-4 md:px-8` is fighting fefers' own market container, and
+    // the card grid below is ported to its 2/3/4/5/6 column ladder — the two
+    // have to agree or the widest breakpoint has nothing to fill.
+    <div className="mx-auto max-w-7xl px-4 py-8 md:px-8">
       <p className="bull-header text-xs uppercase tracking-[0.2em] text-bull-gold">marketplace</p>
       <h1 className="bull-header mt-3 text-3xl sm:text-4xl">buy and sell bulls</h1>
       <p className="mt-3 max-w-2xl text-bull-text-dim">
@@ -22,6 +26,8 @@ export default function MarketPage() {
         is locked out of fights. the dead flag, the loss streak and the revive rung all travel
         with the token, so check {DEATH.label} before you buy one off someone else.
       </p>
+      <PreLaunchNotice className="mt-8 max-w-3xl" />
+
       <div className="mt-10">
         <MarketPanel />
       </div>

@@ -99,6 +99,20 @@ export function GraveyardPanel() {
             </tbody>
           </table>
         </div>
+        {/* ⚠ SAY WHERE THESE NUMBERS CAME FROM WHILE THERE IS NO CONTRACT.
+            Every figure above is a `Graveyard` CONSTRUCTOR value, not an
+            estimate — but with nothing deployed the table looks exactly like a
+            live read, and a confident number nobody can check against a chain
+            is the thing this site cannot afford to print. The caveat goes away
+            on its own the moment there is an address, because from then on the
+            numbers really are read. */}
+        {!graveyardAddress && (
+          <p className="mt-3 max-w-2xl text-xs text-bull-text-faint">
+            these are the values the contract is built with, not a live read, because there is
+            no contract to read yet. they are also settable within a hard cap, so the table on
+            this page comes straight off chain the day it is deployed and this note goes away.
+          </p>
+        )}
       </section>
 
       <section className="mt-12">

@@ -117,6 +117,19 @@ abstract contract BnbullsConfig is Script {
         ///      0.01 WBNB. ZERO IS REFUSED by the contracts.
         uint256 minPoolLiquidity;
         uint256 inlineSlippageBps;
+        /// @dev ⚠ HOW LONG A VRF REQUEST MAY HANG BEFORE ANYONE MAY CANCEL IT.
+        ///      Measured, not guessed: the first live chain-97 fulfilment took
+        ///      **3,169 blocks (~24 minutes)** while the contract's old default
+        ///      was 1,200 (~9 min), so a keeper obeying it would have cancelled
+        ///      a request that was about to land — wasting the subscription
+        ///      payment and discarding the word. See `Jackpot`.
+        uint256 vrfRequestTimeoutBlocks;
+        /// @dev After this many blocks on the OLDEST pending ticket, anyone may
+        ///      call `requestResolve`. The dead-keeper failsafe, and a different
+        ///      question from the one above — it bounds OUR keeper, not
+        ///      Chainlink. Wired explicitly only because `setTimeouts` writes
+        ///      both numbers at once and a defaulted half is `§40` again.
+        uint256 vrfPublicRequestDelayBlocks;
         // Keeper pegs, seeded at deploy so the legs are live before the first
         // keeper tick.
         uint256 graveyardBnbullPerUsd;
@@ -138,6 +151,15 @@ abstract contract BnbullsConfig is Script {
         address bulls;
         address mintDrop;
         address duel;
+        /// @dev The arena roster (`Yards.sol`), wired into `Duel.Wire.Yards`.
+        ///      ⚠ A ZERO HERE IS NOT "no yards", IT IS **NO CHECK AT ALL** —
+        ///      `Duel._requireInYards` returns early on an unwired slot, so a
+        ///      deployment that forgets this one has every bull in the game
+        ///      permanently fightable by anyone who can get a signature, which
+        ///      is the exact hole `Yards` exists to close
+        ///      (`test_anUnwiredYardsSlotLeavesEveryDuelUngated`). `Verify`
+        ///      asserts it is non-zero AND has code.
+        address yards;
         address graveyard;
         address jackpotBnbull;
         address jackpotBnb;
@@ -149,6 +171,13 @@ abstract contract BnbullsConfig is Script {
         ///      `reviveSplitter` because that one splits 2:1 across both pots.
         address marketSplitter;
         uint256 deployBlock;
+        /// @dev The owner the deploy was CONFIRMED against, at the terminal, by
+        ///      a human (`treasuryGuard`). Recorded because `Handover` runs
+        ///      later, in its own process, and re-reads `OWNER` from env — so
+        ///      without this there is nothing to diff that second read against,
+        ///      and eight contracts move irreversibly to whatever the env file
+        ///      happens to say at that moment.
+        address owner;
     }
 
     // ─── Errors ──────────────────────────────────────────────────────────
@@ -315,7 +344,19 @@ abstract contract BnbullsConfig is Script {
         // peg. `DECISIONS.md §26` made the BNB stake oracle-derived, so
         // `FIGHT_COST_WBNB` is retired; the env var is `FIGHT_COST_USD`.
         c.params.fightWbnb = vm.envOr("FIGHT_COST_USD", uint256(2e18)); // $2 (DECISIONS 41)
-        c.params.fightBnbull = vm.envOr("FIGHT_COST_BNBULL", uint256(250e18));
+        // DECISIONS.md 41. 250e18 -> 200e18, and the two lines MUST move
+        // together. 39 removed the fight discount, so the keeper pegs the FULL
+        // sticker and the contract takes nothing off it: at $0.01 a BNBULL, 200
+        // BNBULL IS the $2 above. Leaving 250 makes a BNBULL fight cost $2.50
+        // against a $2 BNB fight — a silent 25% surcharge on the currency the
+        // project is trying to push, which is the opposite of the intent.
+        //
+        // ⚠ PROMOTED TO `_mainnetReqUint` DELIBERATELY. This is 40's bug in a
+        // second costume: `.env.example` ships the line blank, so as a plain
+        // `vm.envOr` mainnet never had to say the number out loud and whatever
+        // was written here shipped by accident rather than by decision. Now
+        // chain 56 fails loud, by name, until an operator types it.
+        c.params.fightBnbull = _mainnetReqUint("FIGHT_COST_BNBULL", 200e18);
 
         // A zero floor DISABLES that swap leg: the pre-check fails and every
         // slice defers into a `pending*` bucket, silently, on every payment.
@@ -330,11 +371,116 @@ abstract contract BnbullsConfig is Script {
         // the ordinary pre-graduation deferral except that it never stops.
         // Measured floor is 1100; 1500 leaves headroom. Ceiling is 2000.
         c.params.inlineSlippageBps = vm.envOr("MINT_INLINE_SLIPPAGE_BPS", uint256(1_500));
+        // ⚠ THE SAME BUG CLASS AS `inlineSlippageBps`, AND IT HAS ALREADY BITTEN
+        // THIS PROJECT TWICE (`DECISIONS.md §40`). Nothing set the pots' VRF
+        // timeouts at all, so the contract's own default shipped by accident
+        // rather than by decision — and that default (1,200 blocks, ~9 min at
+        // ~0.45s) is SHORTER THAN A MEASURED FULFILMENT (3,169 blocks). Both
+        // numbers now live here, are written by `Wire`, and are asserted by
+        // `Verify`.
+        c.params.vrfRequestTimeoutBlocks =
+            vm.envOr("VRF_REQUEST_TIMEOUT_BLOCKS", uint256(24_000));
+        c.params.vrfPublicRequestDelayBlocks =
+            vm.envOr("VRF_PUBLIC_REQUEST_DELAY_BLOCKS", uint256(1_200));
 
         c.params.graveyardBnbullPerUsd = _mainnetReqUint("GRAVEYARD_BNBULL_PER_USD", 100e18);
         c.params.marketplaceBnbullUsd = _mainnetReqUint("MARKETPLACE_BNBULL_USD", 0.01e18);
 
         c.params.baseURI = vm.envOr("NFT_BASE_URI", string(""));
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
+    //  THE BNBULL TRANSFER WHITELIST — one list, two readers
+    // ══════════════════════════════════════════════════════════════════════
+
+    /**
+     * @notice Every contract we deploy that MOVES BNBULL, and therefore every
+     *         one that must be whitelisted while the token's launch gate is
+     *         shut.
+     *
+     * @dev ⚠ ONE LIST, SHARED BY `Wire` AND `Verify` ON PURPOSE. A wiring step
+     *      and its assertion that keep separate copies of the same set drift
+     *      the day somebody adds a contract, and the drift is invisible: the
+     *      verifier passes because it is checking the shorter list.
+     *      `script/anvil/DeployLocal.s.sol` had its own eight-entry copy and it
+     *      was ALREADY WRONG — `marketSplitter` was missing from it.
+     *
+     *      Derived from the code, not from a checklist:
+     *
+     *        - **jackpotBnbull** ⛔ pays winners with `prizeToken.safeTransfer`.
+     *          THIS IS THE ONE THAT BIT US: a winning ticket against a gated
+     *          token reverts, `Duel._resolveOnly` swallows it, and the queue
+     *          wedges with no error anywhere.
+     *        - **jackpotBnb** holds WBNB and is never funded in BNBULL — but
+     *          `sweepForeignToken` is a BNBULL transfer OUT of it, so a stray
+     *          donation would be unrecoverable while the gate is shut. Cheap
+     *          insurance, and it is the honest reason rather than symmetry.
+     *        - **mintDrop** takes `mintWithBNBULL`, routes the pot slice, and
+     *          runs the inline buy.
+     *        - **duel** pulls BNBULL stakes, pays the winner, funds the pot.
+     *        - **graveyard** takes BNBULL revives and donates the slice.
+     *        - **marketplace** settles BNBULL-denominated sales and fees.
+     *        - **the three splitters** hold bought BNBULL and `fund` the pot.
+     *
+     *      `Bulls` and `Yards` are deliberately absent: neither imports IERC20
+     *      and neither can hold a token. `bnbull` itself needs no entry — a
+     *      mint/burn skips every restriction.
+     *
+     *      ⚠ ONE WHITELISTED SIDE IS ENOUGH (`BNBull._update` tests `!fromWl &&
+     *      !toWl`), so a player paying INTO a whitelisted contract passes even
+     *      though the player is not listed. That is why this list is the game's
+     *      contracts and not the whole world — and also why it does NOT make
+     *      player-to-player BNBULL transfers work, which stay shut until
+     *      `enableTrading()`, exactly as `§29` intends.
+     */
+    function bnbullMovers(Deployment memory d)
+        internal
+        pure
+        returns (address[] memory addrs, string[] memory labels)
+    {
+        addrs = new address[](9);
+        labels = new string[](9);
+        addrs[0] = d.jackpotBnbull;
+        labels[0] = "Jackpot BNBULL (pays the winner - the one that wedged)";
+        addrs[1] = d.jackpotBnb;
+        labels[1] = "Jackpot BNB (sweepForeignToken is a BNBULL transfer out)";
+        addrs[2] = d.mintDrop;
+        labels[2] = "MintDrop";
+        addrs[3] = d.duel;
+        labels[3] = "Duel";
+        addrs[4] = d.graveyard;
+        labels[4] = "Graveyard";
+        addrs[5] = d.marketplace;
+        labels[5] = "Marketplace";
+        addrs[6] = d.mintSplitter;
+        labels[6] = "MintBnbullSplitter";
+        addrs[7] = d.reviveSplitter;
+        labels[7] = "ReviveBuySplitter";
+        addrs[8] = d.marketSplitter;
+        labels[8] = "MarketPotSplitter";
+    }
+
+    /**
+     * @notice Does this BNBULL implement our own launch whitelist?
+     * @dev ⚠ THE MAINNET GUARD. `DECISIONS.md §4` puts the launch on four.meme,
+     *      whose token is THEIRS and has no `whitelisted` mapping at all — so
+     *      every whitelist step must be a NO-OP there rather than a revert that
+     *      stops the wiring. Probed by calling, never by chain id: a chain-id
+     *      test would be wrong the moment we self-issue on mainnet, and right
+     *      for the wrong reason on chain 97.
+     */
+    function tokenHasWhitelist(address token) internal view returns (bool) {
+        if (token == address(0) || token.code.length == 0) return false;
+        (bool ok, bytes memory ret) =
+            token.staticcall(abi.encodeWithSignature("whitelisted(address)", address(0)));
+        return ok && ret.length == 32;
+    }
+
+    /// @notice `whitelisted(addr)` on a token already proven to have one.
+    function tokenWhitelists(address token, address who) internal view returns (bool) {
+        (bool ok, bytes memory ret) =
+            token.staticcall(abi.encodeWithSignature("whitelisted(address)", who));
+        return ok && ret.length == 32 && abi.decode(ret, (bool));
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -467,27 +613,25 @@ abstract contract BnbullsConfig is Script {
     error OracleUnusable(address feed);
 
     /**
-     * @notice Resolved chain, deployer + balance, gas price, an estimate, and a
-     *         live code check on every external address.
+     * @notice ⚠ AM I ON THE CHAIN I THINK I AM, AND DID A HUMAN MEAN MAINNET?
      *
-     * @dev ⚠ THE CHAIN ASSERTION IS THE POINT. `--rpc-url` is a string; nothing
-     *      else in the toolchain checks that the chain behind it is the chain
-     *      you meant. Set `EXPECT_CHAIN_ID` and a testnet rehearsal pointed at
-     *      a mainnet RPC dies here instead of writing a mainnet record — the
-     *      exact class of accident that cost fighting fefers 154 USDT.
+     * @dev The chain half of `preflight`, factored out because it is not the
+     *      deploy's private business. `--rpc-url` is a string, and NOTHING else
+     *      in the toolchain checks that the chain behind it is the chain you
+     *      meant — so every script that broadcasts needs this, not just the one
+     *      that deploys. `Wire`, `Handover`, `AcceptJackpotOwnership` and
+     *      `OneWaySwitches` all move money routes or ownership irreversibly,
+     *      and all four used to broadcast with no chain assertion at all.
      *
-     *      And every external address is checked for CODE, not for
-     *      well-formedness. A wrong-but-plausible address is a contract call
-     *      into empty space: `_potLegReady` shows why that is invisible — a
-     *      call to an address with no code SUCCEEDS with empty returndata.
+     *      Set `EXPECT_CHAIN_ID` and a testnet rehearsal pointed at a mainnet
+     *      RPC dies here instead of rewiring mainnet — the exact class of
+     *      accident that cost fighting fefers 154 USDT.
      */
-    function preflight(Cfg memory c) internal view {
+    function chainGuard() internal view {
         uint256 expect = vm.envOr("EXPECT_CHAIN_ID", uint256(0));
-        console2.log("");
-        console2.log("======================= PREFLIGHT =======================");
-        console2.log("  chain id        ", block.chainid);
         if (expect != 0 && expect != block.chainid) {
             console2.log("  /!\\ EXPECT_CHAIN_ID is", expect);
+            console2.log("      chain behind --rpc-url is", block.chainid);
             console2.log("      The RPC behind --rpc-url is a DIFFERENT chain.");
             console2.log("      Refusing to broadcast.");
             revert ChainMismatch(expect, block.chainid);
@@ -497,6 +641,22 @@ abstract contract BnbullsConfig is Script {
             console2.log("      Set CONFIRM_MAINNET=true only when that is what you mean.");
             revert MainnetNotConfirmed();
         }
+    }
+
+    /**
+     * @notice Resolved chain, deployer + balance, gas price, an estimate, and a
+     *         live code check on every external address.
+     *
+     * @dev Every external address is checked for CODE, not for
+     *      well-formedness. A wrong-but-plausible address is a contract call
+     *      into empty space: `_potLegReady` shows why that is invisible — a
+     *      call to an address with no code SUCCEEDS with empty returndata.
+     */
+    function preflight(Cfg memory c) internal view {
+        console2.log("");
+        console2.log("======================= PREFLIGHT =======================");
+        console2.log("  chain id        ", block.chainid);
+        chainGuard();
 
         uint256 bal = c.roles.deployer.balance;
         uint256 gp = tx.gasprice;
@@ -602,6 +762,7 @@ abstract contract BnbullsConfig is Script {
         vm.serializeAddress(con, "bulls", d.bulls);
         vm.serializeAddress(con, "mintDrop", d.mintDrop);
         vm.serializeAddress(con, "duel", d.duel);
+        vm.serializeAddress(con, "yards", d.yards);
         vm.serializeAddress(con, "graveyard", d.graveyard);
         vm.serializeAddress(con, "jackpotBnbull", d.jackpotBnbull);
         vm.serializeAddress(con, "jackpotBnb", d.jackpotBnb);
@@ -624,8 +785,20 @@ abstract contract BnbullsConfig is Script {
         string memory rolJson =
             vm.serializeAddress(rol, "resurrectTreasury", c.roles.resurrectTreasury);
 
+        // ⚠ THE ONLY TWO NUMBERS IN THE WHOLE DEPLOY THAT NO LATER TRANSACTION
+        // CAN CORRECT. `Duel.addFightAsset` is one-shot per asset and its
+        // `maxCost` ceiling can never be raised, so a fat-fingered value is a
+        // redeploy — and `Verify` cannot catch it from env, because an env file
+        // can be edited between the deploy and the verify. Recording them is
+        // what lets `Verify` assert the EXACT ceiling instead of `!= 0`, which
+        // a wrong number passes just as happily as a right one.
+        string memory par = "params";
+        vm.serializeUint(par, "maxFightWbnb", c.params.maxFightWbnb);
+        string memory parJson = vm.serializeUint(par, "maxFightBnbull", c.params.maxFightBnbull);
+
         string memory root = "root";
         vm.serializeString(root, "roles", rolJson);
+        vm.serializeString(root, "params", parJson);
         vm.serializeUint(root, "chainId", block.chainid);
         // NEVER 0. Every keeper/indexer cursor starts here, and a 0 means a
         // full-chain rescan on every restart (`DEPLOY-SAFETY-PREFLIGHT §4`).
@@ -646,6 +819,16 @@ abstract contract BnbullsConfig is Script {
         d.bulls = vm.parseJsonAddress(json, ".contracts.bulls");
         d.mintDrop = vm.parseJsonAddress(json, ".contracts.mintDrop");
         d.duel = vm.parseJsonAddress(json, ".contracts.duel");
+        // ⚠ OPTIONAL-READ, LIKE `.owner`. Records written before `Yards`
+        // existed have no such key and `parseJsonAddress` REVERTS on a missing
+        // one — which would make `Wire`, `Verify`, `Names` and `Handover` all
+        // refuse to open an older record. A script nobody can run against the
+        // live deployment is worse than one that reports the gap: a zero here
+        // is caught loudly by `Verify` ("Duel.Yards ... zero = NO CHECK AT
+        // ALL") rather than silently at `readDeployment`.
+        if (vm.keyExistsJson(json, ".contracts.yards")) {
+            d.yards = vm.parseJsonAddress(json, ".contracts.yards");
+        }
         d.graveyard = vm.parseJsonAddress(json, ".contracts.graveyard");
         d.jackpotBnbull = vm.parseJsonAddress(json, ".contracts.jackpotBnbull");
         d.jackpotBnb = vm.parseJsonAddress(json, ".contracts.jackpotBnb");
@@ -654,6 +837,16 @@ abstract contract BnbullsConfig is Script {
         d.reviveSplitter = vm.parseJsonAddress(json, ".contracts.reviveSplitter");
         d.marketSplitter = vm.parseJsonAddress(json, ".contracts.marketSplitter");
         d.deployBlock = vm.parseJsonUint(json, ".deployBlock");
+        // ⚠ THE OWNER IS PART OF THE RECORD. `Handover` re-reads `OWNER` from
+        // env in a later, separate run and hands eight contracts to it
+        // irreversibly; this is the value a human actually confirmed at the
+        // terminal on deploy day, and the only thing that second read can be
+        // diffed against. Optional-read because records written before this
+        // existed have no field to parse, and a script that cannot open an old
+        // record is a script nobody runs — `Handover` fails loud on a zero.
+        if (vm.keyExistsJson(json, ".owner")) {
+            d.owner = vm.parseJsonAddress(json, ".owner");
+        }
     }
 
     /**
@@ -748,6 +941,31 @@ abstract contract BnbullsConfig is Script {
         // the ordinary pre-graduation deferral except that it never stops.
         // Measured floor is 1100; 1500 leaves headroom. Ceiling is 2000.
         c.params.inlineSlippageBps = vm.envOr("MINT_INLINE_SLIPPAGE_BPS", uint256(1_500));
+        // ⚠ SAME RULE AS `minPoolLiquidity` ABOVE: the EXPRESSION AND THE
+        // DEFAULT must match `loadConfig` exactly. They are not in the record,
+        // so a mismatch here would make the standalone `Verify` — the one the
+        // runbook actually tells you to run — compare the live value against
+        // zero and fail on every chain, which is how a verifier teaches an
+        // operator to ignore it.
+        c.params.vrfRequestTimeoutBlocks =
+            vm.envOr("VRF_REQUEST_TIMEOUT_BLOCKS", uint256(24_000));
+        c.params.vrfPublicRequestDelayBlocks =
+            vm.envOr("VRF_PUBLIC_REQUEST_DELAY_BLOCKS", uint256(1_200));
+
+        // ⚠ THE TWO PERMANENT CEILINGS. Prefer the RECORD — it says what the
+        // deploy actually froze, and `addFightAsset` gives no second chance.
+        // Fall back to the SAME expression `loadConfig` uses, default included,
+        // for records written before these were recorded: a Cfg field left at
+        // zero would make `Verify` compare a live ceiling against nothing and
+        // report a false failure on every chain, which is how a REAL failure
+        // gets waved through later.
+        if (vm.keyExistsJson(json, ".params.maxFightWbnb")) {
+            c.params.maxFightWbnb = vm.parseJsonUint(json, ".params.maxFightWbnb");
+            c.params.maxFightBnbull = vm.parseJsonUint(json, ".params.maxFightBnbull");
+        } else {
+            c.params.maxFightWbnb = _mainnetReqUint("FIGHT_MAX_COST_WBNB", 1e18);
+            c.params.maxFightBnbull = _mainnetReqUint("FIGHT_MAX_COST_BNBULL", 1_000_000e18);
+        }
     }
 
     error RecordDisagreesWithEnv(string name, address record, address env);
@@ -824,6 +1042,7 @@ abstract contract BnbullsConfig is Script {
         console2.log("  Bulls (ERC-721)   ", d.bulls);
         console2.log("  MintDrop          ", d.mintDrop);
         console2.log("  Duel              ", d.duel);
+        console2.log("  Yards             ", d.yards);
         console2.log("  Graveyard         ", d.graveyard);
         console2.log("  Jackpot BNBULL    ", d.jackpotBnbull);
         console2.log("  Jackpot BNB       ", d.jackpotBnb);

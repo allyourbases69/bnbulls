@@ -247,7 +247,7 @@ contract SwapPathBackupSplitterTest is SplitterBase {
         vm.expectRevert(
             abi.encodeWithSelector(PotSplitter.InvalidMinLiquidity.selector, uint256(0))
         );
-        mintSplit.sweepBnbullPot(PotSplitter.PotSource.Native, 0, 1);
+        mintSplit.sweepBnbullPot(PotSplitter.PotSource.Native, 0, _bnbullFromBnb(2 ether));
     }
 
     /**
@@ -512,7 +512,7 @@ contract SwapPathBackupSplitterTest is SplitterBase {
         dex.setRevertOnSwap(false);
         vm.prank(keeper);
         uint256 funded =
-            mintSplit.sweepBnbullPot(PotSplitter.PotSource.Native, 0, _bnbullFromBnb(1 ether));
+            mintSplit.sweepBnbullPot(PotSplitter.PotSource.Native, 0, _bnbullFromBnb(2 ether));
         assertEq(funded, _bnbullFromBnb(2 ether));
         assertEq(mintSplit.pendingBnbullBuyNative(), 0);
     }
@@ -809,13 +809,14 @@ contract SwapPathBackupMintDropTest is BnbullsBase {
         assertEq(drop.minPoolLiquidityAlt(), ALT_FLOOR);
     }
 
-    /// @dev The keeper sweep names the missing floor rather than failing quietly.
+    /// @dev The sweep names the missing floor rather than failing quietly.
+    ///      Driven by the OWNER: a priced sweep on `MintDrop` is owner-only.
     function test_theSweepNamesTheMissingAltFloor() public {
         drop.bootstrapWire(MintDrop.Wire.SwapIntermediate, address(usdt));
         _donate(3 ether);
         assertEq(drop.pendingBnbullBuyNative(), 2 ether);
 
-        vm.prank(keeper);
+        vm.prank(owner);
         vm.expectRevert(abi.encodeWithSelector(MintDrop.InvalidMinLiquidity.selector, uint256(0)));
         drop.sweepBnbullPot(MintDrop.PotSource.Native, 0, 1);
     }
@@ -930,7 +931,7 @@ contract SwapPathBackupMintDropTest is BnbullsBase {
 
         // The operator repoints the route at the pair that actually exists.
         router.v2Factory().setPairFor(address(usdt), address(bnbull), address(altPair));
-        vm.prank(keeper);
+        vm.prank(owner);
         uint256 funded = drop.sweepBnbullPot(MintDrop.PotSource.Native, 0, 1);
         assertEq(funded, backlog * BNBULL_PER_BNB);
         assertEq(drop.pendingBnbullBuyNative(), 0, "the backlog cleared");

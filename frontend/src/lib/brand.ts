@@ -209,8 +209,58 @@ export const CURRENCY = {
     '$BNBULL is not tradeable until the four.meme curve fills. the token cannot be ' +
     'moved at all before then, so every bnbull leg is switched off rather than ' +
     'quietly failing. bnb works today.',
-  /** The discount, once BNBULL is live (`§2`). */
-  discount: 'bnbull is the only leg that ever carries a discount.',
+  /**
+   * The discount, once BNBULL is live (`§2`).
+   *
+   * ⚠ "ON A MINT" IS LOAD-BEARING, NOT PADDING. `DECISIONS.md §39` killed the
+   * fight discount outright: a $2 duel costs $2 in either currency, because
+   * discounting one side's entry would have the two fighters put different
+   * money into the same purse and `_distributePot` settles each side in its
+   * own asset, so the gap lands in the winner's payout. This string used to
+   * read "the only leg that ever carries a discount", which is now false of
+   * fighting. It is rendered on `/mint` only, and it says so.
+   */
+  discount: 'bnbull is the only leg that carries a discount on a mint.',
+} as const;
+
+// ─── the pre-launch state (DECISIONS.md §29) ─────────────────────────
+//
+// ⚠ THE PRE-LAUNCH STATE IS DELIBERATE AND HAS TO READ THAT WAY.
+//
+// Every panel on this site renders "not deployed yet" when its address is
+// unset, which is honest — but a panel that says that because a READ FAILED
+// looks exactly the same as one that means it. So the site states its position
+// out loud instead of leaving a visitor to infer it from a wall of empty
+// boxes: nothing is deployed, that is on purpose, here is what happens first,
+// and here is what there is to do meanwhile.
+//
+// ⚠ THE FACT UNDERNEATH IS `§29` + `§28.1`, and neither is softened here.
+// $BNBULL launches on four.meme's fair-launch curve. Pre-graduation four.meme
+// holds the token transfer-locked in its own contract, so NOBODY can move it,
+// us included — which is why the game prices and settles in BNB until the
+// curve fills. That is the normal launch state, not an error state, and saying
+// so is stronger than hiding it.
+//
+// ⚠ NO DATES, EVER (`VOICE-AND-BRAND.md §1`). "soon" or "when X is done".
+
+export const PRELAUNCH = {
+  heading: 'not open yet.',
+  /** What is and is not deployed. The honest headline fact. */
+  state:
+    'nothing is deployed. no mint, no fights, no marketplace, no $BNBULL. every panel here ' +
+    'that reads a contract is empty because there is no contract to read yet, not because ' +
+    'something is broken.',
+  /** What happens first. `DECISIONS.md §29`. */
+  order:
+    '$BNBULL goes up on four.meme first, fair-launch curve, no presale and no team ' +
+    'allocation. the pad holds the token locked until that curve fills, so nobody can move ' +
+    'it, us included. the game prices and settles in bnb until it does.',
+  /** The one guarantee that is already true of this site. */
+  addresses:
+    'every address on this site is read from config and never invented, so a fake one can ' +
+    'never turn up on a page here.',
+  /** The lead-in to the link row. */
+  meanwhile: 'in the meantime:',
 } as const;
 
 // ─── the deal ────────────────────────────────────────────────────────
@@ -255,6 +305,12 @@ export const NAV: readonly NavEntry[] = [
   { href: '/duel', label: 'duel' },
   { href: '/graveyard', label: DEATH.label },
   { href: '/market', label: 'marketplace' },
+  // Fefers' nav order puts the two ranking pages between marketplace and
+  // browse, and they carry different meanings on purpose: `leaders` ranks by
+  // duel RATING (how well a bull fights), `ranks` by rarity SCORE (how rare it
+  // is). Keeping both visible is what stops either being read as the other.
+  { href: '/leaders', label: 'leaders' },
+  { href: '/ranks', label: 'ranks' },
   { href: '/pots', label: 'pots' },
   { href: '/bulls', label: 'browse' },
   { href: '/about', label: 'how to play' },

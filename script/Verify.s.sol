@@ -3,6 +3,7 @@ pragma solidity 0.8.24;
 
 import {console2} from "forge-std/console2.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {AggregatorV3Interface} from
     "@chainlink/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 
@@ -14,6 +15,7 @@ import {Graveyard} from "../contracts/Graveyard.sol";
 import {Jackpot} from "../contracts/Jackpot.sol";
 import {Marketplace} from "../contracts/Marketplace.sol";
 import {PotSplitter} from "../contracts/lib/PotSplitter.sol";
+import {Yards} from "../contracts/Yards.sol";
 
 /**
  * @title VerifyCore
@@ -42,6 +44,33 @@ abstract contract VerifyCore is BnbullsConfig {
     uint256 internal failures;
     uint256 internal warnings;
     uint256 internal checks;
+
+    /**
+     * @notice Gas the coordinator burns VERIFYING the proof, on top of our own
+     *         `callbackGasLimit`, when it sizes what a request will cost.
+     *
+     * @dev ⚠ A MEASUREMENT, NOT A PUBLISHED CONSTANT, and it is written down
+     *      here so the number that produced it can be checked. On the live
+     *      chain-97 stall the lane's `maxGas` was 50 gwei and
+     *      `callbackGasLimit` 200,000; a subscription holding 0.0096 BNB was
+     *      accepted and never served, and 0.0243 BNB fulfilled in under twenty
+     *      seconds. `50 gwei x (200,000 + 115,000) = 0.01575 BNB` sits exactly
+     *      between the two.
+     */
+    uint256 internal constant VRF_VERIFICATION_GAS = 115_000;
+
+    /**
+     * @notice The slowest VRF fulfilment this project has actually measured:
+     *         **3,169 blocks, ~24 minutes at BSC's ~0.45s**, on the first live
+     *         chain-97 request. Later ones took one to three minutes.
+     *
+     * @dev The stall timeout is asserted against DOUBLE this, so a config that
+     *      would have a keeper cancel a request mid-flight fails the preflight
+     *      instead of wasting a subscription payment on a live pot. ⚠ It is a
+     *      floor on a BLOCK count guarding a TIME-denominated latency, so it
+     *      gets tighter every time BSC shortens its blocks — see `Jackpot`.
+     */
+    uint256 internal constant VRF_WORST_OBSERVED_FULFILMENT_BLOCKS = 3_169;
 
     error VerificationFailed(uint256 count);
 
@@ -110,6 +139,7 @@ abstract contract VerifyCore is BnbullsConfig {
         _verifyBulls(c, d);
         _verifyMintDrop(c, d);
         _verifyDuel(c, d);
+        _verifyYards(c, d);
         _verifyGraveyard(c, d);
         _verifyPot(c, d, Jackpot(d.jackpotBnbull), d.bnbull, 50, "BNBULL pot");
         _verifyPot(c, d, Jackpot(d.jackpotBnb), c.ext.wbnb, 100, "BNB pot");
@@ -117,6 +147,8 @@ abstract contract VerifyCore is BnbullsConfig {
         _verifySplitter(c, d, PotSplitter(d.mintSplitter), "MintBnbullSplitter", true);
         _verifySplitter(c, d, PotSplitter(d.reviveSplitter), "ReviveBuySplitter", true);
         _verifySplitter(c, d, PotSplitter(d.marketSplitter), "MarketPotSplitter", false);
+        _verifyTokenWhitelist(c, d);
+        _verifyOwnership(c, d);
         _verifyCrossCutting(c, d);
 
         console2.log("");
@@ -390,6 +422,24 @@ abstract contract VerifyCore is BnbullsConfig {
 
         // ⚠⚠ THE NATIVE FIGHT PATH. Without this asset registered, every WBNB
         // stake reverts `UnsupportedAsset` and the BNB fight does not exist.
+        //
+        // ⛔ AND THE EXACT CEILING, NOT MERELY NON-ZERO. `maxFightCost` is the
+        // one PERMANENT value in the whole wiring: `addFightAsset` is one-shot
+        // per asset and the ceiling can never be raised afterwards, so a
+        // fat-fingered number is a redeploy of the entire game. `!= 0` passes
+        // on a wrong number exactly as happily as on a right one, and there is
+        // no second chance to notice. The wanted values come from the
+        // deployment record (`writeDeployment`), not from env, because an env
+        // file can be edited between the deploy and the verify — which is the
+        // accident class that cost fefers 154 USDT.
+        _okUint(
+            du.maxFightCostOf(c.ext.wbnb), c.params.maxFightWbnb,
+            "Duel.addFightAsset(WBNB) maxCost - PERMANENT, THE NATIVE FIGHT PATH"
+        );
+        _okUint(
+            du.maxFightCostOf(d.bnbull), c.params.maxFightBnbull,
+            "Duel.addFightAsset(BNBULL) maxCost - PERMANENT, can never be raised"
+        );
         _ok(du.maxFightCostOf(c.ext.wbnb) != 0, "Duel.addFightAsset(WBNB) - THE NATIVE FIGHT PATH");
         _ok(du.maxFightCostOf(d.bnbull) != 0, "Duel.addFightAsset(BNBULL)");
         _ok(du.fightAssetCount() >= 2, "Duel has >= 2 stake assets");
@@ -434,6 +484,80 @@ abstract contract VerifyCore is BnbullsConfig {
         _ok(du.domainSeparator() == expected, 'Duel EIP-712 domain == "BNBullsDuel" / "1"');
     }
 
+    // ─── Yards (the consent gate) ───────────────────────────────────────
+
+    /**
+     * @notice `DECISIONS`-grade: a bull may only be fought while its CURRENT
+     *         owner has put it in the yards.
+     *
+     * @dev ⚠ THIS IS THE ONE SLOT IN THE WHOLE DEPLOY WHOSE MISS FAILS *OPEN*.
+     *      Everything else in this file fails toward "the money quietly went
+     *      somewhere else". `Duel._requireInYards` reads `Wire.Yards` and
+     *      RETURNS EARLY on a zero, so an unwired slot is not "the yards are
+     *      shut", it is **no membership check anywhere in the game** — every
+     *      bull fightable by anyone holding a signature, including down the
+     *      zero-stake path that reads no allowance and still kills a bull on
+     *      its `lossesToDie`-th consecutive loss.
+     *      `test_anUnwiredYardsSlotLeavesEveryDuelUngated` is that state,
+     *      executed.
+     *
+     *      A separate function rather than three more lines in `_verifyDuel`
+     *      for the dull reason that `_verifyDuel` is already one stack slot
+     *      from "Stack too deep" — the same seam `_verifySplitterRoute` exists
+     *      for.
+     */
+    function _verifyYards(Cfg memory, Deployment memory d) private {
+        console2.log("");
+        console2.log("-- Yards --");
+        Duel du = Duel(d.duel);
+
+        // ⚠ NOT PART OF `wires()`. That tuple still returns FOUR addresses on
+        // purpose — widening it would break every existing caller in `script/`
+        // and `test/` for no gain — so the yards has its own getter.
+        address yd = du.yardsContract();
+        _ok(yd != address(0), "Duel.Yards is WIRED (zero = NO membership check AT ALL)");
+        _okAddr(yd, d.yards, "Duel.Yards == the deployed Yards");
+        // An EOA here degrades to "no check" instead of reverting every duel
+        // (`test_aYardsSlotPointedAtAWalletDegradesRatherThanBricking`), which
+        // makes a mis-wire silent in exactly the direction that matters.
+        _hasCode(yd, "Duel.Yards");
+        _hasCode(d.yards, "Yards");
+
+        if (yd == address(0) || yd.code.length == 0) return;
+
+        Yards y = Yards(yd);
+        // The roster must be looking at the collection this game actually
+        // settles fights for. A Yards pointed at a DIFFERENT ERC-721 answers
+        // `ownerOf` from the wrong book, so nobody could ever enter and every
+        // duel would be refused — the fail-closed twin of the unwired case.
+        _okAddr(address(y.bulls()), d.bulls, "Yards.bulls == the Bulls collection");
+
+        // ⚠ THE ANTI-DODGE BOUND. `MIN_EJECT_DELAY` is the signer's
+        // `MAX_DUEL_EXPIRY_SECONDS` (900), so any eject outlives every
+        // signature that could name the bull and a losing side cannot front-run
+        // its own loss out of existence. The contract enforces the floor on
+        // every write; asserted here because an eject shorter than a signature
+        // TTL turns "take my bull home" into "cancel the fight I am losing".
+        _ok(
+            y.ejectDelay() >= y.MIN_EJECT_DELAY(),
+            "Yards.ejectDelay >= MIN_EJECT_DELAY (else eject becomes a dodge)"
+        );
+        _ok(
+            y.ejectDelay() <= y.MAX_EJECT_DELAY(),
+            "Yards.ejectDelay <= MAX_EJECT_DELAY (else nobody can ever leave)"
+        );
+        console2.log("  [info] ejectDelay (s)", y.ejectDelay());
+
+        // ⚠ THE DEFAULT IS **OUT**, AND THE YARDS ARE EMPTY ON LAUNCH DAY. That
+        // is the decision, not a gap — but it has a real cost and it must be
+        // said out loud once, here, while somebody is looking: until holders
+        // call `enter`, NOBODY CAN BE FOUGHT, and the site's matchmaking will
+        // correctly find nothing. Reported as info because a zero roster is the
+        // right pre-launch state; it is a bug only if it is a surprise.
+        console2.log("  [info] the yards start EMPTY - a bull is unfightable until its");
+        console2.log("         owner calls Yards.enter([...]). Default OUT is deliberate.");
+    }
+
     // ─── Graveyard ──────────────────────────────────────────────────────
 
     function _verifyGraveyard(Cfg memory c, Deployment memory d) private {
@@ -464,7 +588,16 @@ abstract contract VerifyCore is BnbullsConfig {
         _ok(g.bnbullPerUsd() != 0, "Graveyard.bnbullPerUsd is set (else no BNBULL revive)");
         _okUint(g.potShareBps(), 3_000, "Graveyard.potShareBps == 3000 (70% dev)");
         _okUint(g.lpShareBps(), 0, "Graveyard.lpShareBps == 0 at launch");
-        _ok(g.lpTreasury() != address(0), "Graveyard.lpTreasury is not the zero address");
+        // ⚠ THIS EXACT SLOT, ON THIS EXACT CONTRACT, IS THE ONE NAMED IN THE
+        // $154 POST-MORTEM. On fefers `Graveyard.lpTreasury` on mainnet is
+        // STILL a dead rehearsal wallet — inert only because `lpShareBps`
+        // happens to be 0, and unrecoverable the day anyone raises the share.
+        // A non-zero check is precisely the check that passed on the bad
+        // wallet: `DEPLOY-SAFETY-PREFLIGHT.md §1` is explicit that
+        // well-formedness is not a check. MintDrop's identical slot is
+        // address-checked; this one gets the same treatment.
+        _okAddr(g.lpTreasury(), d.mintSplitter, "Graveyard.lpTreasury -> MintBnbullSplitter");
+        _hasCode(g.lpTreasury(), "Graveyard.lpTreasury");
         _okUint(g.discountBpsOf(d.bnbull), 1_000, "Graveyard BNBULL discount = 1000bps");
         _ok(g.maxResurrects() != 0, "Graveyard.maxResurrects != 0");
         _ok(!g.paused(), "Graveyard is not paused");
@@ -519,6 +652,16 @@ abstract contract VerifyCore is BnbullsConfig {
             p.isFunder(d.reviveSplitter),
             string.concat(tag, ".setFunder(ReviveBuySplitter) - else every revive leg defers")
         );
+        // `Wire` grants this one and nothing asserted it. Without it every
+        // marketplace jackpot slice — `DECISIONS.md §21`'s 2.5% of every sale,
+        // meant to market-buy BNBULL into the no-withdraw pot — hits
+        // `NotFunder`, gets swallowed by the splitter's never-fail wrapper and
+        // accrues. Which is ALSO the legitimate pre-graduation state (`§29`),
+        // so it is invisible from the outside either way.
+        _ok(
+            p.isFunder(d.marketSplitter),
+            string.concat(tag, ".setFunder(MarketPotSplitter) - else every market fee slice defers")
+        );
         _ok(p.isRequester(c.roles.keeper), string.concat(tag, ".setRequester(keeper)"));
 
         // No VRF config -> `requestResolve` reverts `VrfNotConfigured` and the
@@ -532,6 +675,29 @@ abstract contract VerifyCore is BnbullsConfig {
         );
         _ok(p.callbackGasLimit() > 0, string.concat(tag, ".callbackGasLimit > 0"));
 
+        // ⚠ THE STALL TIMEOUT, MEASURED AGAINST A REAL FULFILMENT. Two checks
+        // and they are not the same check. The first is `§40`'s: the value must
+        // be the one in the config, so a contract default cannot ship by
+        // accident. The second is a FLOOR that holds even if somebody
+        // overrides the config — because a timeout below real VRF latency makes
+        // the keeper cancel requests that are about to land, spending the
+        // subscription payment and discarding the word that then arrives for an
+        // id that no longer matches.
+        _okUint(
+            p.requestTimeoutBlocks(),
+            c.params.vrfRequestTimeoutBlocks,
+            string.concat(tag, ".requestTimeoutBlocks (wired, not defaulted - DECISIONS 40)")
+        );
+        _okUint(
+            p.publicRequestDelayBlocks(),
+            c.params.vrfPublicRequestDelayBlocks,
+            string.concat(tag, ".publicRequestDelayBlocks (wired, not defaulted)")
+        );
+        _ok(
+            p.requestTimeoutBlocks() >= 2 * VRF_WORST_OBSERVED_FULFILMENT_BLOCKS,
+            string.concat(tag, ".requestTimeoutBlocks >= 2x the SLOWEST fulfilment ever measured")
+        );
+
         // ⚠ `DECISIONS.md §38` — THE KEYHASH NOBODY SERVES.
         // `requestRandomWords` does NOT consult the proving-key registry, so a
         // typo'd gas lane returns a REAL request id, sets `pendingRequestId`,
@@ -539,7 +705,13 @@ abstract contract VerifyCore is BnbullsConfig {
         // timeout. Rejection would have been a five-minute deploy bug;
         // acceptance is a silent one. The registry is public, so this is
         // checkable here and nowhere else in the deploy path.
-        _provingKeyRegistered(p, tag);
+        //
+        // ⚠ AND THE LANE'S `maxGas` IS NOT TRIVIA — it is half of what the
+        // coordinator reserves per request, so it feeds straight into the
+        // funding check below. §38 says registration is not service; an
+        // underfunded subscription is the OTHER half of that same lesson, and
+        // it is the half that actually stalled chain 97.
+        _subscriptionFunded(p, _provingKeyRegistered(p, tag), tag);
 
         // `DECISIONS.md §18` — THE most serious defect found so far. The
         // trusted coordinator is a TIMELOCKED slot on the pot itself, and
@@ -563,7 +735,35 @@ abstract contract VerifyCore is BnbullsConfig {
         }
 
         _ok(p.payoutBps() > 0 && p.payoutBps() <= 10_000, string.concat(tag, ".payoutBps in range"));
-        _okAddr(p.owner(), c.roles.deployer, string.concat(tag, ".owner is still the deployer"));
+
+        // ⚠ THE PAYOUT TERMS ARE MONEY SLOTS, same class as the coordinator
+        // above. `resolve` decides who gets paid and how much out of `oddsOneIn`
+        // / `payoutBps` / `minPoolToFire`, so all three moved behind a one-time
+        // bootstrap plus propose -> wait -> commit.
+        //
+        // `bootstrapPayoutParams` is the ONE free instant write and it is a
+        // one-time flag, NOT "while no tickets exist" — so it must be spent
+        // before launch or it is still sitting there afterwards, letting the
+        // three numbers be rewritten in a single transaction against a pot that
+        // by then holds players' money.
+        _ok(
+            p.payoutParamsBootstrapped(),
+            string.concat(tag, ".bootstrapPayoutParams USED (else an instant rewrite remains)")
+        );
+        // ⛔ THE ODDS FLOOR. `oddsOneIn = 1` is `H % 1 == 0` for every possible
+        // word — a certain win, with no VRF grinding at all, and the last step
+        // of the four-transaction pool drain. The contract enforces this on
+        // every write; asserted here too because a pot at the wrong odds is not
+        // recoverable by any keeper.
+        _ok(
+            p.oddsOneIn() >= p.MIN_ODDS_ONE_IN(),
+            string.concat(tag, ".oddsOneIn >= MIN_ODDS_ONE_IN (a certain win is a pool drain)")
+        );
+
+        // `owner()` moved to `_verifyOwnership`, which knows about `EXPECT_OWNER`
+        // and covers all ten contracts. Asserting the deployer here made the
+        // WHOLE of Verify revert once `Handover` had run, so there was no green
+        // check available after the one step that most needs one.
     }
 
     /**
@@ -588,7 +788,7 @@ abstract contract VerifyCore is BnbullsConfig {
      *      ⚠ REGISTRATION IS NOT PROOF OF SERVICE. Only a real fulfilment
      *      proves a lane is being served. This closes the typo, not the outage.
      */
-    function _provingKeyRegistered(Jackpot p, string memory tag) private {
+    function _provingKeyRegistered(Jackpot p, string memory tag) private returns (uint64) {
         bytes32 kh = p.keyHash();
         // A zero keyHash already failed above as ".keyHash is set"; there is no
         // lane to look up, and a second failure on the same cause is noise.
@@ -596,7 +796,7 @@ abstract contract VerifyCore is BnbullsConfig {
             console2.log(
                 "  [info] no keyHash configured, so no lane to check:", tag
             );
-            return;
+            return 0;
         }
 
         checks++;
@@ -610,14 +810,14 @@ abstract contract VerifyCore is BnbullsConfig {
                 console2.log(
                     "  [warn] coordinator has no s_provingKeys registry (mock):", tag
                 );
-                return;
+                return 0;
             }
             failures++;
             console2.log("  [FAIL]", string.concat(tag, ".keyHash lane CANNOT BE PROVEN"));
             console2.log("         the coordinator does not answer s_provingKeys(bytes32).");
             console2.log("         coordinator", p.trustedCoordinator());
             console2.log("         That is not a VRF v2.5 coordinator, or not the one we think.");
-            return;
+            return 0;
         }
 
         (bool exists, uint64 maxGas) = abi.decode(ret, (bool, uint64));
@@ -631,10 +831,135 @@ abstract contract VerifyCore is BnbullsConfig {
             console2.log("         returns a real request id, sets pendingRequestId, and then");
             console2.log("         RequestInFlight wedges the whole ticket queue until timeout.");
             console2.log("         The pot fills and never pays, with no error anywhere.");
-            return;
+            return 0;
         }
 
         console2.log(string.concat("  [ok]    ", tag, ".keyHash lane is registered, maxGas"), maxGas);
+        return maxGas;
+    }
+
+    /**
+     * @notice ⛔ IS THE SUBSCRIPTION ACTUALLY ABLE TO PAY FOR A REQUEST?
+     *         `DECISIONS.md §38`'s other half — registration is not service,
+     *         and neither is a funded-looking subscription.
+     *
+     * @dev DIAGNOSED ON THE LIVE CHAIN-97 STALL, and this is the whole shape:
+     *      the lane's `maxGas` is 50 gwei, `callbackGasLimit` is 200,000, so
+     *      the coordinator reserves roughly
+     *      `maxGas x (callbackGasLimit + verification gas)` ~= **0.0158 BNB**
+     *      per request. The subscription held **0.0096 BNB**. The request was
+     *      ACCEPTED — a real id, `pendingRequestId` set, `RequestInFlight`
+     *      blocking every later request — and then simply never served. The
+     *      balance never moved, no event fired, and nothing on chain said why.
+     *      Topping the subscription to 0.0243 BNB fulfilled it in under twenty
+     *      seconds.
+     *
+     *      That is the same failure MODE as a keyHash nobody serves, from a
+     *      completely different cause, and neither is visible from anything the
+     *      pot itself stores. Both are one `eth_call` away, so both belong
+     *      here.
+     *
+     *      ⚠ WHAT THIS IS NOT. It is an estimate of the coordinator's
+     *      reservation, not the coordinator's own arithmetic — v2.5 bills at
+     *      fulfilment with a premium percentage on top, and the node's
+     *      admission rule is not published. The failure threshold is therefore
+     *      the MINIMUM that could possibly work; the warning above it is the
+     *      one an operator should actually act on.
+     *
+     *      ⚠ AND THE CONSUMER REGISTRATION RIDES ALONG, because
+     *      `getSubscription` returns it in the same word. A pot that was never
+     *      added as a consumer cannot request at all — the single most common
+     *      VRF deploy mistake, and the one that looks exactly like a working
+     *      deployment until a keeper's transaction reverts.
+     */
+    function _subscriptionFunded(Jackpot p, uint64 maxGas, string memory tag) private {
+        uint256 subId = p.subscriptionId();
+        if (subId == 0) return; // already failed above as ".subscriptionId is set"
+
+        (bool ok, bytes memory ret) = p.trustedCoordinator().staticcall(
+            abi.encodeWithSignature("getSubscription(uint256)", subId)
+        );
+        if (!ok || ret.length < 192) {
+            checks++;
+            if (block.chainid == CHAIN_ANVIL) {
+                warnings++;
+                console2.log("  [warn] coordinator has no subscription registry (mock):", tag);
+                return;
+            }
+            failures++;
+            console2.log("  [FAIL]", string.concat(tag, ": THE VRF SUBSCRIPTION DOES NOT EXIST"));
+            console2.log("         subId       ", subId);
+            console2.log("         coordinator ", p.trustedCoordinator());
+            console2.log("         getSubscription reverted or answered nothing. Every");
+            console2.log("         requestResolve will revert and no ticket can ever resolve.");
+            return;
+        }
+
+        (uint96 linkBal, uint96 nativeBal,, address subOwner, address[] memory consumers) =
+            abi.decode(ret, (uint96, uint96, uint64, address, address[]));
+
+        // ⚠ AN ALL-ZERO ANSWER IS NOT AN EMPTY SUBSCRIPTION, IT IS THE WRONG
+        // CONTRACT. A real v2.5 coordinator REVERTS `InvalidSubscription` on a
+        // subscription that does not exist, so a successful call answering
+        // nothing means we are not talking to one — which is exactly what the
+        // local mock is. A warning on anvil, a failure anywhere else.
+        if (subOwner == address(0)) {
+            checks++;
+            if (block.chainid == CHAIN_ANVIL) {
+                warnings++;
+                console2.log("  [warn] mock coordinator: subscription funding not checkable:", tag);
+                return;
+            }
+            failures++;
+            console2.log("  [FAIL]", string.concat(tag, ": the subscription reads as EMPTY"));
+            console2.log("         subId       ", subId);
+            console2.log("         coordinator ", p.trustedCoordinator());
+            console2.log("         A real coordinator reverts on an unknown subId rather than");
+            console2.log("         answering zeros. This one is not the contract we think.");
+            return;
+        }
+
+        bool isConsumer;
+        for (uint256 i = 0; i < consumers.length; i++) {
+            if (consumers[i] == address(p)) isConsumer = true;
+        }
+        _ok(
+            isConsumer,
+            string.concat(tag, " is a CONSUMER of the subscription (else every request reverts)")
+        );
+
+        if (maxGas == 0) {
+            _warn(false, string.concat(tag, ": lane maxGas unknown, funding cannot be sized"));
+            return;
+        }
+
+        uint256 reserve = uint256(maxGas) * (uint256(p.callbackGasLimit()) + VRF_VERIFICATION_GAS);
+        console2.log("  [info] per-request reservation (wei)", reserve);
+
+        if (!p.payWithNative()) {
+            // The LINK leg reserves the same gas converted through the
+            // LINK/native feed, which is the coordinator's arithmetic and not
+            // ours to guess. Stated rather than faked.
+            _ok(linkBal > 0, string.concat(tag, ": the subscription holds LINK (payWithNative off)"));
+            console2.log("  [info] LINK-denominated funding is NOT sized here - see the docs.");
+            return;
+        }
+
+        console2.log("  [info] subscription native balance (wei)", nativeBal);
+        _ok(
+            uint256(nativeBal) >= reserve,
+            string.concat(
+                tag,
+                ": subscription funded above ONE request's reservation (else silently unserved)"
+            )
+        );
+        // One request's worth is not an operating balance: the pot resolves in
+        // batches for as long as the game runs, and a subscription that runs
+        // dry stalls exactly the way an underfunded one does.
+        _warn(
+            uint256(nativeBal) >= reserve * 10,
+            string.concat(tag, ": subscription holds >= 10 requests (a running balance)")
+        );
     }
 
     // ─── Marketplace ────────────────────────────────────────────────────
@@ -829,6 +1154,194 @@ abstract contract VerifyCore is BnbullsConfig {
         }
     }
 
+    // ─── The BNBULL transfer whitelist ──────────────────────────────────
+
+    /**
+     * @notice ⛔ THE CHECK THAT WOULD HAVE CAUGHT THE WEDGE.
+     *
+     * @dev What happened on chain 97, in full. `BNBull` ships
+     *      `tradingEnabled = false` with only the initial owner and holder
+     *      whitelisted, and that is the LAUNCH STATE, not an error state —
+     *      `DECISIONS.md §29` opens BNB first and BNBULL after the curve. But
+     *      `_update` refuses any transfer with neither side whitelisted, so
+     *      the first BNBULL jackpot ticket to WIN reverted
+     *      `TradingNotEnabled` inside `prizeToken.safeTransfer`.
+     *      `Duel._resolveOnly` swallowed it — correctly; a pot fault must
+     *      never revert a fight — and the ticket queue stopped dead. 77 more
+     *      tickets piled up behind it. Nothing reverted for a player, nothing
+     *      logged, and the game read perfectly healthy from every angle.
+     *
+     *      Nothing in `script/` had ever called `setWhitelist` outside the
+     *      anvil rehearsal, so the real deploy path shipped the token with the
+     *      game locked out of it.
+     *
+     *      ⚠ THE TRIGGER IS BROADER THAN `tradingEnabled`, DELIBERATELY.
+     *      `limitsActive` starts TRUE and clamps a non-whitelisted transfer at
+     *      `maxTx` (0.5% of supply) and `maxWallet` (1%) even AFTER trading
+     *      opens — so a large enough payout from a non-whitelisted pot reverts
+     *      just as hard, wedges the queue the same way, and would pass a check
+     *      that only looked at the trading flag. `Verify` already treats
+     *      `limitsActive == true` as the expected pre-launch state, so the
+     *      honest rule is: **if either gate can bite, every mover must be
+     *      whitelisted.**
+     *
+     *      A FAILURE, not a warning. The whole class of thing this file exists
+     *      for is the leg whose absence is invisible in production, and this
+     *      is the most invisible one found so far.
+     *
+     *      Skipped entirely when the token has no whitelist to read: on
+     *      mainnet BNBULL is four.meme's (`DECISIONS.md §4`) and there is
+     *      nothing here to check. Probed by calling, never by chain id.
+     */
+    function _verifyTokenWhitelist(Cfg memory c, Deployment memory d) private {
+        console2.log("");
+        console2.log("-- BNBULL transfer whitelist --");
+
+        if (!tokenHasWhitelist(d.bnbull)) {
+            console2.log("  [info] this BNBULL exposes no whitelist - four.meme's token");
+            console2.log("         (DECISIONS 4) has no such gate. Nothing to assert.");
+            return;
+        }
+
+        bool gated = !_boolCall(d.bnbull, "tradingEnabled()", true);
+        bool capped = _boolCall(d.bnbull, "limitsActive()", false);
+        console2.log("  [info] tradingEnabled", !gated);
+        console2.log("  [info] limitsActive  ", capped);
+
+        (address[] memory movers, string[] memory labels) = bnbullMovers(d);
+        uint256 before = failures;
+
+        if (!gated && !capped) {
+            // Both gates are down for good: `enableTrading` and `liftLimits`
+            // are one-way, so nothing can bite any more and the whitelist has
+            // stopped being load-bearing. Still reported, because a launch
+            // that reaches this state before the go-live is its own problem.
+            console2.log("  [info] trading is OPEN and the caps are LIFTED, both one-way.");
+            console2.log("         The whitelist can no longer block a payout.");
+            for (uint256 i = 0; i < movers.length; i++) {
+                _warn(
+                    tokenWhitelists(d.bnbull, movers[i]),
+                    string.concat("BNBULL whitelist (no longer load-bearing): ", labels[i])
+                );
+            }
+            return;
+        }
+
+        for (uint256 i = 0; i < movers.length; i++) {
+            _ok(
+                movers[i] != address(0) && tokenWhitelists(d.bnbull, movers[i]),
+                string.concat(
+                    "BNBULL whitelisted - else a payout REVERTS and wedges the queue: ",
+                    labels[i]
+                )
+            );
+        }
+
+        // ⚠ A WARNING, NOT A FAILURE, AND THE ASYMMETRY IS THE POINT. No game
+        // leg needs the router: `_update` passes when EITHER side is listed, so
+        // a swap's BNBULL output already clears on the receiving contract. What
+        // the router entry buys is an LP seed in amounts far over the 1%/0.5%
+        // launch caps. Missing it costs a liquidity transaction; missing a pot
+        // costs the whole ticket queue.
+        _warn(
+            tokenWhitelists(d.bnbull, c.ext.routerV2),
+            "BNBULL whitelist: PancakeSwap v2 router (LP seeds only - not a game leg)"
+        );
+
+        if (failures > before) {
+            console2.log("");
+            console2.log("      ANY missing entry above is the chain-97 defect: a WINNING");
+            console2.log("      ticket's safeTransfer reverts TradingNotEnabled, Duel's");
+            console2.log("      try/catch swallows it, the cursor never advances, and every");
+            console2.log("      later ticket is stranded in a contract with no withdraw path.");
+            console2.log("      Fix with BNBull.setWhitelistBulk, then re-run Wire + Verify.");
+        }
+    }
+
+    /// @dev A no-argument `bool` view that may not exist. `fallback` is what
+    ///      the answer means when it does not — never a silent `false`, because
+    ///      "the gate is open" and "there is no gate" must not read alike.
+    function _boolCall(address target, string memory sig, bool fallbackValue)
+        private
+        view
+        returns (bool)
+    {
+        (bool ok, bytes memory ret) = target.staticcall(abi.encodeWithSignature(sig));
+        if (!ok || ret.length != 32) return fallbackValue;
+        return abi.decode(ret, (bool));
+    }
+
+    // ─── Ownership ──────────────────────────────────────────────────────
+
+    /**
+     * @notice Who owns all ten contracts, in one place, in both directions.
+     *
+     * @dev ══════════════════════════════════════════════════════════════════
+     *      THE GAP THIS CLOSES
+     *      ══════════════════════════════════════════════════════════════════
+     *      `Handover` transfers eight `Ownable` contracts and PROPOSES the two
+     *      pots to `OWNER`, read from env, irreversibly — and nothing anywhere
+     *      afterwards read `owner()` back. The single ownership assertion that
+     *      existed was on the pots, against the DEPLOYER, so running `Verify`
+     *      after a handover made the whole file revert. There was therefore no
+     *      green post-handover check at all: the only evidence the handover
+     *      worked was that the transactions did not revert, which is exactly
+     *      the evidence that is worthless for a two-step `ConfirmedOwner`.
+     *
+     *      Two modes, both real assertions:
+     *
+     *        - **`EXPECT_OWNER` unset** — the PRE-LAUNCH gate. Everything must
+     *          still be the deployer, because `Wire` makes ~50 `onlyOwner`
+     *          calls and a contract that has already moved cannot be wired.
+     *        - **`EXPECT_OWNER=<addr>`** — the POST-HANDOVER gate. All ten must
+     *          read that address. ⚠ THE POTS ARE THE POINT HERE: they are
+     *          Chainlink `ConfirmedOwner`, so `transferOwnership` only proposes
+     *          and a pot whose new owner never called `acceptOwnership()` is
+     *          still owned by the deployer while every explorer row and every
+     *          transaction receipt says the handover is done.
+     */
+    function _verifyOwnership(Cfg memory c, Deployment memory d) private {
+        console2.log("");
+        console2.log("-- ownership --");
+
+        address want = vm.envOr("EXPECT_OWNER", address(0));
+        string memory note;
+        if (want == address(0)) {
+            want = c.roles.deployer;
+            note = ".owner is still the DEPLOYER (pre-handover gate)";
+            console2.log("  [info] EXPECT_OWNER unset - asserting the PRE-handover state.");
+            console2.log("         After Handover + AcceptJackpotOwnership, re-run with");
+            console2.log("         EXPECT_OWNER=<owner> to prove it landed.");
+        } else {
+            note = ".owner == EXPECT_OWNER";
+            console2.log("  [info] EXPECT_OWNER set - asserting the POST-handover state.");
+        }
+        console2.log("  [info] expecting", want);
+
+        _okAddr(Ownable(d.bulls).owner(), want, string.concat("Bulls", note));
+        _okAddr(Ownable(d.mintDrop).owner(), want, string.concat("MintDrop", note));
+        _okAddr(Ownable(d.duel).owner(), want, string.concat("Duel", note));
+        _okAddr(Ownable(d.yards).owner(), want, string.concat("Yards", note));
+        _okAddr(Ownable(d.graveyard).owner(), want, string.concat("Graveyard", note));
+        _okAddr(Ownable(d.marketplace).owner(), want, string.concat("Marketplace", note));
+        _okAddr(Ownable(d.mintSplitter).owner(), want, string.concat("MintBnbullSplitter", note));
+        _okAddr(Ownable(d.reviveSplitter).owner(), want, string.concat("ReviveBuySplitter", note));
+        _okAddr(Ownable(d.marketSplitter).owner(), want, string.concat("MarketPotSplitter", note));
+
+        // ⚠ TWO-STEP. A pot reading the deployer here with EXPECT_OWNER set
+        // means `transferOwnership` proposed and `acceptOwnership()` was never
+        // run from the new owner's own key — the half of the handover that
+        // looks identical to the finished thing from the outside.
+        _okAddr(
+            Jackpot(d.jackpotBnbull).owner(), want,
+            string.concat("Jackpot BNBULL", note, " (ConfirmedOwner is TWO-STEP)")
+        );
+        _okAddr(
+            Jackpot(d.jackpotBnb).owner(), want,
+            string.concat("Jackpot BNB", note, " (ConfirmedOwner is TWO-STEP)")
+        );
+    }
+
     // ─── Cross-cutting ──────────────────────────────────────────────────
 
     function _verifyCrossCutting(Cfg memory c, Deployment memory d) private {
@@ -867,6 +1380,7 @@ abstract contract VerifyCore is BnbullsConfig {
         _hasCode(d.bulls, "Bulls");
         _hasCode(d.mintDrop, "MintDrop");
         _hasCode(d.duel, "Duel");
+        _hasCode(d.yards, "Yards");
         _hasCode(d.graveyard, "Graveyard");
         _hasCode(d.jackpotBnbull, "Jackpot BNBULL");
         _hasCode(d.jackpotBnb, "Jackpot BNB");

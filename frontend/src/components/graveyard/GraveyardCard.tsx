@@ -4,10 +4,12 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
 import { BullsAbi, GraveyardAbi } from '@/lib/abi';
-import { contractAddress } from '@/lib/env';
+import { contractAddress, CHAIN_ID } from '@/lib/env';
 import { formatToken, formatUsd1e18, formatDuration, shortAddr } from '@/lib/format';
 import { useTokenDecimals, NATIVE_BNB_DECIMALS } from '@/lib/hooks/useTokenDecimals';
 import { useErc20Approval } from '@/lib/hooks/useErc20Approval';
+import { useWrongNetwork } from '@/lib/hooks/useWrongNetwork';
+import { WrongNetworkNotice } from '@/components/shared/WrongNetwork';
 import { withCushion } from '@/lib/constants';
 import { BullSprite } from '@/components/BullSprite';
 import { getBull } from '@/lib/art/collection';
@@ -84,8 +86,27 @@ export function GraveyardCard({ tokenId }: { tokenId: number }) {
   const secondsUntilOpen = takeoverOpen ? 0 : Number(takeoverOpensAt) - now;
 
   const isMine = !!account && !!owner && (owner as string).toLowerCase() === account.toLowerCase();
-  const [lane, setLane] = useState<Lane>(isMine ? 'owner' : 'takeover');
+
+  /**
+   * ⚠ THE DEFAULT LANE HAS TO FOLLOW OWNERSHIP, AND `useState(isMine ? …)` DID
+   * NOT. `ownerOf` is an async read, so on the first render `owner` is
+   * undefined and `isMine` is false for everybody, holder included. A
+   * `useState` initialiser runs once and never revisits, so the holder's card
+   * settled on the TAKEOVER lane permanently: the dearer of the two ladders,
+   * and — while the owner head-start is still running — `takeoverOpen` is false
+   * so the card renders no action button at all. The holder saw a higher price
+   * and no way to pay it, on his own bull.
+   *
+   * Deriving it instead means the default re-evaluates the moment the read
+   * lands, and the override keeps a deliberate lane choice from being yanked
+   * back by a refetch.
+   */
+  const [laneOverride, setLaneOverride] = useState<Lane | null>(null);
+  const lane: Lane = laneOverride ?? (isMine ? 'owner' : 'takeover');
+  const setLane = setLaneOverride;
+
   const [asset, setAsset] = useState<PayAsset>('bnb');
+  const { wrongNetwork } = useWrongNetwork();
 
   const usdForLane = lane === 'owner' ? ownerUsd1e18 : takeoverUsd1e18;
   const { data: paymentQuote } = useReadContract({
@@ -123,8 +144,12 @@ export function GraveyardCard({ tokenId }: { tokenId: number }) {
   // payable call (BNB) and a non-payable one (BNBULL) have different `value`
   // shapes in the generated ABI's type union, so one generic call object
   // cannot type-check across all four functions at once.
+  // ⚠ Every branch pins `chainId`. Without it wagmi hands viem `chain: null`,
+  // viem skips `assertCurrentChain`, and the two BNB branches send `value` to
+  // a codeless address on whatever chain the wallet is on. See
+  // `useWrongNetwork`.
   async function handlePay() {
-    if (!graveyardAddress) return;
+    if (!graveyardAddress || wrongNetwork) return;
     const id = BigInt(tokenId);
     if (asset === 'bnb') {
       const value = bnbDue !== undefined ? withCushion(bnbDue) : 0n;
@@ -132,6 +157,7 @@ export function GraveyardCard({ tokenId }: { tokenId: number }) {
         await writeContractAsync({
           address: graveyardAddress,
           abi: GraveyardAbi,
+          chainId: CHAIN_ID,
           functionName: 'resurrectWithBNB',
           args: [id],
           value,
@@ -140,6 +166,7 @@ export function GraveyardCard({ tokenId }: { tokenId: number }) {
         await writeContractAsync({
           address: graveyardAddress,
           abi: GraveyardAbi,
+          chainId: CHAIN_ID,
           functionName: 'resurrectAndClaimWithBNB',
           args: [id],
           value,
@@ -150,6 +177,7 @@ export function GraveyardCard({ tokenId }: { tokenId: number }) {
         await writeContractAsync({
           address: graveyardAddress,
           abi: GraveyardAbi,
+          chainId: CHAIN_ID,
           functionName: 'resurrectWithBNBULL',
           args: [id],
         });
@@ -157,6 +185,7 @@ export function GraveyardCard({ tokenId }: { tokenId: number }) {
         await writeContractAsync({
           address: graveyardAddress,
           abi: GraveyardAbi,
+          chainId: CHAIN_ID,
           functionName: 'resurrectAndClaimWithBNBULL',
           args: [id],
         });
@@ -233,6 +262,8 @@ export function GraveyardCard({ tokenId }: { tokenId: number }) {
             {formatToken(dueForAsset[asset], decimalsForAsset[asset])} {asset}
           </p>
 
+          <WrongNetworkNotice className="mt-3" />
+
           {!account ? (
             <p className="mt-2 text-xs text-bull-text-faint">connect a wallet.</p>
           ) : lane === 'owner' && !isMine ? (
@@ -243,7 +274,7 @@ export function GraveyardCard({ tokenId }: { tokenId: number }) {
                 await approve();
                 refetchAllowance();
               }}
-              disabled={isApproving}
+              disabled={isApproving || wrongNetwork}
               className="mt-3 rounded-full border border-bull-gold px-3 py-1.5 text-xs font-medium text-bull-gold disabled:opacity-50"
             >
               {isApproving ? 'approving…' : 'approve'}
@@ -251,10 +282,16 @@ export function GraveyardCard({ tokenId }: { tokenId: number }) {
           ) : (
             <button
               onClick={handlePay}
-              disabled={isPending || isConfirming}
+              disabled={isPending || isConfirming || wrongNetwork}
               className="mt-3 rounded-full border border-bull-gold bg-bull-gold px-3 py-1.5 text-xs font-semibold text-bull-gold-ink disabled:opacity-50"
             >
-              {isPending || isConfirming ? 'sending…' : lane === 'owner' ? 'revive' : 'revive & claim'}
+              {wrongNetwork
+                ? 'wrong network'
+                : isPending || isConfirming
+                  ? 'sending…'
+                  : lane === 'owner'
+                    ? 'revive'
+                    : 'revive & claim'}
             </button>
           )}
           {confirmed && <p className="mt-2 text-xs text-bull-gold">done.</p>}

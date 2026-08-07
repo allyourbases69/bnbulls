@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { ContractStatus } from '@/components/ContractStatus';
+import { PreLaunchNotice } from '@/components/PreLaunchNotice';
 import { BANDS, BAND_COUNTS, BAND_INFO, KING_ID, KING_NAME, SUPPLY } from '@/lib/art/bull';
 import { TIER_COLOUR } from '@/lib/tierColour';
 import { CURRENCY, DEAL, DEATH, KING_FLAVOUR, POTS, TICKER, TIER_FLAVOUR } from '@/lib/brand';
@@ -76,8 +77,18 @@ const POT_SHARE_BPS = 3_000;
  *
  * The setter is still live, so if it is ever turned on, change this one
  * constant and every figure on the page follows.
+ *
+ * ⚠ AND SO DOES THE PROSE, NOW. The table below was already derived from this
+ * constant, but three lines of copy around it still told players a BNBULL
+ * fight was cheaper — which contradicted both this file's own constant and the
+ * contract. Every claim about a fight discount is gated on `> 0` rather than
+ * written out, so the words cannot drift from the number again.
+ *
+ * The `: number` annotation is load-bearing: without it TypeScript infers the
+ * literal type `0`, and `BNBULL_DISCOUNT_BPS > 0` becomes a comparison the
+ * compiler knows the answer to.
  */
-const BNBULL_DISCOUNT_BPS = 0;
+const BNBULL_DISCOUNT_BPS: number = 0;
 
 /** $2 a side, in millionths of a dollar so every division below is integer
  *  division exactly like the contract's, with no float dust in the cents. */
@@ -138,7 +149,7 @@ function usd(micro: number): string {
 export const metadata: Metadata = {
   title: 'how to play',
   description:
-    'the bnbulls handbook: the mint ladder, the two pots, permadeath, the marketplace, and what is enforced by bytecode rather than promised.',
+    'the bnbulls handbook: the mint ladder, the two pots, permadeath, the marketplace, the roadmap, and what is enforced by bytecode rather than promised.',
 };
 
 export default function AboutPage() {
@@ -157,6 +168,11 @@ export default function AboutPage() {
           <strong className="text-bull-text">bnb chain</strong>.
         </p>
       </header>
+
+      {/* Everything below describes a game that is not open yet, so it says so
+          once, up front, rather than letting a reader work it out from the
+          contract table at the bottom. */}
+      <PreLaunchNotice />
 
       {/* ── the loop ─────────────────────────────────────────────── */}
       <section className="space-y-4">
@@ -216,8 +232,31 @@ export default function AboutPage() {
           </p>
           <p>
             <strong className="text-bull-text">20% of every mint buys ${TICKER}</strong> into the{' '}
-            {TICKER} pot and <strong className="text-bull-text">10% goes to the BNB pot</strong>.
-            that is money the game puts in and can never take out.
+            {TICKER} pot and <strong className="text-bull-text">10% goes to the BNB pot</strong>.{' '}
+            <strong className="text-bull-text">
+              once money reaches a pot it can never come back out
+            </strong>
+            , for us or for anyone. that part is the bytecode.
+          </p>
+          {/* ⚠ THE HONEST CAVEAT. The sentence above used to read "that is money
+              the game puts in and can never take out", full stop, which is not
+              true yet. `DECISIONS.md §29`: BNBULL cannot be bought while the
+              four.meme curve is filling, so the 20% leg DEFERS into a pending
+              bucket on MintDrop instead. `§45` is explicit that money in a
+              bucket has not reached a pot and IS recoverable —
+              `withdrawPendingForManualBuy` is onlyOwner, un-timelocked, and
+              takes the destination as an argument. The no-withdraw guarantee is
+              real and worth stating loudly; it just starts at the pot, not at
+              the mint. Say where the line is rather than letting a reader find
+              it in the source. */}
+          <p className="rounded border border-bull-border bg-bull-panel p-4">
+            <strong className="text-bull-text">one caveat while the curve is filling,</strong>{' '}
+            and it is the honest one: ${TICKER} cannot be bought yet, so that 20% cannot be spent
+            yet either. it waits in a holding bucket on the mint contract until there is a real
+            pool, and money in that bucket has not reached a pot, so the dev can pull it out to
+            place the buy by hand. that is the one step in the money path where you are trusting
+            a person rather than the code. the 10% bnb leg has no such gap: it lands in the bnb
+            pot on the first mint, and once anything is in a pot it is in for good.
           </p>
           <p>
             every bull rolls its own hide, horns, eyes, weapon and gear. rarity is fixed at
@@ -421,15 +460,27 @@ export default function AboutPage() {
           </div>
 
           <ul className="max-w-3xl list-none space-y-3 pl-0 text-sm leading-relaxed text-bull-text-dim md:text-base">
-            <li>
-              <strong className="text-bull-text">
-                {TICKER.toLowerCase()} is the only leg that gets a discount,
-              </strong>{' '}
-              so a {usd(EXAMPLE_STICKER)} sticker is {usd(FIGHTS[0].sides[0].paid)} in{' '}
-              {TICKER.toLowerCase()}. that discounted number is the money that actually goes in the
-              middle, so the purse is smaller and so is the winner&apos;s take. it is a cheaper
-              fight, not a bigger prize for less.
-            </li>
+            {BNBULL_DISCOUNT_BPS > 0 ? (
+              <li>
+                <strong className="text-bull-text">
+                  {TICKER.toLowerCase()} is the only leg that gets a discount on a fight,
+                </strong>{' '}
+                so a {usd(EXAMPLE_STICKER)} sticker is {usd(FIGHTS[0].sides[0].paid)} in{' '}
+                {TICKER.toLowerCase()}. that discounted number is the money that actually goes in
+                the middle, so the purse is smaller and so is the winner&apos;s take. it is a
+                cheaper fight, not a bigger prize for less.
+              </li>
+            ) : (
+              <li>
+                <strong className="text-bull-text">a fight costs the same either way.</strong> a{' '}
+                {usd(EXAMPLE_STICKER)} sticker is {usd(EXAMPLE_STICKER)} of bnb or{' '}
+                {usd(EXAMPLE_STICKER)} of {TICKER.toLowerCase()}, and that is deliberate: a fight
+                is a bet between two players, so discounting one side&apos;s entry would have the
+                two of them put different money into the same purse. each side is settled in its
+                own asset, so the gap would not average out, it would land in the winner&apos;s
+                payout. the {TICKER.toLowerCase()} discount belongs to minting.
+              </li>
+            )}
             <li>
               <strong className="text-bull-text">
                 a fight between two different currencies settles in both.
@@ -449,7 +500,7 @@ export default function AboutPage() {
               <strong className="text-bull-text">two of these three cannot happen yet.</strong>{' '}
               {TICKER.toLowerCase()} cannot be moved by anyone until the four.meme curve fills, so
               at launch every fight is the middle column. the other two switch on when the token
-              does, discount included.
+              does{BNBULL_DISCOUNT_BPS > 0 ? ', discount included' : ''}.
             </li>
             <li className="text-bull-text-faint">
               {usd(EXAMPLE_STICKER)} is a round number to keep the arithmetic easy to follow. the
@@ -507,7 +558,9 @@ export default function AboutPage() {
             more every time; once that head start expires, anyone else can pay the dearer takeover
             ladder and bring the bull back{' '}
             <strong className="text-bull-text">into their own wallet</strong>. both ladders are
-            dollar-denominated and read live off the contract on the{' '}
+            {/* ⚠ NO ARTICLE — `DEATH.label` is "the butcher", so "on the
+                {DEATH.label} page" rendered "on the the butcher page". */}
+            dollar-denominated and read live off the contract on{' '}
             <Link href="/graveyard" className="text-bull-gold hover:underline">
               {DEATH.label} page
             </Link>
@@ -577,6 +630,82 @@ export default function AboutPage() {
         </div>
       </section>
 
+      {/* ── the roadmap ──────────────────────────────────────────────
+          ⚠ TWO PHASES ARE DECIDED AND THE THIRD IS NOT, AND THAT IS WHAT THIS
+          SECTION SAYS. Owner asked for the phases on this page; the honest
+          answer is that `DECISIONS.md` defines exactly two.
+
+          Phase 1 is `§29`: BNB-only at launch, every BNBULL leg present in the
+          contracts and switched off until four.meme's curve fills (`§28.1`).
+          Phase 2 is `§24`: calves, with batch mint as a HARD design constraint
+          on phase 1 rather than a phase 2 feature, plus `§35`/`§36`'s breeding
+          lore, which is why it needs no stretching to fit.
+
+          ⚠ THERE IS NO PHASE 3. The only "phase 3" in the repo is a note in
+          `VOICE-AND-BRAND.md §5` to write the OpenSea contractURI / royalty /
+          listing runbook when we actually run it. That is an ops task, not a
+          product phase, and printing it as one on the page a sceptic reads
+          first would be inventing a promise. The third block below says
+          nothing is locked, because nothing is.
+
+          ⚠ NO DATES ANYWHERE (`VOICE-AND-BRAND.md §1`). Not a month, not a
+          quarter, not "soon-ish". "when it is ready" or nothing. */}
+      <section className="space-y-4">
+        <h2 className="bull-header text-xl text-bull-gold md:text-2xl">what happens when</h2>
+        <p className="text-sm leading-relaxed text-bull-text-dim md:text-base">
+          two phases are decided. anything past them is not, and this page is not going to
+          pretend otherwise. there are no dates on any of it, and there will not be: it ships
+          when it is done.
+        </p>
+
+        <div className="space-y-4">
+          <Phase tag="up first" title="phase 1 · the drop, the fights, the pots">
+            <p>
+              {SUPPLY} bulls plus {KING_NAME.toLowerCase()}, duels with real money in the middle,
+              the two pots, {DEATH.label} and the revive ladder, and the marketplace. everything
+              on the rest of this page is phase 1.
+            </p>
+            <p>
+              it launches <strong className="text-bull-text">in bnb</strong>. ${TICKER} goes up
+              on a fair-launch curve and the pad holds it locked until that curve fills, so
+              nobody can pay in it before then, us included. every {TICKER.toLowerCase()} leg is
+              already written into the contracts and switched off, and they come on when the
+              token does.
+            </p>
+          </Phase>
+
+          <Phase tag="after that" title="phase 2 · calves">
+            {/* ⚠ WHAT `§24` ACTUALLY LOCKS IS THE BATCH MINT, and that is the
+                only thing stated as settled. "calves, bred out of the herd" is
+                `§35`/`§36`'s direction and is worded as direction. An earlier
+                draft called them "the second collection", which nothing in
+                DECISIONS says. */}
+            <p>
+              calves. baby bulls, bred out of the herd you already have. the one rule already
+              locked is that <strong className="text-bull-text">they mint in batches</strong>,
+              however many you want in one go.
+            </p>
+            <p>
+              that is a constraint on phase 1, not a phase 2 feature, which is why it is written
+              down this early. hatching one egg at a time was the most annoying thing about the
+              last game and it changes the pricing read, the never-fail routing and the per
+              wallet guards, so it gets designed in now rather than retrofitted later.
+            </p>
+          </Phase>
+
+          <Phase tag="not locked" title="past that">
+            <p>
+              nothing is decided, so nothing is claimed. no third phase has been signed off and
+              you are not going to find one invented on this page to fill the gap.
+            </p>
+            <p className="text-bull-text-faint">
+              when something is locked it lands in the public decisions log first and on this
+              page second, the same way these two did.
+            </p>
+          </Phase>
+        </div>
+      </section>
+
       {/* ── trust ────────────────────────────────────────────────── */}
       <section className="space-y-4">
         <h2 className="bull-header text-xl text-bull-gold md:text-2xl">trust, and the limits</h2>
@@ -584,16 +713,41 @@ export default function AboutPage() {
           <p className="text-bull-text">
             one person builds this. that is the charm and it is also the limit.
           </p>
+          {/* ⚠ "a timelock on every address that could move money" WAS TOO
+              BROAD, and it was too broad in the one paragraph that exists to be
+              checked. What is timelocked is the WIRES — the slots holding the
+              addresses of the other contracts (`TimelockedAddress.Slot`): the
+              pots, the price feed, the swap router, the graveyard, the duel,
+              the jackpot sink, and the VRF coordinator after `§18`. Plenty of
+              plain owner setters have no delay at all, and they are listed
+              under "risks" below by name. Both halves are true as written now,
+              and the true version is still a strong claim. */}
           <p>
             <strong className="text-bull-text">enforced by the contracts:</strong> the rarity
             pre-commit, the no-withdraw pots, a capped protocol cut on fights, a capped
             marketplace fee, the lifetime revive cap, signed fight results, the listing lockout,
-            and a timelock on every address that could move money.
+            and a timelock on the wires between the contracts, so the pots, the price feed, the
+            swap route and the duel itself cannot be repointed without a public delay first.
           </p>
           <p>
             <strong className="text-bull-text">risks, said plainly:</strong> it is a solo build
             with no paid audit. it is tested, heavily, but tested is not audited. smart contracts
             can have bugs. do not put in money you need back.
+          </p>
+          <p>
+            <strong className="text-bull-text">what has no timelock, by name:</strong> the two
+            treasury addresses (<code className="font-mono text-xs">Duel.setDevTreasury</code>,{' '}
+            <code className="font-mono text-xs">Marketplace.setFeeTreasury</code>), the fight
+            signer (<code className="font-mono text-xs">Duel.setTrustedSigner</code>), the keeper
+            {/* ⚠ NO ARTICLE BEFORE `DEATH.label` — it already carries one
+                ("the butcher"), and the literal "the" in front of it rendered
+                "the the butcher" on the live page. */}{' '}
+            addresses on the mint and {DEATH.label} contracts, the stray-token rescues, and
+            the sweeps for the leftover liquidity slice. those change the moment the owner sends
+            the transaction. some of them have to: a leaked signing key has to be revocable in
+            one transaction rather than in a day. none of them can reach a pot, and the rescues
+            cannot touch money already earmarked for one. it is still owner power without a
+            waiting period, and you should price that in.
           </p>
           <p>
             <strong className="text-bull-text">the safety rule:</strong> this site is the only
@@ -608,6 +762,31 @@ export default function AboutPage() {
           <ContractStatus />
         </div>
       </section>
+    </div>
+  );
+}
+
+/** One roadmap block. The tag is a status word, never a date. */
+function Phase({
+  tag,
+  title,
+  children,
+}: {
+  tag: string;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="rounded border border-bull-border bg-bull-panel p-4 md:p-5">
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <h3 className="bull-header text-base text-bull-text md:text-lg">{title}</h3>
+        <span className="rounded-full border border-bull-gold/50 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wide text-bull-gold">
+          {tag}
+        </span>
+      </div>
+      <div className="mt-3 space-y-2 text-sm leading-relaxed text-bull-text-dim md:text-base">
+        {children}
+      </div>
     </div>
   );
 }

@@ -224,7 +224,10 @@ contract GraduationBoundaryTest is TestnetDexBase {
         uint256 accrued = drop.pendingBnbullBuyNative();
         require(accrued > 0, "nothing accrued to sweep");
         uint256 minOut = (_quoteBnbIn(address(bnbull), accrued) * 99) / 100;
-        vm.prank(keeper);
+        // ⛔ THE OWNER DRIVES A PRICED SWEEP, and on `MintDrop` only the owner
+        //    can: there is no published floor here to bound a keeper's
+        //    `minOut`, so pricing is owner authority. This rig deploys as
+        //    `address(this)`, which is that owner.
         funded = drop.sweepBnbullPot(MintDrop.PotSource.Native, 0, minOut);
     }
 
@@ -519,8 +522,18 @@ contract GraduationBoundaryTest is TestnetDexBase {
         // ── Graduation, then the splitter's own sweep ─────────────────────
         _graduate(bnbull);
 
-        uint256 minOut = (_quoteBnbIn(address(bnbull), accrued) * 99) / 100;
+        uint256 quoted = _quoteBnbIn(address(bnbull), accrued);
+        uint256 minOut = (quoted * 99) / 100;
         assertGt(minOut, 0);
+
+        // ⛔ A KEEPER SWEEP NEEDS A FRESH PUBLISHED FLOOR TO BE MEASURED
+        //    AGAINST, and its `minOut` may only TIGHTEN that floor. Without
+        //    one the sweep reverts `FloorsStale()` and the bucket sits
+        //    untouched — which is the safe behaviour, not a brick. So the
+        //    owner publishes the rate the way a real launch does, two points
+        //    under the quote, and the keeper's own 1%-under floor then clears
+        //    it. This is the whole design running against the REAL router.
+        splitter.setFloors((quoted * 98 / 100) * 1e18 / accrued, 0);
 
         vm.prank(keeper);
         uint256 funded = splitter.sweepBnbullPot(PotSplitter.PotSource.Native, 0, minOut);

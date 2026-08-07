@@ -196,13 +196,13 @@ contract PotSplitterVenueTest is SplitterBase {
         vm.expectRevert(
             abi.encodeWithSelector(PotSplitter.PoolTooThin.selector, 0.01 ether, 1 ether)
         );
-        mintSplit.sweepBnbullPot(PotSplitter.PotSource.Native, 0, 1);
+        mintSplit.sweepBnbullPot(PotSplitter.PotSource.Native, 0, _bnbullFromBnb(2 ether));
 
         // And once the pool is real, the same backlog clears.
         dex.setPairReserves(20 ether, 1e24);
         vm.prank(keeper);
         uint256 funded = mintSplit.sweepBnbullPot(
-            PotSplitter.PotSource.Native, 0, _bnbullFromBnb(1 ether)
+            PotSplitter.PotSource.Native, 0, _bnbullFromBnb(2 ether)
         );
         assertEq(funded, _bnbullFromBnb(2 ether));
         assertEq(mintSplit.pendingBnbullBuyNative(), 0, "the backlog cleared once the pool was real");
@@ -225,7 +225,7 @@ contract PotSplitterVenueTest is SplitterBase {
         dex.setPairReserves(17.64 ether, 200_000_000e18);
 
         vm.prank(keeper);
-        mintSplit.sweepBnbullPot(PotSplitter.PotSource.Native, 0, _bnbullFromBnb(3 ether));
+        mintSplit.sweepBnbullPot(PotSplitter.PotSource.Native, 0, _bnbullFromBnb(6 ether));
         assertEq(mintSplit.pendingBnbullBuyNative(), 0);
         assertEq(potBnbull.pool(), _bnbullFromBnb(6 ether), "the whole backlog bought in");
     }

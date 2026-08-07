@@ -251,6 +251,33 @@ interface IMintDropPolicy {
  *          revert is caught and the slice accrues. **A stale floor always
  *          defers safely and never bricks.**
  *
+ *      ⛔ AND THE KEEPER'S PRICE IS LEASHED, BECAUSE AN UNBOUNDED KEEPER PRICE
+ *      IS AN UNBOUNDED KEEPER THEFT. `DECISIONS.md §42` gave the keeper its own
+ *      least-privileged key on the written grounds that "every keeper setter is
+ *      bounded by a constant a compromised key cannot exceed". `setFloors` was
+ *      not, and the sweeps' `minOut` override replaced the floor outright, so
+ *      the sentence was false in both directions: a stolen keeper key could
+ *      publish a rate of 1 wei and convert an entire accrued bucket to dust
+ *      through a sandwich, in one transaction, with no owner key involved.
+ *
+ *      A constant could not fix it — a floor is a market price and MUST follow
+ *      the market, and any number written at deploy time is either a rug or a
+ *      permanent outage a year later. The bound is therefore on the RATE OF
+ *      CHANGE and on the DIRECTION, which are the two things that can be
+ *      bounded without knowing what BNBULL is worth:
+ *
+ *        - raising a floor, and killing one, stay free: both only ever cause
+ *          deferral, which is this contract's safe state;
+ *        - lowering one is capped per step and per hour (`keeperFloorDropBps`,
+ *          `keeperFloorDropGap`), and arming a dead leg is owner-only;
+ *        - a sweep's `minOut` may tighten the published floor and never loosen
+ *          it (`_requireKeeperFloor`), which also caps how much of a bucket one
+ *          sweep can move — price impact does that arithmetic for us.
+ *
+ *      The owner is exempt from all of it and keeps its one-transaction
+ *      correction, because it already holds `withdrawPendingForManualBuy` and
+ *      bounding a price it can route around would bound nothing.
+ *
  *      ══════════════════════════════════════════════════════════════════════
  *      RULE 1: NO 1e12, NO DUAL VIEW, EVERY DIVISOR RE-DERIVED
  *      ══════════════════════════════════════════════════════════════════════
@@ -288,6 +315,17 @@ abstract contract PotSplitter is Ownable, ReentrancyGuard {
     /// @notice Ceiling on how stale the keeper's swap floors may be and still
     ///         authorise an inline swap.
     uint256 public constant MAX_FLOOR_AGE = 7 days;
+    /// @notice Ceiling on how far a KEEPER may lower a published floor in one
+    ///         step. Past half, one step stops being a repeg and becomes a rug.
+    uint256 public constant MAX_KEEPER_FLOOR_DROP_BPS = 5_000;
+    /// @notice Floor on the gap between two keeper floor DROPS.
+    ///
+    /// @dev ⛔ THE GAP IS WHAT MAKES THE STEP CAP A BOUND AT ALL. A per-step
+    ///      percentage on its own is not a leash: the same key just sends the
+    ///      step a thousand times in one block and arrives at dust anyway. The
+    ///      cap bounds the SIZE of a move, the gap bounds its SPEED, and only
+    ///      the two together bound the distance a stolen key can travel.
+    uint256 public constant MIN_KEEPER_FLOOR_DROP_GAP = 15 minutes;
     /// @notice Ceiling on the minimum-liquidity floor. A floor set absurdly
     ///         high would defer every leg forever — safe, but silently, which
     ///         is the failure mode this whole file is written against.
@@ -444,6 +482,71 @@ abstract contract PotSplitter is Ownable, ReentrancyGuard {
     ///         leg defers. See the header.
     uint256 public maxFloorAge = 12 hours;
 
+    /**
+     * @notice Most a KEEPER may cut off a published floor in a single step,
+     *         and the minimum wall-clock gap between two such cuts.
+     *
+     * @dev ⛔ THIS PAIR IS THE LEASH. `setFloors` is keeper-callable because a
+     *      floor is a market price and has to move with the market — but an
+     *      UNBOUNDED keeper price is an unbounded keeper theft, because the
+     *      published rate is the only thing standing between an inline swap and
+     *      a sandwich. A rate of 1 wei plus one payment is the whole attack.
+     *
+     *      A fixed constant is the wrong shape here, and that is the reason
+     *      this took a variable rather than a `MIN_BNBULL_PER_BNB`: nobody
+     *      knows what BNBULL is worth at deploy time, and any number written
+     *      today is either a rug (too low) or a permanent outage (too high) a
+     *      year from now. What CAN be bounded without knowing the price is how
+     *      fast the number is allowed to fall. So the leash is on the
+     *      DERIVATIVE, not the value:
+     *
+     *        - a RAISE is free. A higher floor is a stricter floor; the worst
+     *          it can do is make swaps miss `minOut` and defer, which is this
+     *          contract's safe state and already its documented behaviour;
+     *        - a ZERO is free. That is the kill switch — it disables the leg
+     *          and everything accrues. Also safe;
+     *        - a DROP is capped at `keeperFloorDropBps` and may not repeat
+     *          inside `keeperFloorDropGap`;
+     *        - ARMING a leg from zero is OWNER-ONLY (see `_isKeeperDrop`).
+     *
+     *      ⚠ WHAT THIS BUYS, STATED HONESTLY. It does not make a stolen keeper
+     *      key harmless. It converts "one transaction, whole pot, any price"
+     *      into a monotonic walk that at the launch settings needs ~16 steps
+     *      over ~16 hours to reach 1% of the market — every step a
+     *      `FloorsPublished` event, on chain, in order, while `PotSwept` and
+     *      the `…FundedInline` events show what it is costing. That is the
+     *      difference between a theft and an alarm.
+     *
+     *      ⚠ THE OWNER IS EXEMPT, DELIBERATELY, AND IT IS NOT A HOLE.
+     *      `BNBULLS-BOOTSTRAP.md §0` requires the owner keep a way to make a
+     *      large legitimate correction — a real 60% move in an hour is a
+     *      Tuesday for a launchpad token, and the keeper's own repeg trigger is
+     *      20% drift. More to the point the owner already holds
+     *      `withdrawPendingForManualBuy`, which takes the whole bucket out in
+     *      one call: leashing the owner's price would bound nothing it does not
+     *      already outrank. The leash exists to make `DECISIONS.md §42` true of
+     *      the KEEPER key, which is the one living unattended in a container.
+     *
+     *      Launch values: 25% per step, one step an hour. The step sits above
+     *      the floor-keeper's own 20% repeg trigger (`FLOOR_DRIFT_PCT`) so a
+     *      normal repeg is never refused, and the gap sits above its 30-minute
+     *      minimum interval (`FLOOR_MIN_INTERVAL_MIN`) so a normal cadence is
+     *      never refused either. Both are owner-settable within the ceilings
+     *      above, per `§0`.
+     *
+     *      ⚠ `keeperFloorDropBps == 0` IS LEGAL AND IS THE STRICTEST SETTING:
+     *      the keeper may then raise or kill a floor but never lower one, so a
+     *      falling market simply defers until the owner repegs. Costs
+     *      availability, costs nothing else.
+     */
+    uint256 public keeperFloorDropBps = 2_500;
+    uint256 public keeperFloorDropGap = 1 hours;
+
+    /// @notice When a keeper last LOWERED a floor. Zero until it happens, so
+    ///         the first drop after deploy is never blocked by a gap that has
+    ///         no start.
+    uint64 public floorsDroppedAt;
+
     /// @notice May publish floors and run the sweeps, alongside the owner.
     address public keeper;
 
@@ -501,6 +604,7 @@ abstract contract PotSplitter is Ownable, ReentrancyGuard {
     event MinPoolLiquidityAltChanged(uint256 minQuoteReserve);
     event FloorsPublished(uint256 bnbullPerBnb, uint256 wbnbPerBnbull, uint64 at);
     event MaxFloorAgeChanged(uint256 maxAge);
+    event KeeperFloorLeashChanged(uint256 dropBps, uint256 gap);
     event KeeperChanged(address indexed previous, address indexed next);
     event WireBootstrapped(Wire indexed slot, address indexed target);
     event WireProposed(Wire indexed slot, address indexed target, uint64 eta);
@@ -532,6 +636,22 @@ abstract contract PotSplitter is Ownable, ReentrancyGuard {
     error InvalidShare(uint256 bps);
     error InvalidMinLiquidity(uint256 requested);
     error InvalidFloorAge(uint256 maxAge);
+    /// @notice A keeper tried to cut more than `keeperFloorDropBps` off a
+    ///         published floor in one step.
+    error FloorDropTooLarge(uint256 requested, uint256 lowest);
+    /// @notice A keeper tried to cut a floor again before `keeperFloorDropGap`
+    ///         had elapsed. The gap is what turns the step cap into a distance.
+    error FloorDropTooSoon(uint256 nextAllowedAt);
+    /// @notice A keeper tried to bring a DISABLED leg (rate 0) back to life.
+    ///         Turning a swap leg on is an owner act — see `_isKeeperDrop`.
+    error FloorArmingIsOwnerOnly();
+    /// @notice A keeper sweep with no fresh published floor to be measured
+    ///         against. The money stays in its bucket; the owner can still act.
+    error FloorsStale();
+    /// @notice A keeper sweep asked to sell BELOW the floor it published
+    ///         itself. The keeper may tighten a floor, never loosen one.
+    error SweepFloorBelowPublished(uint256 minOut, uint256 published);
+    error InvalidFloorLeash(uint256 dropBps, uint256 gap);
     error DelayOutOfRange(uint256 requested);
     error TokenDecimalsUnusable(uint8 decimals_);
     error NativeSendFailed();
@@ -1092,7 +1212,9 @@ abstract contract PotSplitter is Ownable, ReentrancyGuard {
      * @param amountIn Amount to spend. 0 spends the whole bucket.
      * @param minOut   Slippage floor, quoted OFF chain immediately before the
      *                 call. Ignored for `Bnbull` (no swap happens); zero is
-     *                 refused for the swap sources.
+     *                 refused for the swap sources. ⛔ From the KEEPER it may
+     *                 only be STRICTER than the published floor — see
+     *                 `_requireKeeperFloor`.
      */
     function sweepBnbullPot(PotSource src, uint256 amountIn, uint256 minOut)
         external
@@ -1104,7 +1226,14 @@ abstract contract PotSplitter is Ownable, ReentrancyGuard {
         uint256 spend = amountIn == 0 ? available : amountIn;
         if (spend == 0) revert NothingToDo();
         if (spend > available) revert InsufficientPending(spend, available);
-        if (src != PotSource.Bnbull && minOut == 0) revert BlindSwapRefused();
+        if (src != PotSource.Bnbull) {
+            if (minOut == 0) revert BlindSwapRefused();
+            // ⚠ THE BUY LEG'S RATE AND ITS UNIT. `bnbullPerBnb` is BNBULL wei
+            //   per 1e18 BNB in, so the divisor is 1e18 — a chain fact about
+            //   the native token, never a token property. Never
+            //   `wbnbPerBnbull`, and never `10 ** bnbullDecimals`.
+            _requireKeeperFloor(spend, bnbullPerBnb, 1e18, minOut);
+        }
 
         // Book the spend before the external calls (CEI).
         _debitBnbullBucket(src, spend);
@@ -1124,11 +1253,72 @@ abstract contract PotSplitter is Ownable, ReentrancyGuard {
         uint256 spend = amountIn == 0 ? available : amountIn;
         if (spend == 0) revert NothingToDo();
         if (spend > available) revert InsufficientPending(spend, available);
-        if (src != PotSource.Native && minOut == 0) revert BlindSwapRefused();
+        if (src != PotSource.Native) {
+            if (minOut == 0) revert BlindSwapRefused();
+            // ⚠ THE SELL LEG'S RATE AND ITS UNIT, AND THEY ARE NOT THE BUY
+            //   LEG'S. `wbnbPerBnbull` is WBNB wei per ONE WHOLE BNBULL, so
+            //   the divisor is `10 ** bnbullDecimals` — READ off the token at
+            //   wiring time, never assumed to be 18. Interchanging these two
+            //   pairs is `BNB-CHAIN-FACTS.md §3` and the fefers decimals trap,
+            //   and it would pass silently in both directions.
+            _requireKeeperFloor(spend, wbnbPerBnbull, 10 ** bnbullDecimals, minOut);
+        }
 
         _debitBnbBucket(src, spend);
         funded = _toBnbPot(src, spend, minOut, "deferred-sweep");
         emit PotSwept(false, src, spend, funded);
+    }
+
+    /**
+     * @dev ⛔ THE KEEPER MAY SPEND A BUCKET, BUT IT MAY NOT PRICE THE TRADE.
+     *
+     *      The sweeps take an off-chain-quoted `minOut` because that is the one
+     *      bound a same-block front-run cannot move. The hole that opened
+     *      underneath that sentence is that the same argument REPLACES the
+     *      published floor outright, so `sweepBnbullPot(src, 0, 1)` from a
+     *      stolen keeper key was one transaction that converted an entire
+     *      accrued bucket into 1 wei of BNBULL through a sandwich — with no
+     *      owner key involved anywhere, and `_requireLiquidity` waving it
+     *      through, because a sandwicher's front-run BUY only ever makes the
+     *      quote-side reserve larger.
+     *
+     *      So the override keeps its job and loses its reach: it may tighten
+     *      the published floor and never loosen it. The floor it is measured
+     *      against is the keeper's own published rate, which is leashed by
+     *      `keeperFloorDropBps` — so the sweep is bounded by the same slow,
+     *      logged walk as everything else, instead of by nothing.
+     *
+     *      ⚠ AND THIS IS ALSO THE CAP ON HOW MUCH OF A BUCKET ONE SWEEP MAY
+     *      SPEND, without a magic fraction anywhere. The published floor scales
+     *      LINEARLY with `spend`, while what a constant-product pool actually
+     *      pays scales sub-linearly — price impact. So a sweep large enough to
+     *      move the pool cannot clear its own floor and must be split into
+     *      slices the pool can absorb. The bound comes out of the book's real
+     *      depth rather than out of a number somebody guessed, and it retunes
+     *      itself as the pool grows.
+     *
+     *      ⚠ A STALE FLOOR STILL DEFERS SAFELY, WHICH IS THE PROMISE THAT MUST
+     *      NOT REGRESS. With no fresh floor there is nothing to measure a
+     *      keeper's price against, so the sweep REVERTS and the money stays in
+     *      its bucket, untouched and still owner-recoverable. A sweep is
+     *      allowed to fail loudly; that is what it is for.
+     *
+     *      The OWNER is exempt, for the reason given on `keeperFloorDropBps`:
+     *      it already holds `withdrawPendingForManualBuy`, which empties the
+     *      same bucket in one call. Bounding a price it can simply route around
+     *      would be theatre, and it would take away the large legitimate
+     *      correction `BNBULLS-BOOTSTRAP.md §0` requires the owner to keep.
+     */
+    function _requireKeeperFloor(uint256 spend, uint256 rate, uint256 unit, uint256 minOut)
+        private
+        view
+    {
+        if (msg.sender == owner()) return;
+        if (!floorsFresh()) revert FloorsStale();
+        // `_floor` refuses a zero result, so a leg whose rate was never
+        // published — or was killed — is a leg the keeper cannot sweep at all.
+        uint256 published = _floor(spend, rate, unit);
+        if (minOut < published) revert SweepFloorBelowPublished(minOut, published);
     }
 
     function bnbullBucket(PotSource src) public view returns (uint256) {
@@ -1315,6 +1505,12 @@ abstract contract PotSplitter is Ownable, ReentrancyGuard {
      *         freshness. Writing a rate as ZERO disables that leg — the kill
      *         switch for a keeper that has lost its price source.
      *
+     *         ⛔ AND A KEEPER PUBLISH IS LEASHED. The owner writes whatever it
+     *         likes; the keeper may raise a rate, kill a rate, or lower one by
+     *         at most `keeperFloorDropBps` once per `keeperFloorDropGap`. See
+     *         those variables for why the bound is on the rate of change rather
+     *         than on a constant, and what it does and does not buy.
+     *
      * @param _bnbullPerBnb  BNBULL wei per 1e18 BNB in.
      * @param _wbnbPerBnbull WBNB wei per one whole BNBULL unit in.
      */
@@ -1322,10 +1518,98 @@ abstract contract PotSplitter is Ownable, ReentrancyGuard {
         external
         onlyKeeperOrOwner
     {
+        if (msg.sender != owner()) _leashKeeperFloors(_bnbullPerBnb, _wbnbPerBnbull);
+
         bnbullPerBnb = _bnbullPerBnb;
         wbnbPerBnbull = _wbnbPerBnbull;
         floorsUpdatedAt = uint64(block.timestamp);
         emit FloorsPublished(_bnbullPerBnb, _wbnbPerBnbull, uint64(block.timestamp));
+    }
+
+    /// @dev Apply the leash to a keeper publish. Reverts, or records that the
+    ///      keeper has spent its drop for this gap.
+    function _leashKeeperFloors(uint256 nextBnbullPerBnb, uint256 nextWbnbPerBnbull) private {
+        // ⚠ BOTH RATES ARE EVALUATED, ALWAYS. Do NOT fold these into
+        //   `_isKeeperDrop(a) || _isKeeperDrop(b)`: `||` short-circuits, and
+        //   the second call is not just a question — it is the check that
+        //   refuses to arm a dead leg. Skipping it because the first rate
+        //   happened to be a drop is how `wbnbPerBnbull` gets turned on by a
+        //   stolen key while nobody is reading the diff.
+        bool bnbullDrop = _isKeeperDrop(bnbullPerBnb, nextBnbullPerBnb);
+        bool wbnbDrop = _isKeeperDrop(wbnbPerBnbull, nextWbnbPerBnbull);
+        if (!bnbullDrop && !wbnbDrop) return;
+
+        uint256 nextAllowedAt = uint256(floorsDroppedAt) + keeperFloorDropGap;
+        // `floorsDroppedAt == 0` means no keeper has ever cut a floor here, so
+        // there is no gap to have violated. Without this the first legitimate
+        // repeg of a fresh deployment is blocked by a window that never opened.
+        if (floorsDroppedAt != 0 && block.timestamp < nextAllowedAt) {
+            revert FloorDropTooSoon(nextAllowedAt);
+        }
+        floorsDroppedAt = uint64(block.timestamp);
+    }
+
+    /**
+     * @dev Is this one rate's move a keeper DROP, and is it a legal one?
+     *      Reverts on an illegal move; returns true when a legal drop was
+     *      spent, so the caller knows to start the gap.
+     *
+     *      The four cases, and each one's reason:
+     *
+     *        - `next == 0` — the kill switch. Disables the leg, everything
+     *          accrues, nothing trades. Never restricted: the safe direction
+     *          must always be one transaction away;
+     *        - `live == 0` — ⛔ ARMING A DEAD LEG, AND IT IS OWNER-ONLY. Zero
+     *          is not "the smallest floor", it is "this leg is off", so
+     *          0 -> anything is not a raise however the integers compare. Left
+     *          unguarded it is also the trivial bypass of everything below:
+     *          publish 0 to kill, publish 1 to re-arm at dust, and the whole
+     *          leash is walked around in two transactions. It is the right
+     *          rule on its own merits too — `wbnbPerBnbull` is the BNBULL SELL
+     *          leg, `DECISIONS.md §14` keeps it off, and `floor-keeper.mjs`
+     *          already promises in writing that "this keeper must never be the
+     *          thing that turns BNBULL-selling on". This is that promise moved
+     *          from a comment into the bytecode. The single exception is the
+     *          first publish of a fresh deployment (`floorsUpdatedAt == 0`),
+     *          which is the documented keeper bootstrap and happens when every
+     *          bucket is still empty;
+     *        - `next >= live` — a raise. Strictly stricter, so the worst case
+     *          is that swaps miss `minOut` and defer. Free;
+     *        - `next < live` — the only dangerous direction, and the only one
+     *          that costs anything.
+     */
+    function _isKeeperDrop(uint256 live, uint256 next) private view returns (bool) {
+        if (next == 0) return false;
+        if (live == 0) {
+            if (floorsUpdatedAt != 0) revert FloorArmingIsOwnerOnly();
+            return false; // first publish of a fresh deployment
+        }
+        if (next >= live) return false;
+
+        uint256 lowest = live - (live * keeperFloorDropBps) / BPS;
+        if (next < lowest) revert FloorDropTooLarge(next, lowest);
+        return true;
+    }
+
+    /// @notice Retune the keeper leash within its ceilings.
+    ///
+    /// @dev Tightening is always safe — the worst a too-tight leash does is
+    ///      make a falling market defer until the owner repegs, which is this
+    ///      contract's safe state. Loosening is the direction to be careful
+    ///      with, which is why `MAX_KEEPER_FLOOR_DROP_BPS` and
+    ///      `MIN_KEEPER_FLOOR_DROP_GAP` are `constant` and this is not.
+    function setKeeperFloorLeash(uint256 dropBps, uint256 gap) external onlyOwner {
+        // The upper bound on the gap is `MAX_FLOOR_AGE` rather than a new
+        // number: a gap longer than the longest a floor may live is a leash
+        // that silently means "the keeper can never lower a floor again", and
+        // silent is the failure mode this whole file is written against.
+        if (dropBps > MAX_KEEPER_FLOOR_DROP_BPS || gap < MIN_KEEPER_FLOOR_DROP_GAP
+            || gap > MAX_FLOOR_AGE) {
+            revert InvalidFloorLeash(dropBps, gap);
+        }
+        keeperFloorDropBps = dropBps;
+        keeperFloorDropGap = gap;
+        emit KeeperFloorLeashChanged(dropBps, gap);
     }
 
     function setMaxFloorAge(uint256 maxAge) external onlyOwner {

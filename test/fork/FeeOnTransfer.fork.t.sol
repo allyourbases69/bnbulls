@@ -354,7 +354,7 @@ contract FeeOnTransferForkTest is ForkBase {
         assertGt(pending, 0);
 
         uint256 quoted = v2Router.getAmountsOut(pending, _pathWbnbTo(A.GORT))[1];
-        vm.prank(keeper);
+        vm.prank(owner);
         uint256 funded =
             drop.sweepBnbullPot(MintDrop.PotSource.Native, pending, (quoted * 85) / 100);
 

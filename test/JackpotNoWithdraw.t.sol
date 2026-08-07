@@ -51,6 +51,74 @@ contract JackpotNoWithdrawTest is BnbullsBase {
     }
 
     // ══════════════════════════════════════════════════════════════════════
+    //  Forcing a win, now that `setOdds(1)` is correctly impossible
+    // ══════════════════════════════════════════════════════════════════════
+
+    /**
+     * @dev Search for a VRF word that makes ticket `id` a WINNER on `pot` at
+     *      `odds`. Mirrors `Jackpot.resolve`'s preimage exactly, `address(this)`
+     *      term and all — so if that preimage is ever edited, every test here
+     *      stops being able to force a win and fails loudly rather than quietly
+     *      asserting nothing.
+     *
+     *      ⚠ THIS IS WHAT REPLACED `setOdds(1)`. That was the old "make every
+     *      ticket win" shortcut, and it is now forbidden by `MIN_ODDS_ONE_IN`
+     *      for a very good reason: `H % 1 == 0` for EVERY possible word, so odds
+     *      of one is a certain win with no grinding at all, and it was the last
+     *      step of a four-transaction pool drain (see
+     *      `JackpotOwnerDrainBlockedTest`). Searching the word instead keeps
+     *      the pot at real, shipped odds throughout. Same helper as
+     *      `test/testnet/GraduationBoundary.t.sol`.
+     */
+    function _wordThatWins(
+        address pot,
+        uint256 entropy,
+        uint256 tokenId,
+        address winner,
+        uint256 id,
+        uint256 odds
+    ) internal pure returns (uint256) {
+        for (uint256 word = 1; word < 100_000; word++) {
+            uint256 roll =
+                uint256(keccak256(abi.encodePacked(word, entropy, tokenId, winner, id, pot))) % odds;
+            if (roll == 0) return word;
+        }
+        revert("no winning word found");
+    }
+
+    /**
+     * @dev ONE word that makes tickets `0 .. count-1` all win at once.
+     *
+     *      A batch is decided by a single VRF word, so a test that needs every
+     *      ticket in the batch to pay needs one word satisfying all of them —
+     *      which is exactly the thing `setOdds(1)` used to hand out for free.
+     *      Assumes the ticket shape these tests open: `tokenId = i + 1`,
+     *      `entropy = baseEntropy + i`, `ticketId = i`.
+     */
+    function _wordThatWinsBatch(
+        address pot,
+        address winner,
+        uint256 baseEntropy,
+        uint256 count,
+        uint256 odds
+    ) internal pure returns (uint256) {
+        for (uint256 word = 1; word < 2_000_000; word++) {
+            bool all = true;
+            for (uint256 i = 0; i < count; i++) {
+                uint256 roll = uint256(
+                    keccak256(abi.encodePacked(word, baseEntropy + i, i + 1, winner, i, pot))
+                ) % odds;
+                if (roll != 0) {
+                    all = false;
+                    break;
+                }
+            }
+            if (all) return word;
+        }
+        revert("no word wins the whole batch");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════
     //  1-3. The named hatch cannot touch the prize
     // ══════════════════════════════════════════════════════════════════════
 
@@ -119,7 +187,7 @@ contract JackpotNoWithdrawTest is BnbullsBase {
     function test_noOwnerEntrypointRemovesThePrize() public {
         uint256 pooled = potBnbull.pool();
 
-        bytes[] memory calls = new bytes[](21);
+        bytes[] memory calls = new bytes[](22);
         calls[0] = abi.encodeCall(Jackpot.fund, (0, "x"));
         calls[1] = abi.encodeCall(Jackpot.topUp, (0));
         calls[2] = abi.encodeCall(Jackpot.recordWin, (owner, 1, 1, 0));
@@ -133,14 +201,19 @@ contract JackpotNoWithdrawTest is BnbullsBase {
         calls[10] = abi.encodeCall(Jackpot.setWiringDelay, (12 hours));
         calls[11] = abi.encodeCall(Jackpot.setFunder, (owner, true));
         calls[12] = abi.encodeCall(Jackpot.setRequester, (owner, true));
-        calls[13] = abi.encodeCall(Jackpot.setOdds, (1));
-        calls[14] = abi.encodeCall(Jackpot.setPayoutBps, (10_000));
-        calls[15] = abi.encodeCall(Jackpot.setMinPoolToFire, (0));
-        calls[16] = abi.encodeCall(Jackpot.setVrfConfig, (KEY_HASH, 2, 3, 200_000, false));
-        calls[17] = abi.encodeCall(Jackpot.setTimeouts, (10, 10));
-        calls[18] = abi.encodeCall(Jackpot.setSocials, ("w", "t", "g"));
-        calls[19] = abi.encodeCall(Jackpot.sweepForeignToken, (address(bnbull), owner, pooled));
-        calls[20] = abi.encodeWithSignature("transferOwnership(address)", alice);
+        // ⚠ `setOdds` / `setPayoutBps` / `setMinPoolToFire` USED TO SIT HERE and
+        // they are gone. All three now move together through
+        // bootstrap-once-then-propose/wait/commit, so all four of the functions
+        // that replaced them are swept instead of the three that were deleted.
+        calls[13] = abi.encodeCall(Jackpot.bootstrapPayoutParams, (10, 10_000, 0));
+        calls[14] = abi.encodeCall(Jackpot.proposePayoutParams, (10, 10_000, 0));
+        calls[15] = abi.encodeCall(Jackpot.commitPayoutParams, ());
+        calls[16] = abi.encodeCall(Jackpot.cancelPayoutParams, ());
+        calls[17] = abi.encodeCall(Jackpot.setVrfConfig, (KEY_HASH, 2, 3, 200_000, false));
+        calls[18] = abi.encodeCall(Jackpot.setTimeouts, (10, 10));
+        calls[19] = abi.encodeCall(Jackpot.setSocials, ("w", "t", "g"));
+        calls[20] = abi.encodeCall(Jackpot.sweepForeignToken, (address(bnbull), owner, pooled));
+        calls[21] = abi.encodeWithSignature("transferOwnership(address)", alice);
 
         for (uint256 i = 0; i < calls.length; i++) {
             uint256 snap = vm.snapshotState();
@@ -186,15 +259,23 @@ contract JackpotNoWithdrawTest is BnbullsBase {
     ///      legitimate worry. CEI in the loop — the cursor is retired before the
     ///      first external call — is what stops a ticket paying twice.
     function test_reentrantResolveCannotPayATicketTwice() public {
-        potBnbull.setOdds(1); // every ticket wins
-        potBnbull.setPayoutBps(1_000); // 10% a win, so the pool survives
+        // Deploy-day write: the odds floor (so a word that wins all three
+        // tickets is findable) and 10% a win, so the pool survives three of
+        // them. This used to be `setOdds(1); setPayoutBps(1_000);`.
+        potBnbull.bootstrapPayoutParams(potBnbull.MIN_ODDS_ONE_IN(), 1_000, 0);
 
         for (uint256 i = 0; i < 3; i++) {
             duel.open(address(potBnbull), alice, i + 1, 0xABC + i, 0);
         }
 
+        // ONE word, THREE winning tickets — the batch shape the CEI in the
+        // resolve loop has to survive.
+        uint256 word = _wordThatWinsBatch(
+            address(potBnbull), alice, 0xABC, 3, potBnbull.MIN_ODDS_ONE_IN()
+        );
+
         uint256 reqId = potBnbull.requestResolve(3);
-        coord.fulfill(reqId, uint256(keccak256("w")));
+        coord.fulfill(reqId, word);
 
         uint256 before = potBnbull.pool();
         potBnbull.resolve(3);
@@ -211,18 +292,23 @@ contract JackpotNoWithdrawTest is BnbullsBase {
     ///      pay exactly once and the pool must not go negative-by-replay.
     function test_reentrantPrizeTokenCannotReplayATicket() public {
         ReentrantResolveToken evilPrize = new ReentrantResolveToken();
-        Jackpot pot = new Jackpot(address(evilPrize), address(0), address(coord), 1);
+        // ⚠ The odds FLOOR, not 1. The constructor enforces `MIN_ODDS_ONE_IN`
+        // too — a pot deployed at odds of one would be drainable from block one,
+        // before any timelock could matter — so the win is forced with a
+        // searched word instead.
+        Jackpot pot = new Jackpot(address(evilPrize), address(0), address(coord), 10);
         evilPrize.setJackpot(address(pot));
         evilPrize.setBalance(1_000_000);
         pot.setVrfConfig(KEY_HASH, 1, 3, 200_000, true);
-        pot.setPayoutBps(1_000); // 10% a win
+        pot.bootstrapPayoutParams(10, 1_000, 0); // 10% a win
         pot.bootstrapDuel(address(duel));
 
         for (uint256 i = 0; i < 3; i++) {
             duel.open(address(pot), alice, i + 1, 0x1234 + i, 0);
         }
+        uint256 word = _wordThatWinsBatch(address(pot), alice, 0x1234, 3, 10);
         uint256 reqId = pot.requestResolve(3);
-        coord.fulfillTo(address(pot), reqId, 999);
+        coord.fulfillTo(address(pot), reqId, word);
 
         pot.resolve(3);
 
@@ -328,14 +414,20 @@ contract JackpotNoWithdrawTest is BnbullsBase {
         vm.expectRevert(abi.encodeWithSelector(Jackpot.RequestInFlight.selector, reqId));
         potBnbull.requestResolve(1);
 
+        // ⚠ READ THE LIVE VALUE, never a literal. It is an owner-settable
+        // bounded number and it MOVED once already (1,200 -> 24,000, because
+        // 1,200 was shorter than a measured fulfilment). The launch value is
+        // pinned separately, in
+        // `test_theStallTimeoutOutlastsTheSlowestFulfilmentEverMeasured`.
+        uint256 timeout = potBnbull.requestTimeoutBlocks();
         vm.expectRevert(
             abi.encodeWithSelector(
-                Jackpot.TimeoutNotElapsed.selector, uint64(block.number), uint256(1_200)
+                Jackpot.TimeoutNotElapsed.selector, uint64(block.number), timeout
             )
         );
         potBnbull.cancelStalledRequest();
 
-        vm.roll(block.number + 1_201);
+        vm.roll(block.number + timeout + 1);
         // Permissionless: a stuck subscription must not need our key to unstick.
         vm.prank(alice);
         potBnbull.cancelStalledRequest();
@@ -350,7 +442,7 @@ contract JackpotNoWithdrawTest is BnbullsBase {
     function test_lateWordFromACancelledRequestIsDiscarded() public {
         duel.open(address(potBnbull), alice, 1, 0xBEEF, 0);
         uint256 reqId = potBnbull.requestResolve(1);
-        vm.roll(block.number + 1_201);
+        vm.roll(block.number + potBnbull.requestTimeoutBlocks() + 1);
         potBnbull.cancelStalledRequest();
 
         coord.fulfill(reqId, 12345);
@@ -358,17 +450,56 @@ contract JackpotNoWithdrawTest is BnbullsBase {
         assertEq(potBnbull.resolve(10), 0);
     }
 
+    /**
+     * @notice ⚠ THE LAUNCH VALUE OF THE STALL TIMEOUT, PINNED. This is the one
+     *         assertion standing between a silent drift and a keeper that
+     *         cancels live VRF requests.
+     *
+     * @dev The measurement that set it: the FIRST live fulfilment on chain 97
+     *      took **3,169 blocks (~24 minutes)** while `requestTimeoutBlocks`
+     *      defaulted to **1,200** (~9 min at BSC's ~0.45s). A keeper obeying
+     *      that default calls `cancelStalledRequest` on a request that is about
+     *      to be answered — the subscription payment is spent for nothing, and
+     *      the word that finally arrives is DISCARDED, deliberately, because
+     *      `fulfillRandomWords` drops a word whose id no longer matches.
+     *
+     *      Every other test reads `requestTimeoutBlocks()` rather than a
+     *      literal, which is right — and which also means all of them would
+     *      keep passing if the launch value drifted back under real VRF
+     *      latency. Hence this one. ⚠ Do not delete it, and do not relax the
+     *      2x: it is a block count guarding a latency measured in TIME, so
+     *      every BSC block-time reduction eats into the margin by itself.
+     */
+    function test_theStallTimeoutOutlastsTheSlowestFulfilmentEverMeasured() public view {
+        uint256 measured = 3_169; // blocks, chain 97, first live fulfilment
+        assertEq(potBnbull.requestTimeoutBlocks(), 24_000, "the launch stall timeout moved");
+        assertEq(potBnb.requestTimeoutBlocks(), 24_000, "the two pots disagree");
+        assertGe(
+            potBnbull.requestTimeoutBlocks(),
+            2 * measured,
+            "the timeout is inside real VRF latency - a keeper would cancel live requests"
+        );
+        assertLe(
+            potBnbull.requestTimeoutBlocks(),
+            potBnbull.MAX_REQUEST_TIMEOUT_BLOCKS(),
+            "the launch value is above its own ceiling"
+        );
+    }
+
     // ══════════════════════════════════════════════════════════════════════
     //  The one door: a won ticket
     // ══════════════════════════════════════════════════════════════════════
 
     function test_theOnlyExitIsAWonTicket() public {
-        potBnbull.setOdds(1);
+        // At the pot's REAL shipped odds of 1-in-50. The win is forced by
+        // searching for the word rather than by bending the odds to 1.
         uint256 pooled = potBnbull.pool();
+        assertEq(potBnbull.oddsOneIn(), 50, "harness sanity: real odds, not 1-in-1");
 
         duel.open(address(potBnbull), alice, 7, 0xF00D, 1);
+        uint256 word = _wordThatWins(address(potBnbull), 0xF00D, 7, alice, 0, 50);
         uint256 reqId = potBnbull.requestResolve(1);
-        coord.fulfill(reqId, 42);
+        coord.fulfill(reqId, word);
         potBnbull.resolve(1);
 
         assertEq(bnbull.balanceOf(alice), pooled, "the winner gets the pool");
@@ -378,12 +509,22 @@ contract JackpotNoWithdrawTest is BnbullsBase {
     }
 
     function test_minPoolToFireHoldsThePayoutBack() public {
-        potBnbull.setOdds(1);
-        potBnbull.setMinPoolToFire(potBnbull.pool() + 1);
+        // The floor is a deploy-day write now, and it is snapshotted into the
+        // request — so it is fixed before the word that decides the ticket
+        // exists. See `JackpotOwnerDrainBlockedTest`.
+        potBnbull.bootstrapPayoutParams(50, 10_000, potBnbull.pool() + 1);
 
         duel.open(address(potBnbull), alice, 7, 0xF00D, 0);
+        uint256 word = _wordThatWins(address(potBnbull), 0xF00D, 7, alice, 0, 50);
         uint256 reqId = potBnbull.requestResolve(1);
-        coord.fulfill(reqId, 42);
+        coord.fulfill(reqId, word);
+
+        // ⚠ The assertion that makes this bite. Without it the test would pass
+        // just as happily on a LOSING roll and would prove nothing about the
+        // floor: `roll == 0` says the ticket genuinely won, `won == false` says
+        // `minPoolToFire` is what suppressed the payout.
+        vm.expectEmit(true, true, true, true, address(potBnbull));
+        emit Jackpot.TicketResolved(0, alice, 7, 0, 50, false);
         potBnbull.resolve(1);
 
         assertEq(potBnbull.awardCount(), 0);
@@ -392,18 +533,41 @@ contract JackpotNoWithdrawTest is BnbullsBase {
 
     function test_payoutShareIsBounded() public {
         vm.expectRevert(abi.encodeWithSelector(Jackpot.InvalidShare.selector, uint256(0)));
-        potBnbull.setPayoutBps(0);
+        potBnbull.bootstrapPayoutParams(50, 0, 0);
         vm.expectRevert(abi.encodeWithSelector(Jackpot.InvalidShare.selector, uint256(10_001)));
-        potBnbull.setPayoutBps(10_001);
-        potBnbull.setPayoutBps(10_000); // 100% to the WINNER is the launch value
+        potBnbull.bootstrapPayoutParams(50, 10_001, 0);
+        // The same bound on the timelocked route, so it cannot be dodged by
+        // proposing rather than bootstrapping.
+        vm.expectRevert(abi.encodeWithSelector(Jackpot.InvalidShare.selector, uint256(10_001)));
+        potBnbull.proposePayoutParams(50, 10_001, 0);
+
+        potBnbull.bootstrapPayoutParams(50, 10_000, 0); // 100% to the WINNER, the launch value
+        assertEq(potBnbull.payoutBps(), 10_000);
     }
 
     function test_oddsAreBounded() public {
-        vm.expectRevert(abi.encodeWithSelector(Jackpot.InvalidOdds.selector, uint256(0)));
-        potBnbull.setOdds(0);
         uint256 tooBig = potBnbull.MAX_ODDS_ONE_IN() + 1;
         vm.expectRevert(abi.encodeWithSelector(Jackpot.InvalidOdds.selector, tooBig));
-        potBnbull.setOdds(tooBig);
+        potBnbull.bootstrapPayoutParams(tooBig, 10_000, 0);
+        vm.expectRevert(abi.encodeWithSelector(Jackpot.InvalidOdds.selector, tooBig));
+        potBnbull.proposePayoutParams(tooBig, 10_000, 0);
+
+        // ⛔ AND THE FLOOR, WHICH IS THE HALF THAT MATTERS. `oddsOneIn = 1` is
+        // `H % 1 == 0` for every possible word — a certain win with no grinding
+        // at all, and the last step of the four-transaction pool drain
+        // reproduced in `JackpotOwnerDrainBlockedTest`. Every value below the
+        // floor is refused, on BOTH routes in, and `0` is refused with it.
+        uint256 floor_ = potBnbull.MIN_ODDS_ONE_IN();
+        assertEq(floor_, 10, "the floor moved - the drain regression test is measured against it");
+        for (uint256 o = 0; o < floor_; o++) {
+            vm.expectRevert(abi.encodeWithSelector(Jackpot.InvalidOdds.selector, o));
+            potBnbull.bootstrapPayoutParams(o, 10_000, 0);
+            vm.expectRevert(abi.encodeWithSelector(Jackpot.InvalidOdds.selector, o));
+            potBnbull.proposePayoutParams(o, 10_000, 0);
+        }
+
+        potBnbull.bootstrapPayoutParams(floor_, 10_000, 0);
+        assertEq(potBnbull.oddsOneIn(), floor_);
     }
 
     function test_fundIsFunderGatedAndOnlyEverAdds() public {

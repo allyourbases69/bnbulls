@@ -9,7 +9,12 @@ import { deployBlock } from '@/lib/env';
 // scan from genesis on a live chain would just fail. Chunk it, and cap the
 // total chunks so one page load can never turn into hundreds of RPC calls.
 const CHUNK_SIZE = 5_000n;
-const MAX_CHUNKS = 20;
+// 40 x 5,000 = 200,000 blocks of coverage. At BSC's ~0.75s blocks that is
+// roughly two days back from the tip, and it comfortably spans the gap that
+// had already opened on testnet between the deploy block and the head.
+// `incomplete` still goes true if even this does not reach `deployBlock`, so
+// the UI never silently claims a partial list is the whole list.
+const MAX_CHUNKS = 40;
 // ~3.5 days of BSC blocks at a ~3s block time. Used only when no deploy block
 // is configured — see `deployBlock()` in env.ts.
 const FALLBACK_LOOKBACK = 100_000n;
@@ -52,14 +57,36 @@ export function useContractLogs<TAbi extends readonly unknown[]>(params: {
       const configuredFrom = deployBlock();
       const from = configuredFrom ?? (latest > FALLBACK_LOOKBACK ? latest - FALLBACK_LOOKBACK : 0n);
 
+      // ⚠ WALK BACKWARD FROM THE HEAD. DO NOT "SIMPLIFY" THIS TO A FORWARD SCAN.
+      //
+      // It used to start at `deployBlock` and walk FORWARD, capped at
+      // MAX_CHUNKS — so it covered the first ~100k blocks after deploy and
+      // stopped. Every block mined after that widened a blind spot at the TIP,
+      // which is the only part a player actually looks at. Observed live on
+      // testnet: deploy 123,440,452, scan ended 123,540,452, head 123,604,943 —
+      // a freshly minted bull sat 64,491 blocks past the end of the search and
+      // the UI showed nothing. It is silent, and it gets worse daily, so on
+      // mainnet it would have started working and then quietly stopped.
+      //
+      // Scanning backward makes truncation drop the OLDEST range instead of the
+      // newest. A just-minted token is always in the first chunk queried.
       const chunks: Array<{ from: bigint; to: bigint }> = [];
-      let cursor = from;
-      while (cursor <= latest && chunks.length < MAX_CHUNKS) {
-        const to = cursor + CHUNK_SIZE > latest ? latest : cursor + CHUNK_SIZE;
-        chunks.push({ from: cursor, to });
-        cursor = to + 1n;
+      let cursor = latest;
+      let reachedStart = false;
+      while (chunks.length < MAX_CHUNKS) {
+        const span = cursor - from >= CHUNK_SIZE ? CHUNK_SIZE : cursor - from;
+        const chunkFrom = cursor - span;
+        chunks.push({ from: chunkFrom, to: cursor });
+        if (chunkFrom <= from) {
+          reachedStart = true;
+          break;
+        }
+        cursor = chunkFrom - 1n;
       }
-      const hitChunkCap = cursor <= latest;
+      // Query oldest → newest so the returned logs stay in chronological order
+      // for every caller that relies on it.
+      chunks.reverse();
+      const hitChunkCap = !reachedStart;
 
       // Sequential on purpose, not Promise.all — a free-tier RPC batches
       // concurrent requests poorly (BNB-CHAIN-FACTS.md §2).

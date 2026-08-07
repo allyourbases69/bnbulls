@@ -149,6 +149,50 @@ The Marketplace's jackpot slice behaves the same way and accrues to
 
 ---
 
+## the four.meme rehearsal — `FourMemeRehearsal.s.sol`
+
+**Real four.meme does not exist on chain 97. It is mainnet-only.** So the pad
+itself is `contracts/testnet/FourMemeMock.sol`, whose constructor *reverts* on
+chain 56. What is real is everything it graduates into: the chain-97 PancakeSwap
+v2 factory, router and WBNB, at their own addresses.
+
+```bash
+forge script script/testnet/FourMemeRehearsal.s.sol:FourMemeRehearsal \
+  --rpc-url $RPC_URL_TESTNET --broadcast --slow \
+  --account bnbulls-owner --password-file <path>
+```
+
+It launches the shape `DECISIONS.md §52` **measured**, not the shape we hoped
+for: **template B, quote = native BNB, `feeRateBuy = feeRateSell = 2`.** Zero of
+twenty template-B graduates on mainnet shipped untaxed, and B+BNB is the single
+most common real combination (13 of 26). `SeedLiquidity.s.sol` phase A rehearses
+the same sequence at rate 0 — that is the best case, and it is the one we will
+not be given.
+
+Then it drives: curve phase (transfers gated) -> a **contract**
+(`CurveBuyerProbe`) buys against a real `minAmount` floor -> the curve fills ->
+graduation happens atomically inside that buyer's own transaction -> a genuine
+v2 pair with the LP burned -> the gate lifts on the **same token address**.
+
+> ⚠ **A `forge script`'s console output is printed from the SIMULATION, before
+> anything is mined. It is not evidence.** Everything the script prints must be
+> re-read with `cast` against chain 97 afterwards. The script prints the four
+> addresses to aim those reads at, for exactly this reason.
+
+### what the mock does NOT reproduce
+
+The curve **shape** is `sold(f) = maxOffers * sqrt(f / maxRaising)`, not
+four.meme's. The real `K`/`T` were never resolved into a formula and the pad's
+implementation is unverified on bscscan, so no test may assert a four.meme price
+off this. What it does reproduce is the contract our code integrates against:
+monotone, quotable off chain, and exactly `maxOffers` sold at `maxRaising`.
+
+`createToken(bytes,bytes)` reverts `Expired`, always — the launch really must go
+through four.meme's own front end, and `launch()` is a deliberately
+differently-named owner-gated door so no script can mistake one for the other.
+
+---
+
 ## mainnet is NOT this command
 
 Chain 56 refuses to broadcast without `CONFIRM_MAINNET=true`, refuses a

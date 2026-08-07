@@ -155,8 +155,14 @@ contract DeployLocal is DeployCore, WireCore, VerifyCore {
         // ⚠ A DOLLAR figure — `Duel.setUsdFightPrice`. The BNB stake is derived
         // from it through the feed (`DECISIONS.md §26`), so it does NOT need
         // repegging when BNB moves.
-        c.params.fightWbnb = 2.5e18; // $2.50
-        c.params.fightBnbull = 250e18; // ~$2.50
+        // DECISIONS.md 41: $2, and the BNBULL peg moves WITH it. 39 removed the
+        // fight discount, so the keeper pegs the FULL sticker and 200 BNBULL at
+        // $0.01 IS the $2 above. The pair must stay consistent or the local
+        // rehearsal quietly exercises a different game from mainnet: at 2.5/250
+        // it was $2.50 in both currencies, and changing only one of them
+        // reintroduces the 25% cross-currency surcharge 41 exists to remove.
+        c.params.fightWbnb = 2e18; // $2
+        c.params.fightBnbull = 200e18; // $2 at $0.01/BNBULL
 
         // Floors sit BELOW the seeded market so an ordinary swap clears them.
         // Market: 60,000 BNBULL/BNB.
@@ -165,6 +171,14 @@ contract DeployLocal is DeployCore, WireCore, VerifyCore {
         // The local router's mock pair is seeded far above this, so an ordinary
         // local swap clears the minimum-liquidity floor.
         c.params.minPoolLiquidity = 1 ether;
+        // ⚠ NOT DEFAULTED TO ZERO — `setTimeouts` refuses a zero on either
+        // field, so an unset pair here would revert the local wiring. Same
+        // numbers as the real config so the rehearsal exercises the shipped
+        // values: 24,000 blocks (~3h at ~0.45s) for a stalled VRF request, well
+        // clear of the 3,169 blocks a real chain-97 fulfilment took, and 1,200
+        // for the dead-keeper failsafe.
+        c.params.vrfRequestTimeoutBlocks = 24_000;
+        c.params.vrfPublicRequestDelayBlocks = 1_200;
 
         c.params.graveyardBnbullPerUsd = 100e18; // $1 -> 100 BNBULL
         c.params.marketplaceBnbullUsd = 0.01e18; // BNBULL = $0.01
@@ -197,20 +211,17 @@ contract DeployLocal is DeployCore, WireCore, VerifyCore {
         }
         if (t.limitsActive()) t.liftLimits();
 
-        address[] memory wl = new address[](8);
-        wl[0] = d.mintDrop;
-        wl[1] = d.duel;
-        wl[2] = d.graveyard;
-        wl[3] = d.jackpotBnbull;
-        wl[4] = d.jackpotBnb;
-        wl[5] = d.marketplace;
-        wl[6] = d.mintSplitter;
-        wl[7] = d.reviveSplitter;
-        t.setWhitelistBulk(wl, true);
-
-        address[] memory wl2 = new address[](1);
-        wl2[0] = c.ext.routerV2;
-        t.setWhitelistBulk(wl2, true);
+        // ⚠ THE LIST LIVES IN `WireCore`, NOT HERE, AND THAT IS THE FIX. This
+        // file used to carry its own eight-entry copy — and it was already
+        // WRONG: `marketSplitter` was missing from it, so the marketplace's
+        // jackpot slice would have been the one leg that could not move BNBULL.
+        // A second copy of a set is a set that drifts, silently, in the
+        // direction of "the check passed because it checked less".
+        //
+        // `wireAll` calls this again a moment later; every step reads before it
+        // writes, so the second run is a no-op. It is called HERE too because
+        // the liquidity seed below moves 6,000,000 BNBULL through the router.
+        wireTokenWhitelist(c, d);
 
         console2.log("");
         console2.log("-- BNBULL opened for local trading (limits lifted, anti-bot off) --");
@@ -288,6 +299,7 @@ contract DeployLocal is DeployCore, WireCore, VerifyCore {
             "NEXT_PUBLIC_BULLS_NFT=", vm.toString(d.bulls), "\n",
             "NEXT_PUBLIC_MINTDROP=", vm.toString(d.mintDrop), "\n",
             "NEXT_PUBLIC_DUEL=", vm.toString(d.duel), "\n",
+            "NEXT_PUBLIC_YARDS=", vm.toString(d.yards), "\n",
             "NEXT_PUBLIC_GRAVEYARD=", vm.toString(d.graveyard), "\n",
             "NEXT_PUBLIC_JACKPOT_BNBULL=", vm.toString(d.jackpotBnbull), "\n",
             "NEXT_PUBLIC_JACKPOT_BNB=", vm.toString(d.jackpotBnb), "\n",

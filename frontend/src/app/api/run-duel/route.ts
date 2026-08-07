@@ -81,6 +81,7 @@ import {
   type StakeKind,
 } from '@/lib/duelPricing';
 import { readBullAt } from '@/lib/bullOnchain';
+import { formatToken } from '@/lib/format';
 import { simulateFight } from '@/sim/combat';
 import { applyDuelResult, type Outcome } from '@/core/elo';
 import type { CombatEvent } from '@/core/types';
@@ -309,33 +310,117 @@ export interface RunDuelResponse {
 // ─── Helpers ─────────────────────────────────────────────────────────
 
 /**
- * ⚠ TWO CURRENCIES ONLY (`DECISIONS.md §26`). `STABLE` is gone from the wire
- * protocol, not merely hidden: a client that still sends it now gets a 400
- * naming the two that exist, which is a far better failure than silently
- * resolving to some third registered asset and signing a fight in it.
+ * ⚠ TWO CURRENCIES, AND THE PLAYER PICKS (`DECISIONS.md §26`; owner call,
+ * 2026-08-07: "person must select EITHER BNB or BNBULL, or you can add a button
+ * 'both'").
+ *
+ * `STABLE` went with `§26` and `AUTO` has now gone with it. Both are out of the
+ * wire protocol, not merely hidden: a client that still sends one gets a 400
+ * naming what to send instead, which is a far better failure than resolving to
+ * something nobody asked for and signing a fight in it.
+ *
+ * ═══════════════════════════════════════════════════════════════════════
+ * ⚠ WHAT `BOTH` MEANS, AND WHAT IT CANNOT MEAN
+ * ═══════════════════════════════════════════════════════════════════════
+ * `BOTH` is a MATCHMAKING PREFERENCE. It is not a split payment, and it could
+ * not be one: `DuelResult` carries exactly one asset per side (`assetA`,
+ * `assetB`) and `Duel._takeSide` pulls one asset from one owner, so "half in
+ * each" is not expressible in the struct that gets signed. Building it would be
+ * a contract change, not a frontend one.
+ *
+ * So `BOTH` means "either currency is fine with me", and it resolves to exactly
+ * one. Three things make that a real choice rather than the old `AUTO` wearing
+ * a new label:
+ *
+ *   1. IT IS NEVER A DEFAULT. A challenger side with no selector is a 400
+ *      (`CURRENCY_NOT_CHOSEN`), not a guess.
+ *   2. IT NEVER SKIPS IN SILENCE. `AUTO` walked its candidates and `continue`d
+ *      past any that were short — no error, no log — so a bull whose owner had
+ *      no allowance was simply never matched and nobody could find out why.
+ *      Every currency tried below comes back in the error with its own reason.
+ *   3. THE ANSWER IS VISIBLE BEFORE ANYTHING IS SIGNED. The currency it landed
+ *      on rides back in `stakes.symbolA`/`symbolB` and is on screen next to the
+ *      settle button.
  */
-const ASSET_SELECTORS = ['BNBULL', 'BNB', 'AUTO'] as const;
+const ASSET_SELECTORS = ['BNB', 'BNBULL', 'BOTH'] as const;
 type AssetSelector = (typeof ASSET_SELECTORS)[number];
 
-const SELECTOR_KIND: Record<Exclude<AssetSelector, 'AUTO'>, StakeKind> = {
-  BNBULL: 'bnbull',
+const SELECTOR_KIND: Record<Exclude<AssetSelector, 'BOTH'>, StakeKind> = {
   BNB: 'bnb',
+  BNBULL: 'bnbull',
+};
+
+const SELECTOR_LABEL: Record<AssetSelector, string> = {
+  BNB: 'bnb',
+  BNBULL: 'bnbull',
+  BOTH: 'either currency',
+};
+
+const KIND_LABEL: Record<StakeKind, string> = {
+  bnb: 'bnb',
+  bnbull: 'bnbull',
+  other: 'that asset',
 };
 
 /**
- * `AUTO` order: BNBULL first because it is the only discounted leg
- * (`DECISIONS.md §2`), then BNB.
+ * The order `BOTH` tries, and it is **BNB FIRST**.
+ *
+ * ⚠ THAT IS THE OPPOSITE OF THE ORDER `AUTO` USED, deliberately. `AUTO` tried
+ * bnbull first "because it is the only discounted leg" — and `DECISIONS.md §39`
+ * has since deleted the fight discount outright: a $2 duel costs $2 in either
+ * currency, because two fighters putting different money into one purse lands
+ * the gap straight in the winner's payout. There is nothing left to prefer
+ * bnbull for, and `§29` says bnb is the currency that exists at launch, so bnb
+ * goes first and the common case stops depending on a fallback.
  *
  * ⚠ `other` is deliberately NOT in this list. If some third asset is ever
- * registered on `Duel`, AUTO must never pick it on a player's behalf — they
+ * registered on `Duel`, nothing here may pick it on a player's behalf — they
  * did not choose it and this endpoint would be signing a fight in a currency
  * nobody asked for. It stays reachable only by an explicit address, which no
- * selector currently offers.
- *
- * ⚠ At launch BNBULL resolves to "unavailable" (`§29`), so AUTO lands on BNB
- * for everybody. That is the expected state, not a fallback bug.
+ * selector offers.
  */
-const AUTO_ORDER: readonly StakeKind[] = ['bnbull', 'bnb'];
+const BOTH_ORDER: readonly StakeKind[] = ['bnb', 'bnbull'];
+
+/**
+ * Read one side's currency selector off the body.
+ *
+ * `null` means THE FIELD WAS NOT SENT, which is deliberately not the same thing
+ * as a bad value and is deliberately not a default. The challenger's side must
+ * be an explicit pick and 400s when it is missing; the opponent's side is
+ * allowed to be absent, because a passive opponent never picks one.
+ */
+function parseSelector(raw: unknown): AssetSelector | null | 'invalid' {
+  if (raw === undefined || raw === null || raw === '') return null;
+  const s = String(raw).toUpperCase();
+  return (ASSET_SELECTORS as readonly string[]).includes(s) ? (s as AssetSelector) : 'invalid';
+}
+
+function badSelector(field: string, raw: unknown): string {
+  if (String(raw).toUpperCase() === 'AUTO') {
+    return (
+      `${field}: "whatever i can pay" is gone. it could pass over a currency ` +
+      'without saying so, which left bulls unmatchable with no way to find out ' +
+      `why. send one of ${ASSET_SELECTORS.join(', ')} — BOTH means either ` +
+      'currency is fine, not half in each.'
+    );
+  }
+  return `${field} must be one of ${ASSET_SELECTORS.join(', ')}`;
+}
+
+/** The ERC-20 a leg is actually pulled through. The bnb leg is WBNB, and saying
+ *  "you approved 0 BNB" when the allowance lives on WBNB is the kind of nearly
+ *  right sentence that costs an hour. */
+function tokenLabel(info: StakeAssetInfo): string {
+  return info.kind === 'bnb' ? 'wbnb' : info.symbol.toLowerCase();
+}
+
+/** One currency that could NOT be used, and why. Collected rather than skipped:
+ *  the silent `continue` this replaces is the whole bug. */
+interface Blocker {
+  readonly symbol: string;
+  readonly why: string;
+  readonly code: string;
+}
 
 async function erc20Ready(
   client: PublicClient,
@@ -422,16 +507,15 @@ export async function POST(request: Request) {
     return bad('tokenA and tokenB must differ — a bull cannot fight itself', 400);
   }
 
-  const assetAStr = String(body.assetA ?? 'AUTO').toUpperCase();
-  const assetBStr = String(body.assetB ?? 'AUTO').toUpperCase();
-  if (!ASSET_SELECTORS.includes(assetAStr as AssetSelector)) {
-    return bad(`assetA must be one of ${ASSET_SELECTORS.join(', ')}`, 400);
-  }
-  if (!ASSET_SELECTORS.includes(assetBStr as AssetSelector)) {
-    return bad(`assetB must be one of ${ASSET_SELECTORS.join(', ')}`, 400);
-  }
-  let assetASel = assetAStr as AssetSelector;
-  let assetBSel = assetBStr as AssetSelector;
+  // ⚠ NO DEFAULT. `null` here means "not sent", and the challenger's side is
+  // required to be an explicit pick a few dozen lines below. Defaulting it to
+  // anything would re-create `AUTO` under a different name.
+  const selA = parseSelector(body.assetA);
+  const selB = parseSelector(body.assetB);
+  if (selA === 'invalid') return bad(badSelector('assetA', body.assetA), 400, 'BAD_CURRENCY');
+  if (selB === 'invalid') return bad(badSelector('assetB', body.assetB), 400, 'BAD_CURRENCY');
+  let assetASel: AssetSelector | null = selA;
+  let assetBSel: AssetSelector | null = selB;
 
   /**
    * Canonicalise so a matchup has ONE identity regardless of who asked or in
@@ -586,7 +670,22 @@ export async function POST(request: Request) {
     }
     const challengerId = ownsFirst ? tokenA : tokenB;
     const requestedOpponentId = ownsFirst ? tokenB : tokenA;
+
+    /**
+     * ⚠ THE PICK IS REQUIRED AND IT IS CHECKED HERE, not at parse time, because
+     * only now do we know from ON-CHAIN OWNERSHIP which of the two selectors is
+     * the caller's own. The opponent's may legitimately be absent.
+     */
     const challengerAssetSel = ownsFirst ? assetASel : assetBSel;
+    if (challengerAssetSel === null) {
+      return bad(
+        'pick what you are backing your bull with before you roll: bnb, bnbull, ' +
+          'or both if either will do. there is no "whatever i can pay" any more, ' +
+          'because it could pass over a currency without telling you.',
+        400,
+        'CURRENCY_NOT_CHOSEN',
+      );
+    }
 
     // ── The standing fight ──────────────────────────────────────────
     // One unsettled outcome per WALLET, and it does not expire on a clock. See
@@ -627,8 +726,21 @@ export async function POST(request: Request) {
     tokenA = Math.min(effChallengerId, effOpponentId);
     tokenB = Math.max(effChallengerId, effOpponentId);
     const challengerIsA = effChallengerId === tokenA;
-    assetASel = challengerIsA ? challengerAssetSel : 'AUTO';
-    assetBSel = challengerIsA ? 'AUTO' : challengerAssetSel;
+
+    /**
+     * ⚠ THE OPPONENT'S SIDE IS ALWAYS `BOTH`, AND THAT IS PHYSICS RATHER THAN A
+     * PREFERENCE. A passive opponent cannot be asked mid-fight, and
+     * `Duel._takeSide` gates the raw-BNB path on `owner_ == msg.sender`, so
+     * their side has to come out of an allowance they already gave — in
+     * whichever currency they gave it in. Nothing the challenger picks changes
+     * that, and nothing the challenger picks is allowed to pick FOR them.
+     *
+     * When neither of their allowances covers it the fight cannot be signed,
+     * and the error below says exactly that, by currency and by number. That is
+     * the case `AUTO` used to swallow.
+     */
+    const selForA: AssetSelector = challengerIsA ? challengerAssetSel : 'BOTH';
+    const selForB: AssetSelector = challengerIsA ? 'BOTH' : challengerAssetSel;
 
     // Owners of the pair that will actually settle, in canonical order.
     const [ownerARaw, ownerBRaw] = await Promise.all([
@@ -700,60 +812,113 @@ export async function POST(request: Request) {
       return bad('no stake assets are registered on the duel contract yet.', 503, 'NO_ASSETS');
     }
 
+    /**
+     * Settle ONE side on ONE currency, or explain every currency it tried.
+     *
+     * ⚠ THE `continue` IS GONE AND THAT IS THE POINT. The previous version
+     * walked its candidates and skipped anything that was short without an
+     * error and without a log, so on the old default `AUTO` a bull whose owner
+     * had no allowance was quietly never matched: no failure surfaced anywhere
+     * a player could read it, and there was nothing to act on. Every candidate
+     * that cannot be used now records a `Blocker` and every `Blocker` ends up in
+     * the sentence the player is shown.
+     */
     const resolveSide = async (
       sel: AssetSelector,
       owner: Address,
-      label: string,
+      tokenId: number,
       isSubmitter: boolean,
     ): Promise<{ asset: StakeAssetInfo; nativeValue: bigint } | { error: string; code?: string }> => {
-      const candidates: StakeKind[] =
-        sel === 'AUTO' ? [...AUTO_ORDER] : [SELECTOR_KIND[sel]];
-      let lastNote: string | null = null;
+      const candidates: StakeKind[] = sel === 'BOTH' ? [...BOTH_ORDER] : [SELECTOR_KIND[sel]];
+      const blockers: Blocker[] = [];
+
       for (const kind of candidates) {
         const info = findStakeAssetByKind(pricing, kind);
-        if (!info) continue;
-        if (info.cost === null) {
-          lastNote = info.note;
-          if (sel !== 'AUTO') {
-            return { error: `${label} cannot pay in ${info.symbol}: ${info.note ?? 'unavailable'}` };
-          }
+        if (!info) {
+          blockers.push({
+            symbol: KIND_LABEL[kind],
+            why: 'it is not registered as a fight currency on the duel contract.',
+            code: 'NO_PAYABLE_ASSET',
+          });
           continue;
         }
+        if (info.cost === null) {
+          // `readFightPricing` always sets a player-facing `note` when it nulls
+          // a cost — pre-graduation bnbull, an unhealthy chainlink feed, an
+          // unpegged leg. Pass it straight through rather than paraphrasing it.
+          blockers.push({
+            symbol: info.symbol,
+            why: info.note ?? 'the contract will not quote a fight in it right now.',
+            code: info.pending ? 'CURRENCY_NOT_LIVE' : 'CURRENCY_UNPRICED',
+          });
+          continue;
+        }
+
+        const need = formatToken(info.cost, info.decimals);
+        const tok = tokenLabel(info);
+
         // The native convenience path. `Duel._takeSide` lets `msg.sender` cover
         // a WBNB stake with raw BNB sent alongside the duel, wrapping exactly
         // what is owed and refunding the rest — so the submitter does not need
         // a WBNB balance at all. A PASSIVE opponent cannot: only `msg.sender`
         // can post value, so their side must come by allowance. That is
-        // physics, not policy (`Duel.sol`).
+        // physics, not policy (`Duel.sol:1029`).
+        let nativeHeld: bigint | null = null;
         if (info.kind === 'bnb' && isSubmitter) {
-          const nativeBalance = await client.getBalance({ address: owner });
-          if (nativeBalance >= info.cost) {
+          nativeHeld = await client.getBalance({ address: owner });
+          if (nativeHeld >= info.cost) {
             return { asset: info, nativeValue: info.cost };
           }
         }
+
         const ready = await erc20Ready(client, info.address, owner, env.duelAddress, info.cost);
         if (ready.ok) return { asset: info, nativeValue: 0n };
-        if (sel !== 'AUTO') {
-          return {
-            error:
-              `${label} can't pay in ${info.symbol}: needs ${info.cost} (has ` +
-              `${ready.balance}, approved ${ready.allowance} to the duel contract).`,
-            code: ready.balance < info.cost ? 'INSUFFICIENT_BALANCE' : 'NEEDS_APPROVAL',
-          };
-        }
+
+        const held = formatToken(ready.balance, info.decimals);
+        const approved = formatToken(ready.allowance, info.decimals);
+        blockers.push({
+          symbol: info.symbol,
+          why:
+            nativeHeld !== null
+              ? // Both routes into the bnb leg failed, so name both. Reporting
+                // only the allowance here reads as "approve more" to a wallet
+                // whose actual problem is that it is out of bnb.
+                `one fight needs ${need} bnb. you have ${formatToken(nativeHeld, info.decimals)} ` +
+                `bnb to send with the transaction, and ${held} wbnb with ${approved} of it ` +
+                'approved to the duel contract, so neither route covers it.'
+              : `one fight needs ${need} ${tok}. that wallet holds ${held} and has approved ` +
+                `${approved} to the duel contract.`,
+          code: ready.balance < info.cost ? 'INSUFFICIENT_BALANCE' : 'NEEDS_APPROVAL',
+        });
+      }
+
+      const detail = blockers.map((b) => `${b.symbol.toLowerCase()}: ${b.why}`).join(' ');
+      const codes = new Set(blockers.map((b) => b.code));
+      const code = codes.size === 1 ? [...codes][0] : 'NO_PAYABLE_ASSET';
+
+      if (isSubmitter) {
+        return {
+          error:
+            (sel === 'BOTH'
+              ? 'you said either currency would do, and neither can cover this fight right now. '
+              : `you picked ${SELECTOR_LABEL[sel]}, and it cannot cover this fight right now. `) +
+            detail,
+          code,
+        };
       }
       return {
         error:
-          `${label} has no currency it can pay with. send bnb, or approve ` +
-          `bnbull to the duel contract once it is tradeable.` +
-          (lastNote ? ` (${lastNote})` : ''),
-        code: 'NO_PAYABLE_ASSET',
+          `bull #${tokenId} cannot be drawn into this fight. a bull you did not send in ` +
+          'yourself always pays out of an allowance its owner gave the duel contract, ' +
+          'because only the wallet sending the transaction can post bnb with it. ' +
+          `${detail} pick another opponent, or ask that owner to approve one of the two.`,
+        code,
       };
     };
 
     const [sideA, sideB] = await Promise.all([
-      resolveSide(assetASel, ownerA, `bull #${tokenA}'s owner`, ownerA.toLowerCase() === requesterLc),
-      resolveSide(assetBSel, ownerB, `bull #${tokenB}'s owner`, ownerB.toLowerCase() === requesterLc),
+      resolveSide(selForA, ownerA, tokenA, ownerA.toLowerCase() === requesterLc),
+      resolveSide(selForB, ownerB, tokenB, ownerB.toLowerCase() === requesterLc),
     ]);
     if ('error' in sideA) return bad(sideA.error, 400, sideA.code);
     if ('error' in sideB) return bad(sideB.error, 400, sideB.code);

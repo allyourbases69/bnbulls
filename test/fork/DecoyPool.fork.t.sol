@@ -429,7 +429,7 @@ contract DecoyPoolForkTest is ForkBase {
         // A taxed graduate needs a slippage band wider than its tax; see
         // `FeeOnTransfer.fork.t.sol` for why that is a launch decision.
         uint256 honest = v2Router.getAmountsOut(accrued, _pathWbnbTo(A.GORT))[1];
-        vm.prank(keeper);
+        vm.prank(owner);
         uint256 funded =
             drop.sweepBnbullPot(MintDrop.PotSource.Native, accrued, (honest * 80) / 100);
 

@@ -72,15 +72,21 @@ export function telegramUrl(): string {
 /**
  * The source repo, or `null` to hide the link entirely.
  *
- * ⚠ THE REPO IS PRIVATE. A "read the code" link that 404s for everyone is
- * worse than no link at all — it reads as a broken promise on the one subject
- * where we are asking to be trusted. Set `NEXT_PUBLIC_GITHUB_URL=` (empty) to
- * hide it until the repo is public.
+ * ⚠ THE REPO IS PRIVATE, AND THE DEFAULT IS THEREFORE `null`.
+ *
+ * This used to default to the repo URL and only hide itself when someone
+ * remembered to set `NEXT_PUBLIC_GITHUB_URL=` (empty). Production has no such
+ * var, so the footer shipped a "read the code" link that 404s for every
+ * visitor — a broken promise on the one subject where we are asking to be
+ * trusted, printed on the page whose whole job is to be trusted.
+ *
+ * The default is now the safe answer: no link unless a URL is configured. Set
+ * `NEXT_PUBLIC_GITHUB_URL=https://github.com/…` the day the repo goes public,
+ * which is a deliberate act rather than a var somebody forgot to blank.
  */
 export function githubUrl(): string | null {
-  const raw = process.env.NEXT_PUBLIC_GITHUB_URL;
-  if (raw !== undefined) return raw.trim() || null;
-  return 'https://github.com/allyourbases69/bnbulls';
+  const raw = process.env.NEXT_PUBLIC_GITHUB_URL?.trim();
+  return raw ? raw : null;
 }
 
 /** Block the game contracts deployed at, or `null` when unset. Used to bound
@@ -126,6 +132,10 @@ const CONTRACT_ADDRESSES: Record<string, string | undefined> = {
   jackpotBnbull: process.env.NEXT_PUBLIC_JACKPOT_BNBULL,
   jackpotBnb: process.env.NEXT_PUBLIC_JACKPOT_BNB,
   marketplace: process.env.NEXT_PUBLIC_MARKETPLACE,
+  // The per-bull arena opt-out. A bull that is not in the yards cannot be
+  // fought on EITHER the staked or the zero-stake path, so the UI has to be
+  // able to read and write this or a player's bulls are silently unmatchable.
+  yards: process.env.NEXT_PUBLIC_YARDS,
 };
 
 export type ContractName =
@@ -136,7 +146,8 @@ export type ContractName =
   | 'graveyard'
   | 'jackpotBnbull'
   | 'jackpotBnb'
-  | 'marketplace';
+  | 'marketplace'
+  | 'yards';
 
 /** A 0x-prefixed address, or null when the env var is unset/empty/malformed.
  *  Deliberately returns null rather than throwing — the whole app has to

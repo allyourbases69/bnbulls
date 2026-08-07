@@ -4,38 +4,76 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
 import { MarketplaceAbi } from '@/lib/abi';
-import { contractAddress } from '@/lib/env';
+import { contractAddress, CHAIN_ID } from '@/lib/env';
 import { formatToken, formatUsd1e18, shortAddr } from '@/lib/format';
 import { useTokenDecimals, NATIVE_BNB_DECIMALS } from '@/lib/hooks/useTokenDecimals';
 import { useErc20Approval } from '@/lib/hooks/useErc20Approval';
+import { useWrongNetwork } from '@/lib/hooks/useWrongNetwork';
+import { WrongNetworkNotice } from '@/components/shared/WrongNetwork';
 import { withCushion, QUOTE_REFRESH_MS } from '@/lib/constants';
-import { BullSprite } from '@/components/BullSprite';
-import { getBull } from '@/lib/art/collection';
 import { CURRENCY } from '@/lib/brand';
+import type { Token } from '@/lib/art/bull';
+import type { ActiveListing } from '@/lib/hooks/useActiveListings';
+import { BullCardFace } from './BullCardFace';
+import type { BullRecord } from './bullRecord';
 
 /**
+ * One listing on the board — a port of fighting fefers' `/market`
+ * `ListingCard`: the id and rarity badge, the art, the name, the weapon, the
+ * price, then rating and record, all clickable through to the bull's own page.
+ *
+ * ⚠ ONE DELIBERATE DIFFERENCE FROM FEFERS, AND IT IS NOT A DESIGN CHOICE.
+ * On fefers the card is a bare `<Link>` with no buy button, because buying,
+ * repricing and cancelling all live in `MarketplacePanel` on
+ * `/warrior/[id]`. bnbulls has no such panel: the detail page is
+ * `frontend/src/app/bull/[id]/page.tsx` + `components/bull/BullOnChainPanel.tsx`,
+ * both OUTSIDE this task's assigned paths, and `BullOnChainPanel` only reports
+ * "listed · $X" with a link back to `/market`. Porting the bare link exactly
+ * would therefore have removed the only way to buy a bull anywhere on the
+ * site. So the fefers card FACE is ported verbatim and the buy/unlist controls
+ * stay appended below it, outside the anchor (an interactive control nested in
+ * an `<a>` is invalid html and swallows the click).
+ * The fix is to port `MarketplacePanel` onto the bull detail page; it needs an
+ * owner of `components/bull/**`.
+ *
  * ⚠ TWO CURRENCIES (`DECISIONS.md §26`). `buyWithStable` is gone,
  * `quote()` returns FOUR values instead of five, and `wires()` returns TWO
  * addresses `(priceFeed, bnbull)` instead of three with a stablecoin first —
  * so the old destructure was reading the PRICE FEED address as the token to
- * approve.
+ * approve. Fefers' single `USDT0` leg has no counterpart here and its
+ * `$${formatUnits(price, 6)}` price format is one of the sites
+ * `DECISIONS.md §26` explicitly killed.
+ *
+ * ⚠ THE LISTING COMES IN AS A PROP, IT IS NOT RE-READ HERE. `useActiveListings`
+ * already pulled every live `Listing` in one multicall, and the browse grid
+ * cannot sort or filter on a price no component above the card has seen. The
+ * sticker therefore renders instantly off stored state; only the BNB/BNBULL
+ * conversion waits on the oracle, which is the one number that genuinely moves.
  */
 type PayAsset = 'bnb' | 'bnbull';
 
-export function ListingCard({ tokenId }: { tokenId: number }) {
+export function ListingCard({
+  listing,
+  token,
+  record,
+  recordFailed,
+}: {
+  listing: ActiveListing;
+  token: Token;
+  record: BullRecord | null;
+  recordFailed?: boolean;
+}) {
+  const tokenId = listing.tokenId;
   const marketAddress = contractAddress('marketplace');
   const { address: account } = useAccount();
-  const token = getBull(tokenId);
   const [asset, setAsset] = useState<PayAsset>('bnb');
+  const { wrongNetwork } = useWrongNetwork();
 
-  const { data: listing } = useReadContract({
-    address: marketAddress ?? undefined,
-    abi: MarketplaceAbi,
-    functionName: 'listingOf',
-    args: [BigInt(tokenId)],
-    query: { enabled: !!marketAddress },
-  });
-  const { data: quote } = useReadContract({
+  const {
+    data: quote,
+    isError: quoteError,
+    isLoading: quoteLoading,
+  } = useReadContract({
     address: marketAddress ?? undefined,
     abi: MarketplaceAbi,
     functionName: 'quote',
@@ -49,9 +87,8 @@ export function ListingCard({ tokenId }: { tokenId: number }) {
     query: { enabled: !!marketAddress },
   });
 
-  const seller = (listing as { seller: `0x${string}` } | undefined)?.seller;
   // `Marketplace.quote(tokenId)` -> (usdPrice1e18, bnbDue, bnbullDue, bnbUsd1e18).
-  const [usdPrice, bnbDue, bnbullDue] =
+  const [, bnbDue, bnbullDue] =
     (quote as readonly [bigint, bigint, bigint, bigint] | undefined) ?? [
       undefined,
       undefined,
@@ -84,15 +121,19 @@ export function ListingCard({ tokenId }: { tokenId: number }) {
   const { writeContractAsync, isPending, data: txHash, error: txError } = useWriteContract();
   const { isLoading: isConfirming, isSuccess: confirmed } = useWaitForTransactionReceipt({ hash: txHash });
 
-  const isMine = !!account && !!seller && seller.toLowerCase() === account.toLowerCase();
+  const isMine = !!account && listing.seller.toLowerCase() === account.toLowerCase();
 
+  // ⚠ Every branch pins `chainId`. Without it wagmi hands viem `chain: null`,
+  // viem skips `assertCurrentChain`, and `buyWithBNB` pays a codeless address
+  // on whatever chain the wallet is on. See `useWrongNetwork`.
   async function handleBuy() {
-    if (!marketAddress) return;
+    if (!marketAddress || wrongNetwork) return;
     const id = BigInt(tokenId);
     if (asset === 'bnb') {
       await writeContractAsync({
         address: marketAddress,
         abi: MarketplaceAbi,
+        chainId: CHAIN_ID,
         functionName: 'buyWithBNB',
         args: [id],
         value: bnbDue !== undefined ? withCushion(bnbDue) : 0n,
@@ -101,6 +142,7 @@ export function ListingCard({ tokenId }: { tokenId: number }) {
       await writeContractAsync({
         address: marketAddress,
         abi: MarketplaceAbi,
+        chainId: CHAIN_ID,
         functionName: 'buyWithBNBULL',
         args: [id],
       });
@@ -108,37 +150,41 @@ export function ListingCard({ tokenId }: { tokenId: number }) {
   }
 
   async function handleCancel() {
-    if (!marketAddress) return;
+    if (!marketAddress || wrongNetwork) return;
     await writeContractAsync({
       address: marketAddress,
       abi: MarketplaceAbi,
+      chainId: CHAIN_ID,
       functionName: 'cancel',
       args: [BigInt(tokenId)],
     });
   }
 
   return (
-    <div className="rounded border border-bull-border bg-bull-panel p-4">
-      <div className="flex gap-4">
-        <BullSprite token={token} scale={2} />
-        <div className="flex-1">
-          <Link href={`/bull/${tokenId}`} className="font-semibold hover:text-bull-gold">
-            #{tokenId} {token.name}
-          </Link>
-          <p className="mt-1 font-mono text-xs text-bull-text-faint">
-            seller {seller ? shortAddr(seller) : '…'}
-          </p>
-          <p className="mt-1 font-mono text-lg text-bull-gold">{formatUsd1e18(usdPrice)}</p>
-        </div>
+    <div className="bull-card bull-card-hover flex flex-col p-3">
+      <Link href={`/bull/${tokenId}`} className="group block">
+        <BullCardFace token={token} record={record} recordFailed={recordFailed} />
+      </Link>
+
+      {/* Price. Fefers puts this on its own bordered row at the foot of the
+          card and so does this. */}
+      <div className="mt-2 flex items-baseline justify-between border-t border-bull-border pt-1 font-mono text-sm">
+        <span className="text-bull-text-faint">price</span>
+        <span className="text-sm font-bold text-bull-gold">{formatUsd1e18(listing.usdPrice)}</span>
       </div>
+      <div className="font-mono text-xs text-bull-text-faint">
+        seller {isMine ? 'you' : shortAddr(listing.seller)}
+      </div>
+
+      <WrongNetworkNotice className="mt-3" />
 
       {isMine ? (
         <button
           onClick={handleCancel}
-          disabled={isPending || isConfirming}
+          disabled={isPending || isConfirming || wrongNetwork}
           className="mt-3 w-full rounded-full border border-bull-border px-3 py-1.5 text-xs text-bull-text-dim hover:border-bull-red hover:text-bull-red disabled:opacity-50"
         >
-          {isPending || isConfirming ? 'sending…' : 'unlist'}
+          {wrongNetwork ? 'wrong network' : isPending || isConfirming ? 'sending…' : 'unlist'}
         </button>
       ) : (
         <div className="mt-3">
@@ -160,6 +206,15 @@ export function ListingCard({ tokenId }: { tokenId: number }) {
           </p>
           {!account ? (
             <p className="mt-2 text-xs text-bull-text-faint">connect a wallet to buy.</p>
+          ) : quoteError ? (
+            // `quote()` reverts on a stale or non-positive feed rather than
+            // clamping (`DECISIONS.md §1`), so there is no bnb figure to show.
+            <p className="mt-2 text-xs text-bull-text-faint">
+              the price feed didn&apos;t answer, so there is no live bnb figure. the sticker
+              above is the seller&apos;s and hasn&apos;t moved.
+            </p>
+          ) : quoteLoading ? (
+            <p className="mt-2 text-xs text-bull-text-faint">pricing…</p>
           ) : !availableForAsset[asset] ? (
             <p className="mt-2 text-xs text-bull-text-faint">this leg isn&apos;t priced right now.</p>
           ) : asset !== 'bnb' && needsApproval ? (
@@ -168,7 +223,7 @@ export function ListingCard({ tokenId }: { tokenId: number }) {
                 await approve();
                 refetchAllowance();
               }}
-              disabled={isApproving}
+              disabled={isApproving || wrongNetwork}
               className="mt-2 w-full rounded-full border border-bull-gold px-3 py-1.5 text-xs font-medium text-bull-gold disabled:opacity-50"
             >
               {isApproving ? 'approving…' : 'approve'}
@@ -176,16 +231,16 @@ export function ListingCard({ tokenId }: { tokenId: number }) {
           ) : (
             <button
               onClick={handleBuy}
-              disabled={isPending || isConfirming}
+              disabled={isPending || isConfirming || wrongNetwork}
               className="mt-2 w-full rounded-full border border-bull-gold bg-bull-gold px-3 py-1.5 text-xs font-semibold text-bull-gold-ink disabled:opacity-50"
             >
-              {isPending || isConfirming ? 'buying…' : 'buy'}
+              {wrongNetwork ? 'wrong network' : isPending || isConfirming ? 'buying…' : 'buy'}
             </button>
           )}
         </div>
       )}
       {confirmed && <p className="mt-2 text-xs text-bull-gold">done.</p>}
-      {txError && <p className="mt-2 text-xs text-bull-red">{txError.message}</p>}
+      {txError && <p className="mt-2 break-words text-xs text-bull-red">{txError.message}</p>}
     </div>
   );
 }

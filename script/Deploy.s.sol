@@ -11,6 +11,7 @@ import {Duel} from "../contracts/Duel.sol";
 import {Graveyard} from "../contracts/Graveyard.sol";
 import {Jackpot} from "../contracts/Jackpot.sol";
 import {Marketplace} from "../contracts/Marketplace.sol";
+import {Yards} from "../contracts/Yards.sol";
 import {MintBnbullSplitter} from "../contracts/MintBnbullSplitter.sol";
 import {ReviveBuySplitter} from "../contracts/ReviveBuySplitter.sol";
 
@@ -92,6 +93,13 @@ abstract contract DeployCore is BnbullsConfig {
             ? prev.deployBlock
             : (block.number == 0 ? 1 : block.number);
 
+        // The owner a human confirmed at the terminal a moment ago, carried
+        // into the record so `Handover` — which runs later, in its own process,
+        // and re-reads `OWNER` from env — has something to diff against.
+        // Without it, env drift between the two runs hands eight contracts to a
+        // different address with nothing anywhere objecting.
+        d.owner = c.roles.owner;
+
         // ── 0. BNBULL token ─────────────────────────────────────────────
         // `DECISIONS.md §4` puts the launch on four.meme, so on mainnet this
         // address normally already exists. `loadConfig` refuses a blank one on
@@ -162,6 +170,22 @@ abstract contract DeployCore is BnbullsConfig {
                     })
                 )
             );
+        }
+
+        // ── 3b. Yards ───────────────────────────────────────────────────
+        // The consent gate. Depends only on `Bulls` (it reads `ownerOf` in its
+        // setters), but it is deployed next to the Duel because that is the one
+        // contract that calls it.
+        //
+        // ⚠ DEPLOYING IT IS NOT ENOUGH AND THAT IS THE WHOLE HAZARD. It does
+        // nothing at all until `Wire.s.sol` bootstraps `Duel.Wire.Yards` — an
+        // unwired slot means NO CHECK, not "no yards", because
+        // `Duel._requireInYards` returns early on a zero. A deployment that
+        // lands this contract and forgets the wire looks complete and gates
+        // nothing.
+        d.yards = _resume(prev.yards, "Yards");
+        if (d.yards == address(0)) {
+            d.yards = address(new Yards(c.roles.deployer, d.bulls));
         }
 
         // ── 4. Graveyard ────────────────────────────────────────────────

@@ -304,7 +304,10 @@ contract MintDropNeverFailTest is BnbullsBase {
     //  ...and the keeper picks the backlog up afterwards
     // ══════════════════════════════════════════════════════════════════════
 
-    function test_theKeeperSweepsTheBacklogOnceTheRouteIsBack() public {
+    /// @dev ⛔ THE OWNER, NOT THE KEEPER. A priced sweep on `MintDrop` is
+    ///      owner-only: this contract publishes no floor, so there is nothing
+    ///      manipulation-resistant to measure a keeper's `minOut` against.
+    function test_theOwnerSweepsTheBacklogOnceTheRouteIsBack() public {
         router.setRevertOnSwap(true);
         vm.deal(alice, 3 ether);
         vm.prank(alice);
@@ -315,7 +318,7 @@ contract MintDropNeverFailTest is BnbullsBase {
         // The floor is quoted OFF chain — the one bound a same-block front-run
         // cannot move.
         uint256 offChainFloor = 2 ether * BNBULL_PER_BNB * 99 / 100;
-        vm.prank(keeper);
+        vm.prank(owner);
         uint256 funded = drop.sweepBnbullPot(MintDrop.PotSource.Native, 0, offChainFloor);
 
         assertEq(funded, 2 ether * BNBULL_PER_BNB);
@@ -330,7 +333,7 @@ contract MintDropNeverFailTest is BnbullsBase {
         drop.donatePotNative{value: 3 ether}();
         router.setRevertOnSwap(false);
 
-        vm.prank(keeper);
+        vm.prank(owner);
         drop.sweepBnbullPot(MintDrop.PotSource.Native, 0.5 ether, 1);
         assertEq(drop.pendingBnbullBuyNative(), 1.5 ether);
 

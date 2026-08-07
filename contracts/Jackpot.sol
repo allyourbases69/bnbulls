@@ -135,6 +135,78 @@ contract Jackpot is VRFConsumerBaseV2Plus {
     /// @notice True security ceiling on the odds denominator.
     uint256 public constant MAX_ODDS_ONE_IN = 1_000_000;
 
+    /**
+     * @notice ⛔ TRUE SECURITY FLOOR ON THE ODDS DENOMINATOR. `oddsOneIn = 1`
+     *         means `H % 1 == 0` for every possible word — a CERTAIN win, with
+     *         no VRF grinding required at all.
+     *
+     * @dev This is the same defect class as the `setCoordinator` finding
+     *      documented on `_coordinatorWire` below, and it was reachable the
+     *      same way: no function named "withdraw" is involved, so the literal
+     *      "no owner path removes the prize asset" invariant still held and the
+     *      surface sweep still passed. **The pool left through a chosen win.**
+     *
+     *      Reproduced end to end before this bound existed: open one ticket to
+     *      an address you control (the trusted signer is a plain setter, and a
+     *      self-duel only needs two wallets) → `setMinPoolToFire(max)` so
+     *      `resolve(n)` walks the cursor past every other player's ticket
+     *      paying nothing → `setMinPoolToFire(0); setOdds(1); resolve(1)` →
+     *      the entire pool, to an address of your choosing, in four owner
+     *      transactions with no front-running risk.
+     */
+    uint256 public constant MIN_ODDS_ONE_IN = 10;
+
+    // ─── The payout terms of the batch in flight (snapshotted) ────────────
+
+    /**
+     * @dev ⛔ `resolve` MUST NOT READ THE LIVE ODDS/PAYOUT/FLOOR. IT READS THESE.
+     *
+     *      The batch RANGE is already fixed at request time, and this file
+     *      states why verbatim: *"fixed at REQUEST time, before the word
+     *      exists, so batching gives nobody anything to grind."* The three
+     *      numbers that decide **whether a ticket wins and how much it takes**
+     *      were left reading live storage, which handed back everything that
+     *      principle was protecting: the owner could see the word land and only
+     *      then choose the terms it would be judged under.
+     *
+     *      So they are snapshotted into the request alongside `pendingUntil`
+     *      and promoted on fulfilment alongside `resolveUntil`. Same lifecycle,
+     *      same guarantee: **the terms of a batch are set before its randomness
+     *      exists, and cannot move afterwards.**
+     */
+    uint256 public pendingOdds;
+    uint256 public pendingPayoutBps;
+    uint256 public pendingMinPool;
+
+    /// @notice The terms `resolveWord` is being judged under. See above.
+    uint256 public resolveOdds;
+    uint256 public resolvePayoutBps;
+    uint256 public resolveMinPool;
+
+    // ─── Payout-parameter timelock ────────────────────────────────────────
+
+    /// @notice A proposed change to the three payout numbers, and its ETA.
+    ///         Zero `eta` means nothing is pending.
+    uint256 public proposedOdds;
+    uint256 public proposedPayoutBps;
+    uint256 public proposedMinPool;
+    uint64 public payoutParamsEta;
+
+    /**
+     * @notice One free instant write, for deploy day. After it, every change to
+     *         the payout numbers is propose → wait `wiringDelay` → commit.
+     * @dev Exactly `TimelockedAddress.bootstrap`'s bargain, for the same
+     *      reason: wiring a fresh deployment must not be a two-day job, but a
+     *      live pot's payout terms must never move without public notice.
+     *
+     *      ⚠ It is a ONE-TIME FLAG and deliberately not "while no tickets
+     *      exist". The latter looks equivalent and is not: the owner could fund
+     *      the pot, set odds to the floor while the queue was empty, and only
+     *      then open the ticket that collects. `Verify` asserts this has been
+     *      used before launch.
+     */
+    bool public payoutParamsBootstrapped;
+
     // ─── Wiring ───────────────────────────────────────────────────────────
 
     /// @dev The Duel contract is the only address allowed to open tickets, and
@@ -233,8 +305,38 @@ contract Jackpot is VRFConsumerBaseV2Plus {
     /// @notice True while `resolveWord` still has tickets left to decide.
     bool public wordReady;
 
-    /// @notice Blocks after which a stalled request may be cancelled by anyone.
-    uint256 public requestTimeoutBlocks = 1_200;
+    /**
+     * @notice Blocks after which a stalled request may be cancelled by anyone.
+     *
+     * @dev ⚠ MEASURED, NOT GUESSED, AND THE OLD NUMBER WAS TOO SMALL. This was
+     *      1_200 — about nine minutes at BSC's ~0.45s blocks. The FIRST live
+     *      fulfilment on chain 97 took **3,169 blocks (~24 minutes)**; later
+     *      ones landed in one to three. So a keeper obeying 1_200 would have
+     *      cancelled a request that was about to be answered, wasting the
+     *      subscription payment AND discarding the word, because
+     *      `fulfillRandomWords` drops a word whose id no longer matches.
+     *
+     *      ⚠ AND THE UNIT IS THE TRAP. What this bounds is ORACLE LATENCY,
+     *      which is denominated in TIME — but the counter is denominated in
+     *      BLOCKS, so every BSC block-time reduction silently SHORTENS it.
+     *      BSC has gone 3s → 1.5s → 0.75s → ~0.45s inside a year; a number
+     *      chosen tightly against today's block time is a number that expires
+     *      on somebody else's hard fork.
+     *
+     *      24_000 is ~3 hours at 0.45s, still ~1.7 hours if blocks halve
+     *      again, and 7.6x the worst fulfilment actually observed. The
+     *      asymmetry says to err long: cancelling early burns a paid request
+     *      and confuses the operator, while cancelling late only delays a
+     *      retry that mostly cannot help anyway — a request that is not being
+     *      served is usually not being served for a reason a re-request does
+     *      not fix (an unfunded subscription, a lane nobody runs). Meanwhile
+     *      fights are completely unaffected either way.
+     *
+     *      Owner-settable and bounded (`BNBULLS-BOOTSTRAP.md §0`), and `Wire`
+     *      now writes it explicitly so this default cannot ship by accident —
+     *      `DECISIONS.md §40`.
+     */
+    uint256 public requestTimeoutBlocks = 24_000;
     uint256 public constant MAX_REQUEST_TIMEOUT_BLOCKS = 200_000;
 
     // ─── VRF configuration (owner-settable, bounded) ──────────────────────
@@ -306,6 +408,10 @@ contract Jackpot is VRFConsumerBaseV2Plus {
     event FunderChanged(address indexed funder, bool allowed);
     event RequesterChanged(address indexed requester, bool allowed);
     event OddsChanged(uint256 oddsOneIn);
+    event PayoutParamsProposed(
+        uint256 oddsOneIn, uint256 payoutBps, uint256 minPoolToFire, uint64 eta
+    );
+    event PayoutParamsCancelled(uint256 oddsOneIn, uint256 payoutBps, uint256 minPoolToFire);
     event PayoutBpsChanged(uint256 payoutBps);
     event MinPoolToFireChanged(uint256 minPool);
     event VrfConfigChanged(
@@ -328,6 +434,12 @@ contract Jackpot is VRFConsumerBaseV2Plus {
     error NotFunder();
     error NotRequester();
     error InvalidOdds(uint256 oddsOneIn);
+    /// @dev `bootstrapPayoutParams` called twice. It is a one-time write.
+    error PayoutParamsAlreadyBootstrapped();
+    /// @dev `commitPayoutParams`/`cancelPayoutParams` with nothing proposed.
+    error NothingProposed();
+    /// @dev `commitPayoutParams` before the timelock elapsed.
+    error PayoutParamsNotElapsed(uint64 eta, uint64 nowTs);
     error InvalidShare(uint256 bps);
     error DelayOutOfRange(uint256 requested);
     error RequestInFlight(uint256 requestId);
@@ -356,7 +468,11 @@ contract Jackpot is VRFConsumerBaseV2Plus {
         VRFConsumerBaseV2Plus(_coordinator)
     {
         if (_prizeToken == address(0)) revert BadAddress();
-        if (_oddsOneIn == 0 || _oddsOneIn > MAX_ODDS_ONE_IN) revert InvalidOdds(_oddsOneIn);
+        // Same floor the setters enforce — a pot deployed at odds of 1 would
+        // be drainable from block one, before any timelock could matter.
+        if (_oddsOneIn < MIN_ODDS_ONE_IN || _oddsOneIn > MAX_ODDS_ONE_IN) {
+            revert InvalidOdds(_oddsOneIn);
+        }
         prizeToken = IERC20(_prizeToken);
         oddsOneIn = _oddsOneIn;
         // The coordinator VRFConsumerBaseV2Plus was constructed with is the
@@ -521,6 +637,15 @@ contract Jackpot is VRFConsumerBaseV2Plus {
         pendingRequestedAtBlock = uint64(block.number);
         pendingUntil = uint64(until_);
 
+        // ⛔ THE TERMS ARE FIXED HERE, WITH THE RANGE, BEFORE THE WORD EXISTS.
+        //    Reading these live in `resolve` let the owner watch the word land
+        //    and only then choose the odds it would be judged under. Same
+        //    principle the range already relies on, applied to the three
+        //    numbers that actually decide who gets paid and how much.
+        pendingOdds = oddsOneIn;
+        pendingPayoutBps = payoutBps;
+        pendingMinPool = minPoolToFire;
+
         emit RandomnessRequested(requestId, uint64(from), uint64(until_), msg.sender);
     }
 
@@ -551,6 +676,11 @@ contract Jackpot is VRFConsumerBaseV2Plus {
         if (requestId != pendingRequestId) return;
         resolveWord = randomWords[0];
         resolveUntil = pendingUntil;
+        // Promoted with the range, so the word and the terms it is judged
+        // under always travel together.
+        resolveOdds = pendingOdds;
+        resolvePayoutBps = pendingPayoutBps;
+        resolveMinPool = pendingMinPool;
         wordReady = true;
         pendingRequestId = 0;
         pendingUntil = 0;
@@ -592,6 +722,14 @@ contract Jackpot is VRFConsumerBaseV2Plus {
         uint256 balance = prizeToken.balanceOf(address(this));
         uint256 stop = resolveUntil;
 
+        // ⛔ THE SNAPSHOT, NOT LIVE STORAGE. These were captured in
+        //    `requestResolve` before the word existed. Repointing any of these
+        //    three at `oddsOneIn` / `minPoolToFire` / `payoutBps` reopens the
+        //    four-transaction pool drain — see `MIN_ODDS_ONE_IN`.
+        uint256 odds = resolveOdds;
+        uint256 minPool = resolveMinPool;
+        uint256 bps = resolvePayoutBps;
+
         while (resolved < max && nextToResolve < stop) {
             uint256 id = nextToResolve;
             Ticket memory t = tickets[id];
@@ -620,12 +758,12 @@ contract Jackpot is VRFConsumerBaseV2Plus {
                 keccak256(
                     abi.encodePacked(word, t.entropy, t.tokenId, t.winner, id, address(this))
                 )
-            ) % oddsOneIn;
+            ) % odds;
 
-            bool won = roll == 0 && balance >= minPoolToFire && balance > 0;
+            bool won = roll == 0 && balance >= minPool && balance > 0;
             uint256 paid;
             if (won) {
-                paid = (balance * payoutBps) / 10_000;
+                paid = (balance * bps) / 10_000;
                 won = paid > 0;
             }
 
@@ -649,7 +787,7 @@ contract Jackpot is VRFConsumerBaseV2Plus {
                 }
             }
 
-            emit TicketResolved(id, t.winner, t.tokenId, roll, oddsOneIn, won);
+            emit TicketResolved(id, t.winner, t.tokenId, roll, odds, won);
 
             if (won) {
                 balance -= paid;
@@ -796,21 +934,85 @@ contract Jackpot is VRFConsumerBaseV2Plus {
 
     // ─── Admin: odds + payout ─────────────────────────────────────────────
 
-    function setOdds(uint256 _oddsOneIn) external onlyOwner {
-        if (_oddsOneIn == 0 || _oddsOneIn > MAX_ODDS_ONE_IN) revert InvalidOdds(_oddsOneIn);
+    /**
+     * @notice Deploy-day write of the three payout numbers. Instant, and
+     *         available exactly ONCE.
+     * @dev After this, every change goes through `proposePayoutParams` →
+     *      wait `wiringDelay` → `commitPayoutParams`. See
+     *      `payoutParamsBootstrapped`.
+     */
+    function bootstrapPayoutParams(uint256 _oddsOneIn, uint256 _payoutBps, uint256 _minPool)
+        external
+        onlyOwner
+    {
+        if (payoutParamsBootstrapped) revert PayoutParamsAlreadyBootstrapped();
+        _validatePayoutParams(_oddsOneIn, _payoutBps);
+        payoutParamsBootstrapped = true;
         oddsOneIn = _oddsOneIn;
-        emit OddsChanged(_oddsOneIn);
-    }
-
-    function setPayoutBps(uint256 _payoutBps) external onlyOwner {
-        if (_payoutBps == 0 || _payoutBps > 10_000) revert InvalidShare(_payoutBps);
         payoutBps = _payoutBps;
+        minPoolToFire = _minPool;
+        emit OddsChanged(_oddsOneIn);
         emit PayoutBpsChanged(_payoutBps);
+        emit MinPoolToFireChanged(_minPool);
     }
 
-    function setMinPoolToFire(uint256 _minPool) external onlyOwner {
-        minPoolToFire = _minPool;
-        emit MinPoolToFireChanged(_minPool);
+    /**
+     * @notice Propose a change to the three payout numbers. Public, with an
+     *         ETA, for `wiringDelay` before it can take effect.
+     *
+     * @dev ⛔ ALL THREE MOVE TOGETHER, ON ONE CLOCK, AND THAT IS DELIBERATE.
+     *      The drain this timelock exists to stop used two of them in concert
+     *      — `minPoolToFire` to burn other players' tickets without paying,
+     *      then `oddsOneIn` to guarantee the attacker's own. Three independent
+     *      timelocks would let the pieces be staged separately and land in one
+     *      block; one proposal means the whole intended end state is on public
+     *      display, together, for the full delay.
+     */
+    function proposePayoutParams(uint256 _oddsOneIn, uint256 _payoutBps, uint256 _minPool)
+        external
+        onlyOwner
+        returns (uint64 eta)
+    {
+        _validatePayoutParams(_oddsOneIn, _payoutBps);
+        eta = uint64(block.timestamp + wiringDelay);
+        proposedOdds = _oddsOneIn;
+        proposedPayoutBps = _payoutBps;
+        proposedMinPool = _minPool;
+        payoutParamsEta = eta;
+        emit PayoutParamsProposed(_oddsOneIn, _payoutBps, _minPool, eta);
+    }
+
+    /// @notice Apply a matured proposal.
+    function commitPayoutParams() external onlyOwner {
+        uint64 eta = payoutParamsEta;
+        if (eta == 0) revert NothingProposed();
+        if (block.timestamp < eta) revert PayoutParamsNotElapsed(eta, uint64(block.timestamp));
+
+        oddsOneIn = proposedOdds;
+        payoutBps = proposedPayoutBps;
+        minPoolToFire = proposedMinPool;
+        payoutParamsEta = 0;
+
+        emit OddsChanged(oddsOneIn);
+        emit PayoutBpsChanged(payoutBps);
+        emit MinPoolToFireChanged(minPoolToFire);
+    }
+
+    /// @notice Drop a pending proposal.
+    function cancelPayoutParams() external onlyOwner {
+        if (payoutParamsEta == 0) revert NothingProposed();
+        payoutParamsEta = 0;
+        emit PayoutParamsCancelled(proposedOdds, proposedPayoutBps, proposedMinPool);
+    }
+
+    function _validatePayoutParams(uint256 _oddsOneIn, uint256 _payoutBps) private pure {
+        // ⛔ THE FLOOR IS THE POINT. `oddsOneIn = 1` is a certain win for every
+        //    word; anything below MIN_ODDS_ONE_IN makes a self-dealt ticket
+        //    cheap enough to farm. See MIN_ODDS_ONE_IN.
+        if (_oddsOneIn < MIN_ODDS_ONE_IN || _oddsOneIn > MAX_ODDS_ONE_IN) {
+            revert InvalidOdds(_oddsOneIn);
+        }
+        if (_payoutBps == 0 || _payoutBps > 10_000) revert InvalidShare(_payoutBps);
     }
 
     // ─── Admin: VRF ───────────────────────────────────────────────────────

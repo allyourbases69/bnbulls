@@ -279,7 +279,9 @@ contract LifecycleE2ETest is TestnetDexBase {
         assertGt(minOut, 0);
 
         uint256 potBefore = bnbull.balanceOf(address(potBnbull));
-        vm.prank(keeper);
+        // ⛔ THE OWNER. A priced sweep on `MintDrop` is owner-only — this
+        //    contract publishes no floor, so a keeper's `minOut` would be
+        //    bounded by nothing. This rig deploys as `address(this)`.
         uint256 funded = drop.sweepBnbullPot(MintDrop.PotSource.Native, 0, minOut);
 
         assertEq(drop.pendingBnbullBuyNative(), 0, "the bucket must drain");
@@ -335,7 +337,8 @@ contract LifecycleE2ETest is TestnetDexBase {
         uint256 accrued = drop.pendingBnbullBuyNative();
         _graduate(bnbull);
 
-        vm.prank(keeper);
+        // The OWNER, so the revert under test is the unreachable FLOOR and not
+        // the owner-only gate on a priced sweep.
         vm.expectRevert();
         drop.sweepBnbullPot(MintDrop.PotSource.Native, 0, type(uint128).max);
 

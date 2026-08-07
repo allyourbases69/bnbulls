@@ -5,7 +5,6 @@ import {console2} from "forge-std/console2.sol";
 import {BnbullsConfig} from "./lib/BnbullsConfig.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {BNBull} from "../contracts/BNBull.sol";
-import {Bulls} from "../contracts/Bulls.sol";
 import {Jackpot} from "../contracts/Jackpot.sol";
 
 /**
@@ -22,9 +21,34 @@ import {Jackpot} from "../contracts/Jackpot.sol";
  *      to be run by the new owner, not by the deployer.
  */
 contract Handover is BnbullsConfig {
+    error OwnerNotRecorded();
+    error OwnerDriftedSinceDeploy(address recorded, address fromEnv);
+
     function run() external {
+        // ⚠ THE GATES `Deploy` HAS, BECAUSE THIS RUN IS THE IRREVERSIBLE ONE.
+        // `treasuryGuard` / `keyGuard` / `preflight` used to be called from
+        // `Deploy.run()` and nowhere else — so `OWNER` was human-confirmed at
+        // DEPLOY time and then CONSUMED here, in a separate process, from a
+        // fresh `vm.envOr("OWNER", …)` read that nothing checked. Eight
+        // contracts move on that one value and `transferOwnership` has no undo.
+        keyGuard();
+        chainGuard();
+
         Cfg memory c = loadConfig(msg.sender);
         Deployment memory d = readDeployment();
+
+        // ⚠ BEFORE THE "nothing to hand over" SHORTCUT, ON PURPOSE. With
+        // `OWNER` simply missing from this run's env, `vm.envOr` answers with
+        // the deployer, the shortcut below fires, and the script exits 0 having
+        // done nothing — while the record says the game was meant to end up
+        // somewhere else. A silent no-op that reads as success is worse than a
+        // failure, because the operator ticks the runbook line.
+        _assertOwnerMatchesRecord(c.roles.owner, d.owner);
+
+        // Rule 1 again, on the run that actually spends the address. The $154
+        // was lost to a well-formed address nobody re-checked, and this is the
+        // last moment anybody can.
+        treasuryGuard(c);
 
         if (c.roles.owner == msg.sender) {
             console2.log("OWNER == the caller. Nothing to hand over.");
@@ -39,6 +63,11 @@ contract Handover is BnbullsConfig {
         _give(d.bulls, c.roles.owner, "Bulls");
         _give(d.mintDrop, c.roles.owner, "MintDrop");
         _give(d.duel, c.roles.owner, "Duel");
+        // Left behind, this one stays owned by the deployer key while
+        // `Verify`'s `EXPECT_OWNER` gate says the handover landed — and the
+        // owner of `Yards` is who sets `ejectDelay`, i.e. who decides how long
+        // a holder waits to get a bull out of the arena.
+        _give(d.yards, c.roles.owner, "Yards");
         _give(d.graveyard, c.roles.owner, "Graveyard");
         _give(d.marketplace, c.roles.owner, "Marketplace");
         _give(d.mintSplitter, c.roles.owner, "MintBnbullSplitter");
@@ -56,6 +85,46 @@ contract Handover is BnbullsConfig {
         console2.log("        forge script script/OneWaySwitches.s.sol:AcceptJackpotOwnership \\");
         console2.log("          --rpc-url $RPC_URL --broadcast");
         console2.log("      Until then the DEPLOYER still owns both pots.");
+        console2.log("");
+        console2.log("  THEN, and there is no green check on any of this until you do:");
+        console2.log("        EXPECT_OWNER=<the address above> \\");
+        console2.log("          forge script script/Verify.s.sol:Verify --rpc-url $RPC_URL");
+        console2.log("      It asserts owner() on all eight Ownable contracts AND both");
+        console2.log("      pots, so a proposal that was never accepted shows up as a");
+        console2.log("      failure instead of as a transaction that looked fine.");
+    }
+
+    /**
+     * @dev The env read that fires the handover, diffed against the env read a
+     *      human confirmed on deploy day.
+     *
+     *      They are two different processes reading the same file at two
+     *      different times, and everything in `DEPLOY-SAFETY-PREFLIGHT.md §1`
+     *      says treat the second read as suspect: a fork rehearsal between the
+     *      two runs is exactly what wrote a throwaway address into fefers'
+     *      mainnet env file, and that address passed every check there was
+     *      because it was well-formed. This one is not a well-formedness check.
+     */
+    function _assertOwnerMatchesRecord(address fromEnv, address recorded) private {
+        if (recorded == address(0)) {
+            console2.log("");
+            console2.log("  /!\\ THE DEPLOYMENT RECORD HAS NO 'owner' FIELD.");
+            console2.log("      It predates the field, so there is nothing to diff this run's");
+            console2.log("      OWNER against and the drift check cannot run. Re-record the");
+            console2.log("      deployment before handing eight contracts to an env variable.");
+            revert OwnerNotRecorded();
+        }
+        if (recorded != fromEnv) {
+            console2.log("");
+            console2.log("  /!\\ OWNER HAS CHANGED SINCE THE DEPLOY.");
+            console2.log("      recorded at deploy:", recorded);
+            console2.log("      this run's env:    ", fromEnv);
+            console2.log("      One of these is wrong and transferOwnership has no undo. If");
+            console2.log("      the move is deliberate, re-record the deployment first so the");
+            console2.log("      file and the chain agree about who owns the game.");
+            revert OwnerDriftedSinceDeploy(recorded, fromEnv);
+        }
+        console2.log("  [ok] OWNER matches the deployment record:", recorded);
     }
 
     function _give(address target, address to, string memory label) private {
@@ -70,6 +139,13 @@ contract Handover is BnbullsConfig {
  */
 contract AcceptJackpotOwnership is BnbullsConfig {
     function run() external {
+        // Broadcasts, so it gets the same gates. This one runs from the NEW
+        // OWNER's key rather than the deployer's, which is precisely the run
+        // where "which chain is --rpc-url actually pointed at" is least likely
+        // to have been checked recently.
+        keyGuard();
+        chainGuard();
+
         Deployment memory d = readDeployment();
         console2.log("== accepting pot ownership as", msg.sender, "==");
         vm.startBroadcast();
@@ -78,6 +154,10 @@ contract AcceptJackpotOwnership is BnbullsConfig {
         vm.stopBroadcast();
         console2.log("  BNBULL pot owner", Jackpot(d.jackpotBnbull).owner());
         console2.log("  BNB pot owner   ", Jackpot(d.jackpotBnb).owner());
+        console2.log("");
+        console2.log("  Now prove the whole handover landed, all ten contracts at once:");
+        console2.log("    EXPECT_OWNER=<owner> forge script script/Verify.s.sol:Verify \\");
+        console2.log("      --rpc-url $RPC_URL");
     }
 }
 
@@ -111,30 +191,34 @@ contract OneWaySwitches is BnbullsConfig {
     error NothingSelected();
 
     function run() external {
+        // Broadcasts, and every transaction it sends is permanent. Same gates.
+        keyGuard();
+        chainGuard();
+
         Deployment memory d = readDeployment();
 
         bool doLift = vm.envOr("SWITCH_LIFT_LIMITS", false);
         bool doLockBlacklist = vm.envOr("SWITCH_LOCK_BLACKLIST", false);
-        bool doFreezeNames = vm.envOr("SWITCH_FREEZE_NAMES", false);
         bool doRenounceToken = vm.envOr("SWITCH_RENOUNCE_TOKEN", false);
 
         console2.log("== one-way switches ==");
         console2.log("  SWITCH_LIFT_LIMITS    ", doLift);
         console2.log("  SWITCH_LOCK_BLACKLIST ", doLockBlacklist);
-        console2.log("  SWITCH_FREEZE_NAMES   ", doFreezeNames);
         console2.log("  SWITCH_RENOUNCE_TOKEN ", doRenounceToken);
 
-        if (
-            !doLift && !doLockBlacklist && !doFreezeNames && !doRenounceToken
-        ) {
+        if (!doLift && !doLockBlacklist && !doRenounceToken) {
             console2.log("");
             console2.log("  Nothing selected. Every switch here is PERMANENT, so each one");
             console2.log("  needs its own env flag - there is no 'do them all'.");
+            console2.log("");
+            console2.log("  Looking for SWITCH_FREEZE_NAMES? It is GONE. Freezing the name");
+            console2.log("  table is:");
+            console2.log("    FREEZE_NAMES=true forge script script/Names.s.sol:SetNames \\");
+            console2.log("      --rpc-url $RPC_URL --broadcast");
             revert NothingSelected();
         }
 
         BNBull token = BNBull(d.bnbull);
-        Bulls bulls = Bulls(d.bulls);
 
         vm.startBroadcast();
 
@@ -145,12 +229,23 @@ contract OneWaySwitches is BnbullsConfig {
         //    invariant is asserted in `Verify`: `rarityHash ==
         //    initialRarityHash`, always.
 
-        // 2. Names: the table is sealed forever.
-        if (doFreezeNames) {
-            require(bulls.namesWritten() == 501, "names table incomplete - do NOT freeze");
-            bulls.freezeNames();
-            console2.log("  [done] Bulls.freezeNames()");
-        }
+        // 2. Names: NOT HERE ANY MORE, AND DELETED RATHER THAN DEPRECATED.
+        //
+        //    `SWITCH_FREEZE_NAMES` sealed the table on a COUNTER —
+        //    `namesWritten() == 501` — and 501 correct-length wrong names count
+        //    to 501 exactly as well as 501 right ones. `SetNames` does the real
+        //    check: `namesCommitment` compared against the dealt table, then
+        //    all 501 slots re-read off chain and compared byte for byte. Two
+        //    routes to a one-way switch, one of them strictly weaker, is an
+        //    invitation to take the weaker one on a busy launch day — and
+        //    sealing a WRONG name table is unrecoverable, because the name is
+        //    what a marketplace, the site and every buyer see forever.
+        //
+        //    Deleted, not left in place with a warning, for `DECISIONS.md §27`'s
+        //    reason: a second path that returns a plausible-but-wrong answer is
+        //    exactly how this recurs. `FREEZE_NAMES=true` on `SetNames` is now
+        //    the only way to freeze, so the full verification is structural
+        //    rather than remembered.
 
         // 3. Token caps. ⚠ BEFORE any renounce.
         if (doLift) {

@@ -44,6 +44,22 @@ import {Duel} from "../../contracts/Duel.sol";
  *      the deferral happens, the buckets grow, and nothing reverts.
  *
  *      Run `Verify` with `ALLOW_DEFERRALS=true` after any rehearsal traffic.
+ *
+ *      ══════════════════════════════════════════════════════════════════════
+ *      ⚠ THE YARDS ARE EMPTY WHEN THIS FINISHES, AND NO FIGHT WILL SETTLE
+ *      ══════════════════════════════════════════════════════════════════════
+ *      `Yards` is deployed by `DeployCore` and wired into `Duel.Wire.Yards` by
+ *      `WireCore` — this file needs no Yards-specific code, and deliberately
+ *      has none, because a rehearsal that took a different path through the
+ *      deploy would be rehearsing something other than the deploy.
+ *
+ *      But the default is OUT, for every bull, including freshly minted ones.
+ *      So after this script the arena is wired and correct and **nobody can be
+ *      fought**: `submitDuel` reverts `BullNotInYards` until each holder calls
+ *      `Yards.enter([...])` from the wallet that actually holds the bull. That
+ *      is the design (`Yards.sol`, "THE DEFAULT IS OUT"), not a gap — and it is
+ *      called out here because on a rehearsal chain the symptom is a duel that
+ *      refuses to settle with everything else reading green.
  */
 contract DeployTestnet is DeployCore, WireCore, VerifyCore {
     error NotBscTestnet(uint256 chainid);
@@ -98,6 +114,13 @@ contract DeployTestnet is DeployCore, WireCore, VerifyCore {
         console2.log("");
         console2.log("  THEN: script/Names.s.sol:SetNames, then");
         console2.log("        script/testnet/RehearsePreLiquidity.s.sol");
+        console2.log("");
+        console2.log("== AND THE YARDS ARE EMPTY ==");
+        console2.log("  Every bull defaults to OUT, so submitDuel reverts BullNotInYards");
+        console2.log("  until each holder sends its own bulls in, from its own wallet:");
+        console2.log("    cast send", d.yards, '"enter(uint256[])" "[1,2,3]" ...');
+        console2.log("  Entering is INSTANT; ejecting takes Yards.ejectDelay to bite, which");
+        console2.log("  is what stops a losing side front-running its own loss.");
     }
 
 }

@@ -11,6 +11,7 @@ import {Duel} from "../../contracts/Duel.sol";
 import {Graveyard} from "../../contracts/Graveyard.sol";
 import {Jackpot} from "../../contracts/Jackpot.sol";
 import {Marketplace} from "../../contracts/Marketplace.sol";
+import {Yards} from "../../contracts/Yards.sol";
 import {LocalWBNB, LocalVRFCoordinator} from "./mocks/LocalMocks.sol";
 
 /**
@@ -121,8 +122,19 @@ contract Seed is BnbullsConfig {
         console2.log("  minted:", Bulls(d.bulls).nextTokenId() - 1);
     }
 
-    // ─── 2. Stakes ──────────────────────────────────────────────────────
+    // ─── 2. Stakes, and consent ─────────────────────────────────────────
 
+    /**
+     * @dev ⚠ THE APPROVAL IS NO LONGER ENOUGH, AND THAT IS THE POINT OF
+     *      `Yards.sol`. Arena membership USED to be the ERC-20 allowance —
+     *      wallet-wide, and skipped entirely by a zero-stake duel. It is now a
+     *      per-bull standing instruction that only the LIVE owner can give,
+     *      defaulting to OUT, so a seed that only approves would have every
+     *      `submitDuel` below revert `BullNotInYards`.
+     *
+     *      This is the local rehearsal of the readiness step the UI does in one
+     *      transaction: `approve` the stake asset AND `enter` the bulls.
+     */
     function _prepareStakes() private {
         Duel du = Duel(d.duel);
         uint256 wbnbCost = du.fighterCost(wbnbAddr);
@@ -141,6 +153,29 @@ contract Seed is BnbullsConfig {
         IERC20(wbnbAddr).approve(d.duel, type(uint256).max);
         IERC20(d.bnbull).approve(d.duel, type(uint256).max);
         vm.stopBroadcast();
+
+        // Into the yards. Alice's #1 and bob's #4 are the two that fight; each
+        // is entered by its OWN owner, because `enter` checks `ownerOf` live
+        // and an operator approval does not let one wallet volunteer another's
+        // bull for combat.
+        uint256[] memory hers = new uint256[](1);
+        hers[0] = 1;
+        uint256[] memory his = new uint256[](1);
+        his[0] = 4;
+
+        vm.startBroadcast(ANVIL_PK_0);
+        Yards(d.yards).enter(hers);
+        vm.stopBroadcast();
+
+        vm.startBroadcast(ANVIL_PK_1);
+        Yards(d.yards).enter(his);
+        vm.stopBroadcast();
+
+        console2.log("");
+        console2.log("-- yards --");
+        console2.log("  #1 in", Yards(d.yards).inYards(1));
+        console2.log("  #4 in", Yards(d.yards).inYards(4));
+        console2.log("  #2 in (never entered, stays OUT)", Yards(d.yards).inYards(2));
     }
 
     // ─── 3. Three fights, and bull #1 dies on the third ─────────────────

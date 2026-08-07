@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { GraveyardPanel } from '@/components/graveyard/GraveyardPanel';
+import { PreLaunchNotice } from '@/components/PreLaunchNotice';
 import { DEATH, EMOJI } from '@/lib/brand';
 
 /**
@@ -26,6 +27,7 @@ export default function GraveyardPage() {
           runs before any ladder or number. */}
       <p className="mt-3 max-w-2xl text-lg text-bull-text">{DEATH.rescue}</p>
       <p className="mt-3 max-w-2xl text-bull-text-dim">{DEATH.philosophy}</p>
+      <PreLaunchNotice className="mt-8" />
       <div className="mt-10">
         <GraveyardPanel />
       </div>

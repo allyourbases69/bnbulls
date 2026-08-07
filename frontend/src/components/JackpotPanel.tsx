@@ -32,10 +32,21 @@ import { useJackpot, potFigure, potSymbol } from '@/lib/hooks/useJackpot';
 
 export interface JackpotPanelProps {
   pot: 'bnbull' | 'bnb';
+  /**
+   * The quiet version: same reads, same numbers, a fraction of the weight.
+   *
+   * ⚠ WHY IT EXISTS. On `/duel` these are STANDINGS, not something you act on,
+   * and the full card was loud enough to outrank the fight itself. Fefers ranks
+   * the same two elements the same way — its duel page carries "these sit BELOW
+   * the roster on purpose… they're standings, not a thing you act on, so they
+   * must not push the roster down the page." Compact drops the prize plate, the
+   * breathing headline and the pool bar; it keeps every figure, just smaller.
+   */
+  compact?: boolean;
   className?: string;
 }
 
-export function JackpotPanel({ pot, className = '' }: JackpotPanelProps) {
+export function JackpotPanel({ pot, compact = false, className = '' }: JackpotPanelProps) {
   const name = pot === 'bnbull' ? 'jackpotBnbull' : 'jackpotBnb';
   const read = useJackpot(name);
   const meta = POTS[pot];
@@ -55,6 +66,35 @@ export function JackpotPanel({ pot, className = '' }: JackpotPanelProps) {
     pool !== undefined && payout !== undefined && pool > 0n
       ? Math.max(0, Math.min(100, Number((payout * 10_000n) / pool) / 100))
       : null;
+
+  if (compact) {
+    return (
+      <div
+        className={`pot-card bull-card ${pot === 'bnbull' ? 'pot-bnbull' : 'pot-bnb'} rounded px-3 py-2.5 ${className}`}
+      >
+        <div className="flex items-baseline justify-between gap-2">
+          <p className="bull-header text-[11px] uppercase tracking-[0.18em] text-bull-text-dim">
+            {meta.label}
+          </p>
+          <span className="pot-chip font-mono text-[10px] uppercase tracking-wide">
+            {read.oddsOneIn !== undefined ? `1-in-${String(read.oddsOneIn)}` : meta.odds}
+          </span>
+        </div>
+        <p
+          className="mt-1.5 font-mono text-lg"
+          style={{ color: 'rgb(var(--pot-ink))', fontVariantNumeric: 'tabular-nums' }}
+        >
+          {potFigure(read, 'pendingPayout')}{' '}
+          <span className="text-[11px] text-bull-text-dim">{symbol}</span>
+        </p>
+        <p className="mt-0.5 text-[11px] text-bull-text-faint">
+          next winner takes it, out of {potFigure(read, 'pool')}
+          {symbol ? ` ${symbol}` : ''} in the pool · fired{' '}
+          {read.error ? '?' : read.awardCount !== undefined ? String(read.awardCount) : '—'} times
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div

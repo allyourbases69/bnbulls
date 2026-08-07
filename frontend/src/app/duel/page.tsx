@@ -1,34 +1,61 @@
 import type { Metadata } from 'next';
 import { DuelPicker } from '@/components/duel/DuelPicker';
 import { JackpotPanel } from '@/components/JackpotPanel';
+import { PreLaunchNotice } from '@/components/PreLaunchNotice';
+import { POTS } from '@/lib/brand';
 
 export const metadata: Metadata = {
   title: 'duel',
   description:
-    'pick your bull, name an opponent, and see exactly what each side puts in before anything is signed.',
+    'pick your bull, get matched on rating, and see exactly what each side puts in before anything is signed.',
 };
 
 export default function DuelPage() {
   return (
     <div className="mx-auto max-w-3xl px-4 py-8 md:px-8">
       <p className="bull-header text-xs uppercase tracking-[0.2em] text-bull-gold">⚔️ duel</p>
-      <h1 className="bull-header mt-3 text-3xl sm:text-4xl">pick a fight</h1>
+      <h1 className="bull-header mt-3 text-3xl sm:text-4xl">duel</h1>
+      {/* Fefers' own two lines, translated: "pick your fefer and hit fight.
+          we'll find you an opponent." / "winner takes 90% of the pot, and
+          every fight rolls for the pots up top." The 90% is `DECISIONS.md
+          §23`, not a round number someone liked. The pots sit at the BOTTOM
+          here, so the pointer points down. */}
       <p className="mt-3 max-w-xl text-bull-text-dim">
-        a wallet cannot fight itself, and each wallet carries one signed fight in flight at a
-        time. both are enforced on chain at settlement, not just checked here. this page reads
-        the live guardrails so you cannot build a fight that would revert.
+        pick your bull and hit fight. we&apos;ll find you an opponent on rating.
+      </p>
+      {/* ⚠ "every fight rolls for the pots" was loose enough to be read as the
+          banned "every fight rolls BOTH pots" (`VOICE-AND-BRAND.md §2`). A
+          decisive fight opens a ticket on both pools and exactly one of them
+          can pay. `POTS.rule` is the one sentence that says it correctly, and
+          it is used everywhere else, so it is used here too. */}
+      <p className="mt-1 max-w-xl text-sm text-bull-text-dim">
+        winner takes 90% of what is in the middle. {POTS.rule} a wallet cannot fight itself, and
+        each wallet carries one signed fight at a time. both are enforced on chain at
+        settlement, not just checked here.
       </p>
 
-      {/* The pots sit at the top of the fight page on fefers, framed as the
-          reason to fight. Same slot, same framing. `DECISIONS.md §17` parked
-          the arena/roman vocabulary, so only the PLACEMENT is ported. */}
-      <div className="mt-8 grid gap-4 empty:hidden sm:grid-cols-2">
-        <JackpotPanel pot="bnbull" />
-        <JackpotPanel pot="bnb" />
-      </div>
+      <PreLaunchNotice className="mt-8" />
 
       <div className="mt-10">
         <DuelPicker />
+      </div>
+
+      {/* ⚠ THE POTS SIT AT THE BOTTOM, SMALL, AND THAT IS DELIBERATE.
+          They are standings, not something you act on, so they must not push
+          the fight down the page. Fefers ranks the same two elements the same
+          way on its own duel page: "these sit BELOW the roster on purpose…
+          they're standings, not a thing you act on". Owner call, 2026-08-07:
+          "the jackpots should be smaller looking and down the bottom below
+          everything else." The full-weight cards still live on `/pots` and
+          `/mint`, where the pot IS the pitch. */}
+      <div className="mt-14 border-t border-bull-border pt-6">
+        <p className="bull-header text-xs uppercase tracking-[0.2em] text-bull-text-faint">
+          what is riding on it
+        </p>
+        <div className="mt-3 grid gap-3 empty:hidden sm:grid-cols-2">
+          <JackpotPanel pot="bnbull" compact />
+          <JackpotPanel pot="bnb" compact />
+        </div>
       </div>
     </div>
   );

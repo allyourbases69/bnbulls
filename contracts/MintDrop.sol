@@ -564,6 +564,10 @@ contract MintDrop is Ownable, Pausable, ReentrancyGuard {
     error BadIntermediate(address target);
     error InsufficientPending(uint256 requested, uint256 available);
     error NothingToSweep();
+    /// @notice A keeper tried to run a sweep that has to be PRICED. It cannot:
+    ///         this contract carries no published floor to measure a keeper's
+    ///         `minOut` against. See `sweepBnbullPot`.
+    error PricedSweepIsOwnerOnly();
     error AirdropTooHigh(uint256 requested, uint256 cap);
     error OracleNotWired();
     error OracleBadAnswer(int256 answer);
@@ -1347,6 +1351,34 @@ contract MintDrop is Ownable, Pausable, ReentrancyGuard {
      *         stays because "the route was down for an hour" has to have an
      *         answer.
      *
+     *         ⛔ A SWEEP THAT HAS TO BE PRICED IS OWNER-ONLY HERE, AND THAT IS
+     *         THE DIFFERENCE BETWEEN THIS CONTRACT AND `PotSplitter`.
+     *
+     *         `minOut` is the ONLY thing standing between a bucket and a
+     *         sandwich: it fully replaces the on-chain quote, so
+     *         `sweepBnbullPot(Native, 0, 1)` spends an entire accrued bucket at
+     *         any price the mempool feels like. On a splitter that is bounded
+     *         by making the keeper's `minOut` tighten a leashed PUBLISHED floor
+     *         rather than replace it. That cure is unavailable here, because
+     *         this contract has no published floor — it quotes inline off
+     *         `getAmountsOut`, and an on-chain quote is not a bound: it prices
+     *         the very reserves the swap is about to hit, in the same call, so
+     *         a front-run moves them BEFORE we quote and the quote is simply
+     *         taken at the attacker's price. Anchoring a keeper's `minOut` to
+     *         it would bound literally nothing.
+     *
+     *         There is no third option that fits: giving this contract its own
+     *         keeper-published floor is roughly 2KB against 877 bytes of
+     *         EIP-170 headroom (`§43`), and a fraction-of-bucket cap only slows
+     *         a total loss down rather than bounding it. So the cut is drawn
+     *         where it is real — **the keeper may move money that needs no
+     *         price; pricing is owner authority.** In practice it loses the
+     *         keeper nothing it should have had: `§29` means the BNB -> BNBULL
+     *         bucket accrues for the whole curve phase and is then spent once,
+     *         large and deliberate, after graduation, which is an owner moment
+     *         by any reading. `§42`'s keeper job list is "publishes
+     *         prices/floors, drains ticket queues"; this was never on it.
+     *
      * @param src      Which bucket to spend.
      * @param amountIn Amount to spend. 0 spends the whole bucket.
      * @param minOut   Slippage floor, quoted OFF chain immediately before the
@@ -1364,7 +1396,12 @@ contract MintDrop is Ownable, Pausable, ReentrancyGuard {
         uint256 spend = amountIn == 0 ? available : amountIn;
         if (spend == 0) revert NothingToSweep();
         if (spend > available) revert InsufficientPending(spend, available);
-        if (src != PotSource.Bnbull && minOut == 0) revert BlindSwapRefused();
+        // `Bnbull` is already the pot asset: no router, no price, nothing to
+        // get wrong. Every other source is a BUY, and a buy is a price.
+        if (src != PotSource.Bnbull) {
+            if (minOut == 0) revert BlindSwapRefused();
+            if (msg.sender != owner()) revert PricedSweepIsOwnerOnly();
+        }
 
         // Book the spend before the external calls (CEI).
         _debitBnbullBucket(src, spend);
@@ -1373,7 +1410,9 @@ contract MintDrop is Ownable, Pausable, ReentrancyGuard {
     }
 
     /// @notice Spend a deferred WBNB-pot leg. See `sweepBnbullPot`. `minOut`
-    ///         is ignored for `Native` (a 1:1 wrap, not a swap).
+    ///         is ignored for `Native` (a 1:1 wrap, not a swap), and that same
+    ///         line is why `Native` stays keeper-callable while the BNBULL
+    ///         source does not: a 1:1 wrap has no price to be stolen.
     function sweepBnbPot(PotSource src, uint256 amountIn, uint256 minOut)
         external
         nonReentrant
@@ -1384,7 +1423,12 @@ contract MintDrop is Ownable, Pausable, ReentrancyGuard {
         uint256 spend = amountIn == 0 ? available : amountIn;
         if (spend == 0) revert NothingToSweep();
         if (spend > available) revert InsufficientPending(spend, available);
-        if (src != PotSource.Native && minOut == 0) revert BlindSwapRefused();
+        if (src != PotSource.Native) {
+            if (minOut == 0) revert BlindSwapRefused();
+            // ⛔ A SELL of BNBULL for WBNB. `DECISIONS.md §14` keeps this leg
+            //    off entirely, so a keeper reaching it is already a surprise.
+            if (msg.sender != owner()) revert PricedSweepIsOwnerOnly();
+        }
 
         _debitBnbBucket(src, spend);
         funded = _toBnbPot(src, spend, minOut, "deferred-sweep");

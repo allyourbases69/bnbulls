@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { MintPanel } from '@/components/mint/MintPanel';
 import { JackpotPanel } from '@/components/JackpotPanel';
+import { PreLaunchNotice } from '@/components/PreLaunchNotice';
 import { CURRENCY, TICKER } from '@/lib/brand';
 
 export const metadata: Metadata = {
@@ -25,6 +26,8 @@ export default function MintPage() {
         converted to bnb at pay time off a live chainlink feed, and read straight off the
         contract rather than recomputed here. {CURRENCY.discount}
       </p>
+
+      <PreLaunchNotice className="mt-8" />
 
       <div className="mt-10">
         <MintPanel />

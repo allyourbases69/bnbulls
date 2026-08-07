@@ -54,7 +54,8 @@ contract MintDropSwapSafetyTest is BnbullsBase {
         uint256 floor = (honestOut * 99) / 100;
         uint256 actuallyDelivered = honestOut / 100;
 
-        vm.prank(keeper);
+        // ⛔ OWNER, not keeper: a priced sweep on `MintDrop` is owner-only.
+        vm.prank(owner);
         vm.expectRevert(
             abi.encodeWithSelector(
                 MintDrop.SwapOutBelowMin.selector, actuallyDelivered, floor
@@ -186,7 +187,7 @@ contract MintDropSwapSafetyTest is BnbullsBase {
 
         // ...and an honest router at the same zero tolerance goes through.
         router.setLying(false, 0);
-        vm.prank(keeper);
+        vm.prank(owner);
         drop.sweepBnbullPot(MintDrop.PotSource.Native, 0, 1);
         assertGt(potBnbull.pool(), 0);
     }

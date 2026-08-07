@@ -38,6 +38,33 @@ contract MoneyLayerE2ETest is BnbullsBase {
     }
 
     /**
+     * @dev Search for a VRF word that makes ticket `id` a WINNER on `pot`.
+     *      Mirrors `Jackpot.resolve`'s preimage exactly, `address(this)` term
+     *      and all.
+     *
+     *      ⚠ REPLACES `setOdds(1)`, which was the old "make every ticket win"
+     *      shortcut and is now correctly refused by `MIN_ODDS_ONE_IN` — odds of
+     *      one is a certain win for every possible word. Searching the word
+     *      leaves the pots on the shipped 1-in-50 / 1-in-100 of `DECISIONS §13`,
+     *      which this file asserts elsewhere.
+     */
+    function _wordThatWins(
+        address pot,
+        uint256 entropy,
+        uint256 tokenId,
+        address winner,
+        uint256 id,
+        uint256 odds
+    ) internal pure returns (uint256) {
+        for (uint256 word = 1; word < 100_000; word++) {
+            uint256 roll =
+                uint256(keccak256(abi.encodePacked(word, entropy, tokenId, winner, id, pot))) % odds;
+            if (roll == 0) return word;
+        }
+        revert("no winning word found");
+    }
+
+    /**
      * @notice Sell all 500 bulls — 300 for BNB, 100 for BNBULL, 100 for BNB
      *         again — and check both pots grew from every currency that is
      *         supposed to feed them.
@@ -142,17 +169,18 @@ contract MoneyLayerE2ETest is BnbullsBase {
         assertGt(bnbullPot, 0);
         assertGt(bnbPot, 0);
 
-        // Force both to fire, on DIFFERENT duels, so neither is denied.
-        potBnbull.setOdds(1);
-        potBnb.setOdds(1);
-
+        // Force both to fire, on DIFFERENT duels, so neither is denied — at the
+        // pots' real 1-in-50 and 1-in-100, with the word searched for.
         duel.open(address(potBnbull), alice, 1, 0xA1, 1);
         duel.open(address(potBnb), bob, 2, 0xB2, 2);
 
+        uint256 wA = _wordThatWins(address(potBnbull), 0xA1, 1, alice, 0, 50);
+        uint256 wB = _wordThatWins(address(potBnb), 0xB2, 2, bob, 0, 100);
+
         uint256 rA = potBnbull.requestResolve(1);
         uint256 rB = potBnb.requestResolve(1);
-        coord.fulfill(rA, uint256(keccak256("a")));
-        coord.fulfill(rB, uint256(keccak256("b")));
+        coord.fulfill(rA, wA);
+        coord.fulfill(rB, wB);
         potBnbull.resolve(1);
         potBnb.resolve(1);
 
@@ -182,7 +210,8 @@ contract MoneyLayerE2ETest is BnbullsBase {
 
         router.setRevertOnSwap(false);
         router.setRevertOnQuote(false);
-        vm.prank(keeper);
+        // ⛔ OWNER, not keeper: a priced sweep on `MintDrop` is owner-only.
+        vm.prank(owner);
         drop.sweepBnbullPot(MintDrop.PotSource.Native, 0, 1);
         assertEq(drop.pendingBnbullBuyNative(), 0);
         assertEq(potBnbull.pool(), deferred * BNBULL_PER_BNB);

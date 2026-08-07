@@ -1,12 +1,20 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useAccount, useWaitForTransactionReceipt, useWriteContract } from 'wagmi';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useAccount,
+  useReadContract,
+  useWaitForTransactionReceipt,
+  useWriteContract,
+} from 'wagmi';
 import { DuelAbi } from '@/lib/abi';
 import { formatToken } from '@/lib/format';
 import { useErc20Approval } from '@/lib/hooks/useErc20Approval';
 import { useDuelSession } from '@/lib/hooks/useDuelSession';
-import { explorerBaseUrl } from '@/lib/env';
+import { useWrongNetwork } from '@/lib/hooks/useWrongNetwork';
+import { WrongNetworkNotice } from '@/components/shared/WrongNetwork';
+import { explorerBaseUrl, CHAIN_ID } from '@/lib/env';
+import { CURRENCY } from '@/lib/brand';
 
 /**
  * The fight button.
@@ -75,44 +83,60 @@ interface RunDuelJson {
 
 const ZERO = '0x0000000000000000000000000000000000000000' as const;
 
+/**
+ * Which currency YOU stake. The opponent's side is always AUTO — a passive
+ * opponent cannot be asked mid-match, so the signer resolves theirs from what
+ * they can actually pay.
+ *
+ * ⚠ TWO CURRENCIES (`DECISIONS.md §26`). 'STABLE' is gone from the wire
+ * protocol too, so a stale client sending it gets a 400 naming the two that
+ * exist rather than being quietly resolved into some other asset.
+ *
+ * ⚠ THE CONTROL LIVES IN STEP 2 NOW, NOT HERE. It used to be a second currency
+ * picker inside this card, which is exactly the duplication fefers' duel page
+ * warns about in its own header ("there is now exactly ONE currency control,
+ * ONE entry button and ONE fight button on the screen"). The value rides in as
+ * a prop instead.
+ */
+export type PayAsset = 'AUTO' | 'BNBULL' | 'BNB';
+
 export function FightAction({
   duelAddress,
   myTokenId,
   oppTokenId,
   blockedReason,
+  myAsset,
+  approveFights = 1,
+  onSettled,
 }: {
   duelAddress: `0x${string}`;
   myTokenId: number | null;
   oppTokenId: number | null;
   /** Set when the page already knows this pair would revert. Disables step 2. */
   blockedReason: string | null;
+  myAsset: PayAsset;
+  /**
+   * How many fights the approval should cover. The contract settles one fight
+   * per wallet at a time, so this batches NOTHING on chain — it just sizes the
+   * single allowance so a queue of N fights needs one approve instead of N.
+   */
+  approveFights?: number;
+  /** Fired once, when this pair's fight has actually settled on chain. */
+  onSettled?: () => void;
 }) {
   const { address: account } = useAccount();
   const { ensureSession, isSigning, error: sessionError, hasSession, clear } = useDuelSession();
+  const { wrongNetwork } = useWrongNetwork();
 
   const [rolling, setRolling] = useState(false);
   const [quote, setQuote] = useState<RunDuelJson | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Math.floor(Date.now() / 1000));
-  // Which currency YOU stake. The opponent's side is always AUTO — a passive
-  // opponent cannot be asked mid-match, so the signer resolves theirs from what
-  // they can actually pay.
-  // ⚠ TWO CURRENCIES (`DECISIONS.md §26`). 'STABLE' is gone from the wire
-  // protocol too, so a stale client sending it gets a 400 naming the two that
-  // exist rather than being quietly resolved into some other asset.
-  const [myAsset, setMyAsset] = useState<'AUTO' | 'BNBULL' | 'BNB'>('AUTO');
 
   useEffect(() => {
     const t = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000);
     return () => clearInterval(t);
   }, []);
-
-  // A new pair invalidates the quote on screen — the numbers in it belong to
-  // the old matchup.
-  useEffect(() => {
-    setQuote(null);
-    setError(null);
-  }, [myTokenId, oppTokenId, account]);
 
   const mySide = useMemo(() => {
     if (!quote || myTokenId === null) return null;
@@ -138,6 +162,10 @@ export function FightAction({
     needsErc20 ? mySide!.asset : undefined,
     duelAddress,
     needsErc20 ? mySide!.amount : undefined,
+    // Size the approve for the whole queue. `needsApproval` is still measured
+    // against THIS fight's amount, so a wallet that already has enough is not
+    // asked to approve again just because it did not pre-pay for the rest.
+    needsErc20 ? mySide!.amount * BigInt(Math.max(1, approveFights)) : undefined,
   );
 
   const expiry = quote ? Number(quote.result.expiry) : 0;
@@ -193,14 +221,52 @@ export function FightAction({
     hash: txHash ?? undefined,
   });
 
+  /**
+   * A new pair invalidates everything on screen — the quote's numbers belong to
+   * the old matchup.
+   *
+   * ⚠ `txHash` HAS TO GO WITH IT, and that is a queue bug, not tidiness. Left
+   * standing, `useWaitForTransactionReceipt` keeps reporting the PREVIOUS
+   * fight's receipt, so `settled` stays true, the button reads "settled" and
+   * the second bull in a queue can never be sent in.
+   */
+  useEffect(() => {
+    setQuote(null);
+    setError(null);
+    setTxHash(null);
+  }, [myTokenId, oppTokenId, account]);
+
+  // Changing the currency invalidates the quote but NOT a settled fight: the
+  // numbers in the quote are per asset, the receipt is history.
+  useEffect(() => {
+    setQuote(null);
+    setError(null);
+  }, [myAsset]);
+
+  // Tell the page once, when this fight is genuinely on chain. The ref is what
+  // stops a re-render firing it again and skipping a bull in the queue.
+  const settledFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!settled || !txHash) return;
+    if (settledFor.current === txHash) return;
+    settledFor.current = txHash;
+    onSettled?.();
+  }, [settled, txHash, onSettled]);
+
   const submit = useCallback(async () => {
-    if (!quote) return;
+    if (!quote || wrongNetwork) return;
     setError(null);
     try {
       const r = quote.result;
       const hash = await writeContractAsync({
         address: duelAddress,
         abi: DuelAbi,
+        // ⚠ PIN THE CHAIN. This call carries native `value` on the BNB leg, and
+        // without `chainId` wagmi passes viem `chain: null`, which skips
+        // `assertCurrentChain` entirely — a wallet that declined the network
+        // switch would broadcast anyway and pay a codeless address. See
+        // `useWrongNetwork`.
+        chainId: CHAIN_ID,
         functionName: 'submitDuel',
         args: [
           {
@@ -232,7 +298,7 @@ export function FightAction({
       const msg = e instanceof Error ? e.message : String(e);
       setError(explainRevert(msg));
     }
-  }, [quote, duelAddress, writeContractAsync, nativeValue]);
+  }, [quote, duelAddress, writeContractAsync, nativeValue, wrongNetwork]);
 
   if (!account) {
     return (
@@ -240,26 +306,13 @@ export function FightAction({
     );
   }
 
-  const canRoll = myTokenId !== null && oppTokenId !== null && !blockedReason;
+  // Rolling spends no money, but it does burn a `personal_sign` and hand back a
+  // quote that could never be settled from the chain the wallet is on. Block it
+  // at the same line as the settle, so the whole panel has one story.
+  const canRoll = myTokenId !== null && oppTokenId !== null && !blockedReason && !wrongNetwork;
 
   return (
     <div className="space-y-4">
-      <label className="flex flex-wrap items-center gap-2 text-sm">
-        <span className="font-mono text-xs text-bull-text-faint">you put in</span>
-        <select
-          value={myAsset}
-          onChange={(e) => {
-            setMyAsset(e.target.value as typeof myAsset);
-            setQuote(null);
-          }}
-          className="rounded border border-bull-border bg-bull-panel px-3 py-1.5 text-sm"
-        >
-          <option value="AUTO">whatever i can pay</option>
-          <option value="BNB">bnb</option>
-          <option value="BNBULL">bnbull · the only discounted leg</option>
-        </select>
-      </label>
-
       <div className="flex flex-wrap items-center gap-3">
         <button
           type="button"
@@ -284,6 +337,8 @@ export function FightAction({
           </span>
         )}
       </div>
+
+      <WrongNetworkNotice />
 
       {blockedReason && (
         <p className="text-sm text-bull-red">{blockedReason}</p>
@@ -355,7 +410,7 @@ export function FightAction({
                     setError(e instanceof Error ? e.message : String(e));
                   }
                 }}
-                disabled={isApproving}
+                disabled={isApproving || wrongNetwork}
                 className="rounded border border-bull-gold px-4 py-2 text-sm font-semibold text-bull-gold transition hover:bg-bull-gold/10 disabled:opacity-40"
               >
                 {isApproving ? 'approving…' : `approve ${mySide?.symbol}`}
@@ -365,19 +420,26 @@ export function FightAction({
               type="button"
               onClick={submit}
               disabled={
-                expired || isSubmitting || isConfirming || (needsErc20 && needsApproval) || settled
+                expired ||
+                isSubmitting ||
+                isConfirming ||
+                (needsErc20 && needsApproval) ||
+                settled ||
+                wrongNetwork
               }
               className="rounded bg-bull-gold px-4 py-2 text-sm font-semibold text-bull-gold-ink transition hover:bg-bull-gold-hover disabled:cursor-not-allowed disabled:opacity-40"
             >
-              {settled
-                ? 'settled'
-                : isConfirming
-                  ? 'settling…'
-                  : isSubmitting
-                    ? 'confirm in your wallet…'
-                    : nativeValue > 0n
-                      ? 'settle (pays in BNB)'
-                      : 'settle the fight'}
+              {wrongNetwork
+                ? 'wrong network'
+                : settled
+                  ? 'settled'
+                  : isConfirming
+                    ? 'settling…'
+                    : isSubmitting
+                      ? 'confirm in your wallet…'
+                      : nativeValue > 0n
+                        ? 'settle (pays in BNB)'
+                        : 'settle the fight'}
             </button>
           </div>
 

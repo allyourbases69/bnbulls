@@ -1,13 +1,20 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
+import { parseEventLogs } from 'viem';
+import { useQueryClient } from '@tanstack/react-query';
 import { useAccount, useReadContract, useReadContracts, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
-import { MintDropAbi } from '@/lib/abi';
-import { contractAddress } from '@/lib/env';
+import { BullsAbi, MintDropAbi } from '@/lib/abi';
+import { contractAddress, CHAIN_ID, explorerBaseUrl } from '@/lib/env';
 import { formatUsd1e18, formatToken, formatBps } from '@/lib/format';
 import { useTokenDecimals, NATIVE_BNB_DECIMALS } from '@/lib/hooks/useTokenDecimals';
 import { useErc20Approval } from '@/lib/hooks/useErc20Approval';
+import { useWrongNetwork } from '@/lib/hooks/useWrongNetwork';
 import { NotDeployed } from '@/components/shared/NotDeployed';
+import { WrongNetworkNotice } from '@/components/shared/WrongNetwork';
+import { BullCard, BullCardLink, type BullFacts } from '@/components/bulls/BullCard';
+import { isValidBullId } from '@/lib/art/collection';
 import { withCushion, QUOTE_REFRESH_MS } from '@/lib/constants';
 import { CURRENCY } from '@/lib/brand';
 
@@ -28,23 +35,88 @@ const STATIC_LADDER = [
  */
 type PayAsset = 'bnb' | 'bnbull';
 
+/** The mint's own progress, one step at a time. See `mintPhase` below. */
+type MintPhase = 'idle' | 'signing' | 'mining' | 'reverted' | 'revealing' | 'success';
+
+/** `Bulls.getBull` — only the fields the reveal shows. */
+interface ChainBull {
+  readonly strength: number;
+  readonly dexterity: number;
+  readonly constitution: number;
+  readonly intelligence: number;
+  readonly wisdom: number;
+  readonly charisma: number;
+  readonly elo: number;
+  readonly wins: number;
+  readonly losses: number;
+  readonly ties: number;
+  readonly isDead: boolean;
+  readonly name: string;
+}
+
+/** `Bulls.getBullWeapon`. */
+interface ChainWeapon {
+  readonly name: string;
+  readonly damageMin: number;
+  readonly damageMax: number;
+  readonly speed: number;
+}
+
+interface MintedBull {
+  readonly id: number;
+  readonly bull?: ChainBull;
+  readonly weapon?: ChainWeapon;
+}
+
 export function MintPanel() {
   const mintDropAddress = contractAddress('mintDrop');
+  const bullsAddress = contractAddress('bullsNft');
   const { address: account } = useAccount();
+  const queryClient = useQueryClient();
   const [count, setCount] = useState(1);
   const [asset, setAsset] = useState<PayAsset>('bnb');
 
-  const { data: totalSold, isLoading: loadingSold } = useReadContract({
+  const { wrongNetwork } = useWrongNetwork();
+
+  const {
+    data: totalSold,
+    isLoading: loadingSold,
+    refetch: refetchSold,
+  } = useReadContract({
     address: mintDropAddress ?? undefined,
     abi: MintDropAbi,
     functionName: 'totalSold',
     query: { enabled: !!mintDropAddress, refetchInterval: 15_000 },
   });
-  const { data: maxMint, isLoading: loadingMax } = useReadContract({
+  const {
+    data: maxMint,
+    isLoading: loadingMax,
+    refetch: refetchMax,
+  } = useReadContract({
     address: mintDropAddress ?? undefined,
     abi: MintDropAbi,
     functionName: 'MAX_MINT',
     query: { enabled: !!mintDropAddress },
+  });
+  /**
+   * ⚠ THE DROP SHIPS PAUSED, AND WITHOUT THIS READ THE PAGE LIES ABOUT IT.
+   *
+   * `MintDrop`'s constructor calls `_pause()` and `unpause()` is the deliberate
+   * "start minting" switch (`contracts/MintDrop.sol`, and `mintWithBNB` /
+   * `mintWithBNBULL` both carry `whenNotPaused`). So between deploy and go-live
+   * the honest state of this page is "not open yet". Without the read it offers
+   * a live mint button that reverts on every single click, which reads as a
+   * broken site on the one day the site is being watched hardest.
+   */
+  const {
+    data: isPaused,
+    isLoading: loadingPaused,
+    refetch: refetchPaused,
+  } = useReadContract({
+    address: mintDropAddress ?? undefined,
+    abi: MintDropAbi,
+    functionName: 'paused',
+    query: { enabled: !!mintDropAddress, refetchInterval: 15_000 },
   });
   const { data: tierCount } = useReadContract({
     address: mintDropAddress ?? undefined,
@@ -73,11 +145,40 @@ export function MintPanel() {
     query: { enabled: !!mintDropAddress && tierIndices.length > 0 },
   });
 
-  const supplyLoading = loadingSold || loadingMax;
+  /**
+   * ⚠ A FAILED READ IS NOT A SOLD-OUT DROP, AND IT USED TO RENDER AS ONE.
+   *
+   * `supply` defaulted to 0 when the `MAX_MINT` read came back undefined, which
+   * made `remaining` 0, which rendered "the drop is sold out." — permanently,
+   * because once react-query stops retrying `isLoading` goes false and nothing
+   * ever revisits it. One flaky RPC on launch day and every visitor is told the
+   * drop is gone. These three states are now distinct and only one of them is
+   * allowed to make that claim:
+   *
+   *   loading      → the reads are still in flight, say nothing
+   *   unavailable  → they settled with no answer, say THAT and offer a retry
+   *   sold out     → `MAX_MINT` was actually read and `totalSold` reached it
+   *
+   * `paused` is folded into the same bucket for the same reason: an unread
+   * pause flag must not be reported as either open or closed.
+   */
+  const dropStateLoading = loadingSold || loadingMax || loadingPaused;
+  const dropStateUnavailable =
+    !dropStateLoading &&
+    (totalSold === undefined || maxMint === undefined || isPaused === undefined);
+  const dropStateKnown = !dropStateLoading && !dropStateUnavailable;
+
   const sold = totalSold !== undefined ? Number(totalSold) : 0;
   const supply = maxMint !== undefined ? Number(maxMint) : 0;
   const remaining = Math.max(0, supply - sold);
+  const soldOut = dropStateKnown && remaining === 0;
   const maxCount = Math.max(1, Math.min(20, remaining || 1));
+
+  function retryDropState() {
+    refetchSold();
+    refetchMax();
+    refetchPaused();
+  }
 
   // Short TTL, shown — the BNB leg converts through Chainlink at PAY time
   // (DECISIONS.md §1), so a quote sitting stale on screen is a failed tx
@@ -87,7 +188,10 @@ export function MintPanel() {
     abi: MintDropAbi,
     functionName: 'quote',
     args: [BigInt(count)],
-    query: { enabled: !!mintDropAddress && remaining > 0, refetchInterval: QUOTE_REFRESH_MS },
+    query: {
+      enabled: !!mintDropAddress && dropStateKnown && !soldOut,
+      refetchInterval: QUOTE_REFRESH_MS,
+    },
   });
   const quoteAgeSeconds = quoteUpdatedAt ? Math.max(0, Math.round((Date.now() - quoteUpdatedAt) / 1000)) : undefined;
   // `MintDrop.quote(count)` -> (usdTotal1e18, bnbDue, bnbullDue, bnbUsd1e18).
@@ -145,17 +249,174 @@ export function MintPanel() {
     approvalRequired,
   );
 
-  const { writeContractAsync, isPending: isMinting, data: mintHash, error: mintError } = useWriteContract();
-  const { isLoading: isConfirmingMint, isSuccess: mintConfirmed } = useWaitForTransactionReceipt({
-    hash: mintHash,
+  const {
+    writeContractAsync,
+    isPending: isMinting,
+    data: mintHash,
+    error: mintError,
+    reset: resetMint,
+  } = useWriteContract();
+  const {
+    data: mintReceipt,
+    isLoading: isConfirmingMint,
+    isSuccess: mintConfirmed,
+  } = useWaitForTransactionReceipt({ hash: mintHash });
+
+  /**
+   * THE BULLS THAT WERE JUST MINTED, read out of the receipt.
+   *
+   * ⚠ `mintWithBNB` / `mintWithBNBULL` DO return `uint256[]`, and it is
+   * unreachable from here. A return value only exists inside the EVM; a
+   * broadcast transaction hands the client a receipt, and a receipt carries
+   * logs, not return data. So the ids come out of an event.
+   *
+   * ⚠ THE EVENT IS `BullMinted`, NOT `Transfer`, AND THAT IS THE WHOLE POINT.
+   * `Bulls.sol` emits a DEDICATED `BullMinted(uint256 indexed tokenId, address
+   * indexed owner, string name)` on every mint (and on `mintKing`, which emits
+   * it alongside `KingMinted`, so the 1/1 needs no special case here).
+   *
+   * The ERC-721 `Transfer` shares its topic0 — `keccak("Transfer(address,
+   * address,uint256)")` — with the ERC-20 `Transfer`, and a mint receipt is
+   * FULL of ERC-20 transfers: the 20% BNBULL leg, the 10% BNB leg, the router
+   * hops and the splitters all emit one. Decoding on that topic means every
+   * one of those is a candidate and the only things standing between a
+   * transfer `value` being read as a token id are hand-written filters. The
+   * dedicated event removes the hazard instead of guarding it: nothing else in
+   * the transaction can produce this signature.
+   *
+   * Filtered on the `Bulls` address and on `owner == you` anyway — this page
+   * always mints `to = account`, so anything else did not come from this
+   * click and the reveal's "yours" would not be true of it.
+   */
+  const mintedIds = useMemo(() => {
+    if (!mintReceipt || mintReceipt.status !== 'success' || !bullsAddress || !account) return [];
+    const bulls = bullsAddress.toLowerCase();
+    const to = account.toLowerCase();
+    const ids = parseEventLogs({ abi: BullsAbi, eventName: 'BullMinted', logs: mintReceipt.logs })
+      .filter(
+        (log) =>
+          log.address.toLowerCase() === bulls && log.args.owner.toLowerCase() === to,
+      )
+      .map((log) => Number(log.args.tokenId))
+      // The art tables cover 1..501. Anything outside that is not a bull this
+      // build can draw, and guessing at it would be inventing a sprite.
+      .filter(isValidBullId);
+    return [...new Set(ids)].sort((a, b) => a - b);
+  }, [mintReceipt, bullsAddress, account]);
+
+  /**
+   * THE REVEAL'S NUMBERS, batch-loaded off chain — one multicall for the whole
+   * batch, the same shape fefers' `useBatchOutlaws` uses.
+   *
+   * Nothing here is derived from the sprite. The rating, the record and the
+   * weapon's damage and speed are contract state, so they are READ; the tier,
+   * the name and the art are the deterministic tables the chain commits to.
+   * There is no third source and no fallback that makes a number up.
+   */
+  const {
+    data: mintedRows,
+    isLoading: loadingMintedRows,
+    error: revealError,
+  } = useReadContracts({
+    contracts: mintedIds.flatMap((id) => [
+      {
+        address: bullsAddress ?? undefined,
+        abi: BullsAbi,
+        functionName: 'getBull' as const,
+        args: [BigInt(id)] as const,
+      },
+      {
+        address: bullsAddress ?? undefined,
+        abi: BullsAbi,
+        functionName: 'getBullWeapon' as const,
+        args: [BigInt(id)] as const,
+      },
+    ]),
+    query: { enabled: !!bullsAddress && mintedIds.length > 0 },
   });
 
+  const minted = useMemo<MintedBull[]>(
+    () =>
+      mintedIds.map((id, i) => {
+        const bullRes = mintedRows?.[i * 2];
+        const weaponRes = mintedRows?.[i * 2 + 1];
+        return {
+          id,
+          bull: bullRes?.status === 'success' ? (bullRes.result as unknown as ChainBull) : undefined,
+          weapon:
+            weaponRes?.status === 'success'
+              ? (weaponRes.result as unknown as ChainWeapon)
+              : undefined,
+        };
+      }),
+    [mintedIds, mintedRows],
+  );
+
+  /**
+   * sign → mine → reveal → success, the state machine off fefers' mint page,
+   * ported in the same order with the same gates:
+   *
+   *   isSigning                         → signing
+   *   receipt.status !== 'success'      → reverted
+   *   txHash && isMining                → mining
+   *   ids decoded, batch still loading  → revealing
+   *   every bull resolved               → success
+   *
+   * Fefers' `phase` derivation puts the error legs first, then approve, then
+   * sign/mine, then the reveal — and it only shows the fefers once EVERY id in
+   * the batch has resolved (`mintedOutlaws.length === mintedTokenIds.length`),
+   * so a batch of five never renders four and a hole. Same here.
+   *
+   * Before this the page rendered one line of text on a confirmed mint and the
+   * buyer never saw what they bought.
+   */
+  const mintReverted = !!mintReceipt && mintReceipt.status !== 'success';
+  const revealFailed = !!revealError && mintedIds.length > 0;
+  const revealReady =
+    mintedIds.length > 0 && !loadingMintedRows && minted.every((m) => m.bull !== undefined);
+  const mintPhase: MintPhase = mintReverted
+    ? 'reverted'
+    : isMinting
+      ? 'signing'
+      : mintHash && isConfirmingMint
+        ? 'mining'
+        : mintConfirmed && mintedIds.length > 0
+          ? revealReady || revealFailed
+            ? 'success'
+            : 'revealing'
+          : mintConfirmed
+            ? 'success'
+            : 'idle';
+
+  /**
+   * A confirmed mint changes `totalSold`, the tier that is live, and which
+   * bulls the wallet owns. Every one of those is a cached `useReadContract` /
+   * `useReadContracts` somewhere on the site, and without this they sit on
+   * their own refetch clocks (or none at all, for the ones that never poll) —
+   * so a buyer had to reload the page to see anything move. wagmi keys its read
+   * queries under these two prefixes, and react-query matches a key prefix, so
+   * this invalidates every contract read the app holds without reaching into
+   * hooks that are not ours to edit.
+   */
+  useEffect(() => {
+    if (!mintConfirmed) return;
+    queryClient.invalidateQueries({ queryKey: ['readContract'] });
+    queryClient.invalidateQueries({ queryKey: ['readContracts'] });
+  }, [mintConfirmed, mintHash, queryClient]);
+
+  /**
+   * ⚠ `chainId: CHAIN_ID` IS LOAD-BEARING ON THE BNB LEG. Omitted, wagmi hands
+   * viem `chain: null`, viem skips `assertCurrentChain`, and `value` is sent to
+   * an address that holds no code on whatever chain the wallet is actually on.
+   * That BNB is gone. With it pinned, viem throws before signing.
+   */
   async function handleMint() {
-    if (!mintDropAddress || !account) return;
+    if (!mintDropAddress || !account || wrongNetwork) return;
     if (asset === 'bnb' && bnbDue !== undefined) {
       await writeContractAsync({
         address: mintDropAddress,
         abi: MintDropAbi,
+        chainId: CHAIN_ID,
         functionName: 'mintWithBNB',
         args: [account, BigInt(count)],
         value: withCushion(bnbDue),
@@ -164,6 +425,7 @@ export function MintPanel() {
       await writeContractAsync({
         address: mintDropAddress,
         abi: MintDropAbi,
+        chainId: CHAIN_ID,
         functionName: 'mintWithBNBULL',
         args: [account, BigInt(count)],
       });
@@ -176,8 +438,10 @@ export function MintPanel() {
         <NotDeployed what="the mint" className="mb-8" />
         <h3 className="bull-header text-lg">the ladder</h3>
         <p className="mt-2 max-w-2xl text-bull-text-dim">
-          the shape is locked. the numbers below come straight off the contract the moment
-          there is one.
+          $10 for the first hundred, $75 for the last hundred, and the price climbs by how many
+          have sold rather than by token id. this is the table the mint contract is wired with,
+          not a live read, because there is nothing to read yet. the day it is deployed these
+          rows come straight off chain.
         </p>
         <div className="mt-6 overflow-x-auto">
           <table className="w-full min-w-[420px] border-collapse text-sm">
@@ -199,6 +463,16 @@ export function MintPanel() {
             </tbody>
           </table>
         </div>
+        {/* ⚠ THE THIRD COLUMN IS NOT AVAILABLE AT LAUNCH AND MUST SAY SO.
+            `DECISIONS.md §29` + `§28.1`: four.meme holds BNBULL transfer-locked
+            until its curve fills, so nobody can pay a mint in it, discount or
+            no discount. A price column with no caveat reads as a choice a buyer
+            has on day one, and they do not. The discount itself is real and is
+            `§2`, minting only, `§39` having removed it from fighting. */}
+        <p className="mt-3 max-w-2xl text-xs text-bull-text-faint">
+          {CURRENCY.bnbullPending} the 10% off is a mint discount only, so it is the third
+          column above and nothing else: a fight costs the same in either currency.
+        </p>
       </div>
     );
   }
@@ -207,8 +481,10 @@ export function MintPanel() {
     <div>
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <p className="font-mono text-sm text-bull-text-dim">
-          {supplyLoading ? (
+          {dropStateLoading ? (
             'loading…'
+          ) : dropStateUnavailable ? (
+            '— / — minted'
           ) : (
             <>
               <span className="text-bull-gold">{sold}</span> / {supply} minted
@@ -216,13 +492,15 @@ export function MintPanel() {
           )}
         </p>
         <p className="font-mono text-sm text-bull-text-faint">
-          {supplyLoading ? '' : `${remaining} left`}
+          {dropStateKnown ? `${remaining} left` : ''}
         </p>
       </div>
       <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-bull-panel">
         <div
           className="h-full bg-bull-gold transition-all"
-          style={{ width: supplyLoading || !supply ? '0%' : `${Math.min(100, (sold / supply) * 100)}%` }}
+          style={{
+            width: !dropStateKnown || !supply ? '0%' : `${Math.min(100, (sold / supply) * 100)}%`,
+          }}
         />
       </div>
 
@@ -257,13 +535,35 @@ export function MintPanel() {
         </table>
       </div>
 
-      {supplyLoading ? (
+      {dropStateLoading ? (
         <p className="mt-8 rounded border border-bull-border bg-bull-panel px-4 py-3 text-sm text-bull-text-dim">
           loading the live drop state…
         </p>
-      ) : remaining === 0 ? (
+      ) : dropStateUnavailable ? (
+        <div className="mt-8 rounded border border-bull-border bg-bull-panel px-4 py-3 text-sm text-bull-text-dim">
+          <p>
+            couldn&apos;t read the drop off the chain just now. that is this page failing to
+            reach an rpc, not the drop being over, so nothing here claims to know how many are
+            left.
+          </p>
+          <button
+            type="button"
+            onClick={retryDropState}
+            className="mt-3 rounded-full border border-bull-gold px-3 py-1.5 text-xs font-medium text-bull-gold"
+          >
+            try again
+          </button>
+        </div>
+      ) : soldOut ? (
         <p className="mt-8 rounded border border-bull-border bg-bull-panel px-4 py-3 text-sm text-bull-text-dim">
           the drop is sold out.
+        </p>
+      ) : isPaused ? (
+        <p className="mt-8 rounded border border-bull-gold/30 bg-bull-panel px-4 py-3 text-sm text-bull-text-dim">
+          <strong className="bull-header text-bull-gold">minting has not opened yet.</strong> the
+          contract is deployed and paused, which is how it ships: the drop opens in one
+          transaction when everything else is wired and checked. the ladder above is live and
+          read off that contract. there is nothing to click until it does.
         </p>
       ) : (
         <div className="mt-8 rounded border border-bull-border bg-bull-panel p-4">
@@ -283,7 +583,7 @@ export function MintPanel() {
           </div>
 
           <p className="mt-4 font-mono text-sm text-bull-text-dim">
-            total sticker: <span className="text-bull-text">{formatUsd1e18(usdTotal)}</span>
+            total price: <span className="text-bull-text">{formatUsd1e18(usdTotal)}</span>
           </p>
 
           <div className="mt-4 flex gap-2">
@@ -316,6 +616,8 @@ export function MintPanel() {
             every {QUOTE_REFRESH_MS / 1000}s · send a small cushion, the surplus is refunded
           </p>
 
+          <WrongNetworkNotice className="mt-4" />
+
           {!account ? (
             <p className="mt-4 text-sm text-bull-text-faint">connect a wallet to mint.</p>
           ) : asset !== 'bnb' && needsApproval ? (
@@ -324,7 +626,7 @@ export function MintPanel() {
                 await approve();
                 refetchAllowance();
               }}
-              disabled={isApproving}
+              disabled={isApproving || wrongNetwork}
               className="bull-btn mt-4 w-full"
             >
               {isApproving ? 'approving…' : 'approve bnbull'}
@@ -332,20 +634,341 @@ export function MintPanel() {
           ) : (
             <button
               onClick={handleMint}
-              disabled={isMinting || isConfirmingMint}
+              disabled={isMinting || isConfirmingMint || wrongNetwork}
               className="bull-btn bull-btn-pulse mt-4 w-full"
             >
-              {isMinting || isConfirmingMint ? 'minting…' : `mint ${count}`}
+              {wrongNetwork
+                ? 'wrong network'
+                : isMinting || isConfirmingMint
+                  ? 'minting…'
+                  : `mint ${count}`}
             </button>
-          )}
-          {mintConfirmed && (
-            <p className="mt-3 text-sm text-bull-gold">minted. check your wallet.</p>
           )}
           {mintError && (
             <p className="mt-3 text-sm text-bull-red">{mintError.message}</p>
           )}
         </div>
       )}
+
+      {/* ⚠ OUTSIDE the drop-state branch on purpose. Buying the last bulls in
+          the drop flips `soldOut` true the moment the reads refresh, which
+          swaps the whole panel above for "the drop is sold out." — and if the
+          reveal lived in there it would vanish in the same render, taking the
+          payoff away from the one buyer who closed the drop out.
+          ⚠ And DIRECTLY BELOW THE MINT BUTTON, not on another page and not in
+          a modal. That placement is the whole request. */}
+      <MintOutcome
+        phase={mintPhase}
+        minted={minted}
+        txHash={mintHash}
+        revealFailed={revealFailed}
+        onMintAnother={resetMint}
+      />
+    </div>
+  );
+}
+
+/** sign · mine · reveal · done. Ported from fefers' `PhaseIndicator`: four
+ *  words that tell a buyer which of the four different ways this can be slow
+ *  is currently happening. */
+function MintSteps({ phase }: { phase: MintPhase }) {
+  const steps = ['sign', 'mine', 'reveal', 'done'] as const;
+  const activeIdx =
+    phase === 'signing' ? 0 : phase === 'mining' ? 1 : phase === 'revealing' ? 2 : phase === 'success' ? 3 : -1;
+  if (activeIdx < 0) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] uppercase tracking-wide">
+      {steps.map((step, i) => (
+        <span
+          key={step}
+          className={
+            i < activeIdx
+              ? 'text-bull-text-dim'
+              : i === activeIdx
+                ? 'text-bull-gold'
+                : 'text-bull-text-faint'
+          }
+        >
+          {i < activeIdx ? '✓' : i === activeIdx ? '●' : '○'} {step}
+          {i < steps.length - 1 ? ' ·' : ''}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Everything that happens after the mint button is clicked. Ported from
+ * fefers' mint page: `PhaseIndicator` + `StatusBlock` + `RevertedBlock` +
+ * `SuccessBlock`, in that order and with the same gates.
+ */
+function MintOutcome({
+  phase,
+  minted,
+  txHash,
+  revealFailed,
+  onMintAnother,
+}: {
+  phase: MintPhase;
+  minted: readonly MintedBull[];
+  txHash: `0x${string}` | undefined;
+  revealFailed: boolean;
+  onMintAnother: () => void;
+}) {
+  if (phase === 'idle') return null;
+
+  const txLink = txHash ? (
+    <a
+      href={`${explorerBaseUrl()}/tx/${txHash}`}
+      target="_blank"
+      rel="noreferrer noopener"
+      className="font-mono text-[11px] text-bull-gold hover:underline"
+    >
+      view the transaction
+    </a>
+  ) : null;
+
+  if (phase === 'reverted') {
+    return (
+      <div className="mt-6 rounded border border-bull-red/40 bg-bull-red/10 p-4">
+        <p className="bull-header text-bull-red">the mint reverted.</p>
+        <p className="mt-2 text-sm text-bull-text-dim">
+          it landed in a block and failed there, so nothing was minted and nothing was charged
+          beyond gas. either the drop closed out under you, minting was paused, or the quote
+          went stale. read the price again and try once more.
+        </p>
+        {txLink && <p className="mt-3">{txLink}</p>}
+        <button
+          type="button"
+          onClick={onMintAnother}
+          className="mt-3 block rounded-full border border-bull-gold px-3 py-1.5 text-xs font-medium text-bull-gold"
+        >
+          try again
+        </button>
+      </div>
+    );
+  }
+
+  if (phase === 'signing' || phase === 'mining' || phase === 'revealing') {
+    const body =
+      phase === 'signing'
+        ? 'open your wallet and confirm the mint. nothing has been sent yet.'
+        : phase === 'mining'
+          ? 'in a block, waiting on the confirmation.'
+          : minted.length === 1
+            ? `checking bull #${minted[0]!.id} papers, one sec.`
+            : `checking all ${minted.length} sets of papers, one sec.`;
+    return (
+      <div className="mt-6 rounded border border-bull-border bg-bull-panel p-4">
+        <MintSteps phase={phase} />
+        <p className="mt-2 text-sm text-bull-text-dim">{body}</p>
+        {txLink && <p className="mt-3">{txLink}</p>}
+      </div>
+    );
+  }
+
+  if (minted.length === 0) {
+    // The transaction succeeded. Say only that, and do not draw a bull we
+    // cannot name an id for.
+    return (
+      <p className="mt-6 text-sm text-bull-gold">
+        minted. no <span className="font-mono">BullMinted</span> event was in the receipt this
+        page could read, so check your wallet or{' '}
+        <Link href="/bulls?filter=mine" className="underline hover:text-bull-gold-hover">
+          browse your herd
+        </Link>
+        .
+      </p>
+    );
+  }
+
+  return (
+    <MintedReveal
+      minted={minted}
+      txLink={txLink}
+      revealFailed={revealFailed}
+      onMintAnother={onMintAnother}
+    />
+  );
+}
+
+/**
+ * Fefers' `SuccessBlock`, ported: the headline, then a GRID of cards for a
+ * batch or one roomy panel for a single mint, then the tx link, then the row
+ * of onward buttons.
+ *
+ * ⚠ NO NEW ART PATH AND NO SECOND CARD. `BullCard` is the same component
+ * `/bulls` renders, which is itself a port of fefers' `OutlawCard`, so a bull
+ * looks identical here, in browse and in the duel picker. Tier, name, sprite
+ * and weapon come from the chain's own rarity shuffle via `getBull`
+ * (`DECISIONS.md §27`); rating, record and the six stats are contract reads.
+ */
+function MintedReveal({
+  minted,
+  txLink,
+  revealFailed,
+  onMintAnother,
+}: {
+  minted: readonly MintedBull[];
+  txLink: React.ReactNode;
+  revealFailed: boolean;
+  onMintAnother: () => void;
+}) {
+  const single = minted.length === 1 ? minted[0]! : null;
+
+  return (
+    <div className="mt-6 rounded border border-bull-gold/40 bg-bull-panel p-4">
+      <MintSteps phase="success" />
+      <p className="bull-header mt-2 text-bull-gold">
+        {single ? `bull #${single.id} minted. he is yours.` : `${minted.length} minted. all yours.`}
+      </p>
+
+      {single ? (
+        <SingleReveal minted={single} />
+      ) : (
+        <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+          {minted.map((m) => (
+            <BullCardLink key={m.id} id={m.id} facts={factsOf(m)} />
+          ))}
+        </div>
+      )}
+
+      {revealFailed && (
+        <p className="mt-3 text-[11px] text-bull-text-faint">
+          couldn&apos;t read the rating and record off the chain just now, so those lines are
+          blank rather than guessed. the bulls are minted either way, and their own pages will
+          carry the numbers once the rpc answers.
+        </p>
+      )}
+
+      {/* ⚠ DELIBERATELY SAYS NOTHING ABOUT ARENA ENTRY. Fefers' equivalent line
+          is "they're yours, but not fighting yet: fefers sit benched until you
+          send them into the stomping ground", which is true there because
+          `ArenaOptOut` gates it. bnbulls' roster contract (`contracts/Yards.sol`)
+          landed while this was being written and is another agent's to wire, so
+          asserting EITHER "nothing to enter" or "you must enter them" would be
+          a claim this file cannot currently back. It points at the duel page
+          and lets that page state the rule. Revisit when Yards is wired. */}
+      <p className="mt-4 text-sm text-bull-text-dim">
+        {single ? 'he is' : 'they are'} yours. the duel page is where {single ? 'he goes' : 'they go'} in.
+      </p>
+
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <Link href="/duel" className="bull-btn bull-btn-pulse">
+          send {single ? 'him' : 'them'} into the yards ⚔️
+        </Link>
+        {single && (
+          <Link
+            href={`/bull/${single.id}`}
+            className="rounded-full border border-bull-border px-3 py-1.5 text-xs font-medium text-bull-text-dim hover:border-bull-gold hover:text-bull-gold"
+          >
+            full stats
+          </Link>
+        )}
+        <Link
+          href="/bulls?filter=mine"
+          className="rounded-full border border-bull-border px-3 py-1.5 text-xs font-medium text-bull-text-dim hover:border-bull-gold hover:text-bull-gold"
+        >
+          my herd
+        </Link>
+        <Link
+          href="/bulls"
+          className="rounded-full border border-bull-border px-3 py-1.5 text-xs font-medium text-bull-text-dim hover:border-bull-gold hover:text-bull-gold"
+        >
+          browse all
+        </Link>
+        <button
+          type="button"
+          onClick={onMintAnother}
+          className="rounded-full border border-bull-border px-3 py-1.5 text-xs font-medium text-bull-text-dim hover:border-bull-gold hover:text-bull-gold"
+        >
+          mint another
+        </button>
+        {txLink}
+      </div>
+    </div>
+  );
+}
+
+function factsOf(m: MintedBull): BullFacts {
+  return {
+    name: m.bull?.name,
+    elo: m.bull?.elo,
+    wins: m.bull?.wins,
+    losses: m.bull?.losses,
+    ties: m.bull?.ties,
+    isDead: m.bull?.isDead,
+  };
+}
+
+/**
+ * One bull, room to breathe — fefers' `SingleMintPanel`: the portrait on the
+ * left, and on the right the rating, the record, the weapon with its damage
+ * and speed, and the six stats as chips.
+ */
+function SingleReveal({ minted }: { minted: MintedBull }) {
+  const b = minted.bull;
+  const w = minted.weapon;
+  return (
+    <div className="mt-3 grid gap-5 sm:grid-cols-[minmax(0,14rem)_1fr] sm:items-start">
+      <Link
+        href={`/bull/${minted.id}`}
+        className="bull-card mx-auto block w-full max-w-[14rem] rounded border border-bull-border p-3 transition hover:border-bull-gold sm:mx-0"
+      >
+        <BullCard id={minted.id} facts={factsOf(minted)} scale={4} />
+      </Link>
+      <div>
+        <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
+          <div>
+            <dt className="font-mono text-[10px] uppercase tracking-wide text-bull-text-faint">
+              rating
+            </dt>
+            <dd className="mt-0.5 font-mono">{b ? b.elo : '—'}</dd>
+          </div>
+          <div>
+            <dt className="font-mono text-[10px] uppercase tracking-wide text-bull-text-faint">
+              record
+            </dt>
+            <dd className="mt-0.5 font-mono">
+              {b ? `${b.wins}w / ${b.losses}l / ${b.ties}t` : '—'}
+            </dd>
+          </div>
+          <div className="col-span-2">
+            <dt className="font-mono text-[10px] uppercase tracking-wide text-bull-text-faint">
+              weapon
+            </dt>
+            <dd className="mt-0.5">
+              {w ? (
+                <>
+                  <span className="text-bull-gold">{w.name.toLowerCase()}</span>{' '}
+                  <span className="font-mono text-xs text-bull-text-faint">
+                    dmg {w.damageMin}–{w.damageMax} · spd {w.speed}
+                  </span>
+                </>
+              ) : (
+                '—'
+              )}
+            </dd>
+          </div>
+        </dl>
+        <div className="mt-4 grid grid-cols-6 gap-1 text-center">
+          {(
+            [
+              ['str', b?.strength],
+              ['dex', b?.dexterity],
+              ['con', b?.constitution],
+              ['int', b?.intelligence],
+              ['wis', b?.wisdom],
+              ['cha', b?.charisma],
+            ] as const
+          ).map(([label, value]) => (
+            <div key={label} className="rounded border border-bull-border px-1 py-1">
+              <p className="font-mono text-[9px] uppercase text-bull-text-faint">{label}</p>
+              <p className="font-mono text-sm text-bull-text">{value ?? '—'}</p>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

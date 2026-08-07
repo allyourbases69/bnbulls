@@ -502,3 +502,23 @@ catches a change made entirely inside the frontend.
 `MIN_EJECT_DELAY` is a `constant`: raising the floor means redeploying **and
 rewiring** `Yards`, and that rewire is timelocked (§6). **Raise the floor and
 get it live FIRST, then raise the TTL.**
+
+## 12. THE FRONTEND DEPLOY — TWO TRAPS THAT ALREADY BIT
+
+**Cloud builds only.** `vercel deploy` (source upload, built on Vercel's Linux
+builders) — NEVER `vercel deploy --prebuilt` from Windows. The Windows-assembled
+function bundles crash bare at init on Vercel's runtime; that was `/bull/[id]`
+returning a naked "Internal Server Error" on every deployment ever made while
+the identical build served clean under `npm run start`. The build env travels in
+`frontend/vercel.json` (`build.env`) because this Vercel project has no linked
+git repo, so per-scope dashboard env cannot be managed from the CLI.
+
+**`frontend/vercel.json` on main carries TESTNET values, on purpose** — that is
+what makes `vercel deploy` from the main checkout a testnet/preview deploy. A
+PRODUCTION deploy happens from an isolated worktree at a verified commit, where
+`vercel.json` is OVERWRITTEN with the prod variant (currently just
+`NEXT_PUBLIC_GITHUB_URL`; mainnet addresses join it on launch day) before
+`vercel deploy --prod --yes`. Then verify the live site: zero testnet addresses
+in served HTML (cross-check every address in `.env.local` against the pages),
+no play-money banner, `/bull/501` renders the king, other bulls hidden until the
+collection address ships.

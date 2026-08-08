@@ -141,8 +141,8 @@ abstract contract VerifyCore is BnbullsConfig {
         _verifyDuel(c, d);
         _verifyYards(c, d);
         _verifyGraveyard(c, d);
-        _verifyPot(c, d, Jackpot(d.jackpotBnbull), d.bnbull, 50, "BNBULL pot");
-        _verifyPot(c, d, Jackpot(d.jackpotBnb), c.ext.wbnb, 100, "BNB pot");
+        _verifyPot(c, d, Jackpot(d.jackpotBnbull), d.bnbull, 150, "BNBULL pot");
+        _verifyPot(c, d, Jackpot(d.jackpotBnb), c.ext.wbnb, 75, "BNB pot");
         _verifyMarketplace(c, d);
         _verifySplitter(c, d, PotSplitter(d.mintSplitter), "MintBnbullSplitter", true);
         _verifySplitter(c, d, PotSplitter(d.reviveSplitter), "ReviveBuySplitter", true);
@@ -1349,10 +1349,11 @@ abstract contract VerifyCore is BnbullsConfig {
         console2.log("-- cross-cutting --");
 
         // ⚠ `address(this)` IS IN THE ROLL PREIMAGE. Two pots at the SAME
-        // address would hash identically and, with 50 dividing 100, every win
-        // on the 1-in-100 pot would come with a win on the 1-in-50 pot, which
+        // address would hash identically and, with 75 dividing 150, every win
+        // on the 1-in-150 pot would come with a win on the 1-in-75 pot, which
         // claims the duel key first — so the second pot pays NEVER. Measured on
-        // Stable: 600 duels, 7 payouts on one pot, 0 on the other.
+        // Stable: 600 duels, 7 payouts on one pot, 0 on the other. Distinct
+        // addresses (asserted just below) are what break the coupling.
         _ok(
             d.jackpotBnbull != d.jackpotBnb,
             "the two pots are DISTINCT deployments (roll separation)"

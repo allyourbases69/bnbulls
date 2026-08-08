@@ -205,11 +205,11 @@ abstract contract DeployCore is BnbullsConfig {
         // the header: passing the real owner here would only PROPOSE.
         d.jackpotBnbull = _resume(prev.jackpotBnbull, "Jackpot BNBULL");
         if (d.jackpotBnbull == address(0)) {
-            d.jackpotBnbull = address(new Jackpot(d.bnbull, address(0), c.ext.vrfCoordinator, 50));
+            d.jackpotBnbull = address(new Jackpot(d.bnbull, address(0), c.ext.vrfCoordinator, 150));
         }
         d.jackpotBnb = _resume(prev.jackpotBnb, "Jackpot BNB");
         if (d.jackpotBnb == address(0)) {
-            d.jackpotBnb = address(new Jackpot(c.ext.wbnb, address(0), c.ext.vrfCoordinator, 100));
+            d.jackpotBnb = address(new Jackpot(c.ext.wbnb, address(0), c.ext.vrfCoordinator, 75));
         }
 
         // ── 6. Marketplace ──────────────────────────────────────────────

@@ -35,6 +35,12 @@ fs_permissions = [
 [profile.fork]
 test = "test/fork"
 no_match_path = "test/fork/__nothing_matches_this__/*"
+# ⚠ THROTTLE THE FORK RPC. The fork suite fans out parallel storage reads that
+# burst past a free archive tier's rate limit — the run then dies on HTTP 429
+# mid-suite (Alchemy/dRPC free both do this), NOT on any test failure. Capping
+# compute-units-per-second keeps the burst under the ceiling. Raise or delete
+# this on a paid archive endpoint. Default is 330.
+compute_units_per_second = 90
 
 # BNB Chain is chain 56. Fork tests run against a real mainnet fork so the
 # pancakeswap router, the chainlink BNB/USD feed and the VRF coordinator are

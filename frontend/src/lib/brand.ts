@@ -346,8 +346,8 @@ export const DEATH = {
  * hardcoded ticker is most misleading.
  */
 export const POTS = {
-  bnbull: { label: '$BNBULL pot', symbolFallback: 'BNBULL', odds: '1-in-50' },
-  bnb: { label: 'BNB pot', symbolFallback: 'WBNB', odds: '1-in-100' },
+  bnbull: { label: '$BNBULL pot', symbolFallback: 'BNBULL', odds: '1-in-150' },
+  bnb: { label: 'BNB pot', symbolFallback: 'WBNB', odds: '1-in-75' },
   /**
    * ⚠ THIS SLOT USED TO BE THE "no withdraw function" TRUST STORY. Owner,
    * 2026-08-07: "get rid of the withdraw function and the way it's all worded,

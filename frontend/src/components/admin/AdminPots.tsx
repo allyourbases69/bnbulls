@@ -1,0 +1,601 @@
+'use client';
+
+/**
+ * THE POTS — both Jackpot deployments (the $BNBULL pot and the BNB/WBNB pot),
+ * live reads plus the two things the owner actually drives on chain:
+ *
+ *   1. FILLING THE POOL. The headline of this page. The pool is the prize
+ *      token's own balance held by the contract — WBNB for the BNB pot, $BNBULL
+ *      for the bnbull pot. Adding to it is an ERC20 approve followed by a pull:
+ *      `topUp(amount)` if you own the pot, `fund(amount, source)` if the owner
+ *      has made this wallet a funder. Both pull with safeTransferFrom, so it is
+ *      always two transactions. There is no withdraw — the only way money leaves
+ *      a pool is a winner taking it — so this is spelled out before you sign.
+ *
+ *   2. THE PAYOUT PARAMS (odds · payout bps · min pool). Timelocked:
+ *      `proposePayoutParams` then, after the wiring delay, `commitPayoutParams`
+ *      (or `cancelPayoutParams`). The very first set, before anything is
+ *      configured, goes through the one-shot `bootstrapPayoutParams`.
+ *
+ * Verified against `frontend/src/lib/abi/Jackpot.ts`:
+ *   fund(uint256 amount, string source)   gated on isFunder[msg.sender]
+ *   topUp(uint256 amount)                  onlyOwner
+ * `pool()` is the live prize-token balance; `payoutParamsBootstrapped()` tells
+ * the two payout-param paths apart.
+ */
+import { useState } from 'react';
+import { useAccount, useReadContract, useReadContracts } from 'wagmi';
+import { formatUnits, parseUnits } from 'viem';
+import { JackpotAbi, Erc20Abi } from '@/lib/abi';
+import { contractAddress } from '@/lib/env';
+import { useErc20Approval } from '@/lib/hooks/useErc20Approval';
+import { useTokenDecimals, useTokenSymbol } from '@/lib/hooks/useTokenDecimals';
+import { RevertNotice } from '@/components/shared/RevertNotice';
+import { decodeRevert, type DecodedRevert } from '@/lib/revertDecode';
+import { POTS } from '@/lib/brand';
+import {
+  AdminCard,
+  AdminInput,
+  AdminSection,
+  Addr,
+  BigStat,
+  KV,
+  TxStatus,
+  WriteButton,
+  asAddr,
+  asBig,
+  asBool,
+  fmtAmount,
+  fmtBps,
+  useAdminTx,
+} from './adminUi';
+
+const ZERO = '0x0000000000000000000000000000000000000000' as const;
+
+interface PotEntry {
+  label: string;
+  address: `0x${string}` | null;
+  fallbackSym: string;
+}
+
+export function AdminPots() {
+  const candidates: PotEntry[] = [
+    { label: POTS.bnbull.label, address: contractAddress('jackpotBnbull'), fallbackSym: POTS.bnbull.symbolFallback },
+    { label: POTS.bnb.label, address: contractAddress('jackpotBnb'), fallbackSym: POTS.bnb.symbolFallback },
+  ];
+  const pots = candidates.filter(
+    (p): p is PotEntry & { address: `0x${string}` } => p.address !== null,
+  );
+
+  if (pots.length === 0) {
+    return (
+      <AdminSection title="the pots">
+        <AdminCard>
+          <p className="text-sm text-bull-text-dim">
+            no jackpot pools are deployed on this chain yet (NEXT_PUBLIC_JACKPOT_BNBULL and
+            NEXT_PUBLIC_JACKPOT_BNB are unset).
+          </p>
+        </AdminCard>
+      </AdminSection>
+    );
+  }
+
+  return (
+    <AdminSection
+      title="the pots"
+      sub="both jackpot pools, straight off the chain. filling a pool only ever goes one way — the only exit is a win — so fund with that in mind."
+    >
+      <p className="text-xs text-bull-text-dim">{POTS.grow}</p>
+      <div className="grid gap-4 lg:grid-cols-2">
+        {pots.map((p) => (
+          <PotPanel key={p.address} label={p.label} address={p.address} fallbackSym={p.fallbackSym} />
+        ))}
+      </div>
+    </AdminSection>
+  );
+}
+
+function PotPanel({
+  label,
+  address,
+  fallbackSym,
+}: {
+  label: string;
+  address: `0x${string}`;
+  fallbackSym: string;
+}) {
+  const c = { abi: JackpotAbi, address } as const;
+  const { data, refetch } = useReadContracts({
+    allowFailure: true,
+    contracts: [
+      { ...c, functionName: 'pool' }, // 0
+      { ...c, functionName: 'pendingPayout' }, // 1
+      { ...c, functionName: 'oddsOneIn' }, // 2
+      { ...c, functionName: 'payoutBps' }, // 3
+      { ...c, functionName: 'minPoolToFire' }, // 4
+      { ...c, functionName: 'totalAwarded' }, // 5
+      { ...c, functionName: 'awardCount' }, // 6
+      { ...c, functionName: 'totalFunded' }, // 7
+      { ...c, functionName: 'owner' }, // 8
+      { ...c, functionName: 'prizeToken' }, // 9
+      { ...c, functionName: 'payoutParamsBootstrapped' }, // 10
+      { ...c, functionName: 'proposedOdds' }, // 11
+      { ...c, functionName: 'proposedPayoutBps' }, // 12
+      { ...c, functionName: 'proposedMinPool' }, // 13
+      { ...c, functionName: 'payoutParamsEta' }, // 14
+      { ...c, functionName: 'wiringDelay' }, // 15
+    ],
+    query: { refetchInterval: 12_000 },
+  });
+
+  const pool = asBig(data?.[0]);
+  const pendingPayout = asBig(data?.[1]);
+  const oddsOneIn = asBig(data?.[2]);
+  const payoutBps = asBig(data?.[3]);
+  const minPoolToFire = asBig(data?.[4]);
+  const totalAwarded = asBig(data?.[5]);
+  const awardCount = asBig(data?.[6]);
+  const totalFunded = asBig(data?.[7]);
+  const owner = asAddr(data?.[8]);
+  const prizeToken = asAddr(data?.[9]);
+  const bootstrapped = asBool(data?.[10]);
+  const proposedOdds = asBig(data?.[11]);
+  const proposedPayoutBps = asBig(data?.[12]);
+  const proposedMinPool = asBig(data?.[13]);
+  const eta = asBig(data?.[14]);
+  const wiringDelay = asBig(data?.[15]);
+
+  const { symbol: liveSym } = useTokenSymbol(prizeToken);
+  const { decimals } = useTokenDecimals(prizeToken);
+  const sym = liveSym ?? fallbackSym;
+
+  const doRefetch = () => void refetch();
+
+  return (
+    <AdminCard title={label}>
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <BigStat label="pool" value={fmtAmount(pool, decimals ?? 18)} sub={sym} />
+        <BigStat label="next payout" value={fmtAmount(pendingPayout, decimals ?? 18)} sub={sym} tone="gold" />
+        <BigStat
+          label="odds"
+          value={oddsOneIn !== undefined ? `1 in ${oddsOneIn.toLocaleString('en-AU')}` : '—'}
+          sub="fights"
+          tone="plain"
+        />
+        <BigStat label="fired" value={awardCount?.toLocaleString('en-AU') ?? '—'} sub="times" tone="plain" />
+      </div>
+
+      <div className="grid gap-x-6 gap-y-1 border-t border-bull-border/60 pt-1 md:grid-cols-2">
+        <KV k="payout share" v={fmtBps(payoutBps)} />
+        <KV k="min pool to fire" v={`${fmtAmount(minPoolToFire, decimals ?? 18)} ${sym}`} />
+        <KV k="all-time funded" v={`${fmtAmount(totalFunded, decimals ?? 18)} ${sym}`} />
+        <KV k="all-time awarded" v={`${fmtAmount(totalAwarded, decimals ?? 18)} ${sym}`} />
+        <KV k="prize token" v={<Addr addr={prizeToken} />} />
+        <KV k="owner" v={<Addr addr={owner} />} />
+        <KV k="contract" v={<Addr addr={address} />} />
+      </div>
+
+      <FundControl
+        potAddress={address}
+        prizeToken={prizeToken}
+        decimals={decimals}
+        symbol={sym}
+        owner={owner}
+        onDone={doRefetch}
+      />
+
+      <PayoutParamsPanel
+        potAddress={address}
+        decimals={decimals}
+        symbol={sym}
+        bootstrapped={bootstrapped}
+        oddsOneIn={oddsOneIn}
+        payoutBps={payoutBps}
+        minPoolToFire={minPoolToFire}
+        proposedOdds={proposedOdds}
+        proposedPayoutBps={proposedPayoutBps}
+        proposedMinPool={proposedMinPool}
+        eta={eta}
+        wiringDelay={wiringDelay}
+        onDone={doRefetch}
+      />
+    </AdminCard>
+  );
+}
+
+/**
+ * FILL THE POOL. approve → topUp / fund. The headline control.
+ */
+function FundControl({
+  potAddress,
+  prizeToken,
+  decimals,
+  symbol,
+  owner,
+  onDone,
+}: {
+  potAddress: `0x${string}`;
+  prizeToken: `0x${string}` | undefined;
+  decimals: number | undefined;
+  symbol: string;
+  owner: `0x${string}` | undefined;
+  onDone: () => void;
+}) {
+  const { address: wallet } = useAccount();
+  const [val, setVal] = useState('');
+  const [approveErr, setApproveErr] = useState<DecodedRevert | null>(null);
+
+  // Is this wallet allowed to fund this pot, and by which door?
+  const { data: gate } = useReadContracts({
+    allowFailure: true,
+    contracts: [{ abi: JackpotAbi, address: potAddress, functionName: 'isFunder', args: [wallet ?? ZERO] }],
+    query: { enabled: !!wallet, refetchInterval: 15_000 },
+  });
+  const isFunder = asBool(gate?.[0]) === true;
+  const isOwner = !!wallet && !!owner && wallet.toLowerCase() === owner.toLowerCase();
+  // topUp beats fund when you are both: it is the owner door and cannot be shut.
+  const route: 'topUp' | 'fund' | null = isOwner ? 'topUp' : isFunder ? 'fund' : null;
+
+  // Balance of the prize token in the connected wallet.
+  const { data: balanceRaw, refetch: refetchBalance } = useReadContract({
+    address: prizeToken,
+    abi: Erc20Abi,
+    functionName: 'balanceOf',
+    args: wallet ? [wallet] : undefined,
+    query: { enabled: !!prizeToken && !!wallet, refetchInterval: 15_000 },
+  });
+  const balance = typeof balanceRaw === 'bigint' ? balanceRaw : undefined;
+
+  // Parse the typed amount at the prize token's own decimals.
+  let amount: bigint | null = null;
+  let parseErr = false;
+  const raw = val.trim();
+  if (raw && decimals !== undefined) {
+    try {
+      const parsed = parseUnits(raw, decimals);
+      amount = parsed > 0n ? parsed : null;
+      parseErr = parsed <= 0n;
+    } catch {
+      parseErr = true;
+    }
+  }
+
+  const { needsApproval, approve, isApproving, refetchAllowance, allowance } = useErc20Approval(
+    prizeToken,
+    potAddress,
+    amount ?? undefined,
+  );
+
+  const fundTx = useAdminTx(() => {
+    setVal('');
+    refetchAllowance();
+    refetchBalance();
+    onDone();
+  });
+
+  const overBalance = amount !== null && balance !== undefined && amount > balance;
+  const readyToFund = amount !== null && !overBalance && !needsApproval && route !== null;
+
+  return (
+    <div className="space-y-2 border-t border-bull-border/60 pt-3">
+      <div className="flex items-baseline justify-between gap-3">
+        <div className="bull-header text-sm text-bull-gold">fill the pool</div>
+        <div className="font-mono text-xs text-bull-text-faint">
+          {prizeToken ? (
+            <>
+              {symbol} · <Addr addr={prizeToken} />
+            </>
+          ) : (
+            'reading the prize token…'
+          )}
+        </div>
+      </div>
+
+      <p className="text-xs text-bull-red">
+        this only goes one way. once it is in the pool nobody can pull it back out — not you, not
+        anyone. there is no withdraw on this contract. the only way money leaves a pool is a winner
+        taking it.
+      </p>
+
+      {!wallet ? (
+        <p className="text-xs text-bull-text-dim">connect the wallet you want to fund from.</p>
+      ) : route === null ? (
+        <div className="space-y-1 rounded border border-bull-red/50 p-2 text-xs">
+          <div className="text-bull-red">this wallet cannot fund this pool, so nothing here would land.</div>
+          <div className="text-bull-text-dim">
+            <span className="font-mono">topUp()</span> only works for the owner (
+            <Addr addr={owner} />
+            ), and <span className="font-mono">fund()</span> only for a wallet the owner has made a
+            funder. switch to the owner wallet, or have the owner run{' '}
+            <span className="font-mono">setFunder(this wallet, true)</span> on this pot.
+          </div>
+        </div>
+      ) : (
+        <>
+          <p className="text-xs text-bull-text-dim">
+            {route === 'topUp' ? (
+              <>
+                you own this pot, so this goes through{' '}
+                <span className="font-mono text-bull-text">topUp()</span>.
+              </>
+            ) : (
+              <>
+                this wallet is a funder, so this goes through{' '}
+                <span className="font-mono text-bull-text">fund()</span>.
+              </>
+            )}{' '}
+            two transactions: the pot pulls the tokens off you, so you approve it first, then send.
+          </p>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="w-28 shrink-0 text-xs text-bull-text-faint">amount · {symbol}</span>
+            <AdminInput
+              value={val}
+              onChange={(e) => setVal(e.target.value)}
+              placeholder="e.g. 1000"
+              inputMode="decimal"
+              className="w-40"
+              aria-label={`amount of ${symbol} to add to the pool`}
+            />
+            <span className="text-xs text-bull-text-faint">
+              you hold{' '}
+              <button
+                type="button"
+                className="font-mono tabular-nums text-bull-text hover:text-bull-gold"
+                title="use the lot"
+                onClick={() => {
+                  if (balance !== undefined && decimals !== undefined) setVal(formatUnits(balance, decimals));
+                }}
+              >
+                {fmtAmount(balance, decimals ?? 18)}
+              </button>{' '}
+              {symbol}
+            </span>
+          </div>
+
+          {parseErr && (
+            <p className="font-mono text-xs text-bull-red">✗ that is not an amount. e.g. 1000 or 12.5.</p>
+          )}
+          {overBalance && (
+            <p className="font-mono text-xs text-bull-red">✗ that is more {symbol} than this wallet holds.</p>
+          )}
+
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`w-28 shrink-0 text-xs ${needsApproval ? 'text-bull-gold' : 'text-bull-text-faint'}`}>
+              1 · approve
+            </span>
+            <button
+              type="button"
+              disabled={amount === null || overBalance || !needsApproval || isApproving}
+              onClick={async () => {
+                setApproveErr(null);
+                try {
+                  await approve();
+                  refetchAllowance();
+                } catch (e) {
+                  setApproveErr(decodeRevert(e));
+                }
+              }}
+              className="bull-btn bull-btn-secondary min-h-0 shrink-0 px-3 py-1.5 text-xs disabled:opacity-50"
+            >
+              {isApproving ? 'approving…' : `approve ${symbol}`}
+            </button>
+            <span className="font-mono text-xs text-bull-text-faint">
+              {allowance === undefined
+                ? '—'
+                : amount !== null && !needsApproval
+                  ? '✓ approved for this much'
+                  : `approved: ${fmtAmount(allowance, decimals ?? 18)} ${symbol}`}
+            </span>
+          </div>
+          <RevertNotice error={approveErr} />
+
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`w-28 shrink-0 text-xs ${readyToFund ? 'text-bull-gold' : 'text-bull-text-faint'}`}>
+              2 · send it in
+            </span>
+            <WriteButton
+              tx={fundTx}
+              danger
+              disabled={!readyToFund}
+              onClick={() => {
+                if (!readyToFund || amount === null) return;
+                if (route === 'topUp') {
+                  void fundTx.run({ address: potAddress, abi: JackpotAbi, functionName: 'topUp', args: [amount] });
+                } else {
+                  void fundTx.run({
+                    address: potAddress,
+                    abi: JackpotAbi,
+                    functionName: 'fund',
+                    args: [amount, 'admin-fund'],
+                  });
+                }
+              }}
+            >
+              {route === 'topUp' ? 'topUp' : 'fund'} the pool
+            </WriteButton>
+            <span className="text-xs text-bull-text-faint">
+              {amount === null
+                ? 'put an amount in first.'
+                : needsApproval
+                  ? 'do step 1 first, this pulls the tokens off you.'
+                  : 'no take-backs after this one lands.'}
+            </span>
+          </div>
+          <TxStatus tx={fundTx} />
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * odds · payout bps · min pool. One-shot bootstrap before anything is set, then
+ * a timelocked propose/commit/cancel after.
+ */
+function PayoutParamsPanel({
+  potAddress,
+  decimals,
+  symbol,
+  bootstrapped,
+  oddsOneIn,
+  payoutBps,
+  minPoolToFire,
+  proposedOdds,
+  proposedPayoutBps,
+  proposedMinPool,
+  eta,
+  wiringDelay,
+  onDone,
+}: {
+  potAddress: `0x${string}`;
+  decimals: number | undefined;
+  symbol: string;
+  bootstrapped: boolean | undefined;
+  oddsOneIn: bigint | undefined;
+  payoutBps: bigint | undefined;
+  minPoolToFire: bigint | undefined;
+  proposedOdds: bigint | undefined;
+  proposedPayoutBps: bigint | undefined;
+  proposedMinPool: bigint | undefined;
+  eta: bigint | undefined;
+  wiringDelay: bigint | undefined;
+  onDone: () => void;
+}) {
+  const tx = useAdminTx(onDone);
+  const commitTx = useAdminTx(onDone);
+  const cancelTx = useAdminTx(onDone);
+  const [odds, setOdds] = useState('');
+  const [bps, setBps] = useState('');
+  const [minPool, setMinPool] = useState('');
+
+  const dec = decimals ?? 18;
+  const hasPending = eta !== undefined && eta > 0n;
+  const now = BigInt(Math.floor(Date.now() / 1000));
+  const ready = hasPending && eta !== undefined && now >= eta;
+
+  function build(): { odds: bigint; bps: bigint; minPool: bigint } | null {
+    try {
+      const o = BigInt(odds || '0');
+      const b = BigInt(bps || '0');
+      const m = parseUnits(minPool || '0', dec);
+      if (o <= 0n || b <= 0n || b > 10_000n) return null;
+      return { odds: o, bps: b, minPool: m };
+    } catch {
+      return null;
+    }
+  }
+  const parsed = build();
+
+  return (
+    <div className="space-y-3 border-t border-bull-border/60 pt-3">
+      <div className="flex items-baseline justify-between">
+        <div className="bull-header text-sm text-bull-text">payout params</div>
+        <div className="font-mono text-xs text-bull-text-faint">
+          delay {wiringDelay !== undefined ? `${Number(wiringDelay)}s` : '—'}
+        </div>
+      </div>
+
+      <div className="grid gap-x-6 gap-y-1 md:grid-cols-3">
+        <KV k="odds (1 in N)" v={oddsOneIn?.toString() ?? '—'} />
+        <KV k="payout bps" v={payoutBps?.toString() ?? '—'} />
+        <KV k="min pool" v={`${fmtAmount(minPoolToFire, dec)} ${symbol}`} />
+      </div>
+
+      {hasPending && (
+        <div className="rounded border border-bull-gold/40 bg-bull-gold/5 p-2 text-xs">
+          <div className="font-mono text-bull-gold">
+            proposed → odds {proposedOdds?.toString() ?? '—'} · payout {proposedPayoutBps?.toString() ?? '—'} bps ·
+            min {fmtAmount(proposedMinPool, dec)} {symbol}
+          </div>
+          <div className="mt-1 text-bull-text-dim">
+            eta {eta !== undefined ? new Date(Number(eta) * 1000).toLocaleString() : '—'} ·{' '}
+            {ready ? 'ready to commit' : 'still timelocked'}
+          </div>
+        </div>
+      )}
+
+      <div className="grid grid-cols-3 gap-2">
+        <label className="space-y-1 text-xs text-bull-text-faint">
+          <span>odds (1 in N)</span>
+          <AdminInput value={odds} onChange={(e) => setOdds(e.target.value)} inputMode="numeric" placeholder={oddsOneIn?.toString() ?? '150'} className="w-full" />
+        </label>
+        <label className="space-y-1 text-xs text-bull-text-faint">
+          <span>payout bps (≤10000)</span>
+          <AdminInput value={bps} onChange={(e) => setBps(e.target.value)} inputMode="numeric" placeholder={payoutBps?.toString() ?? '10000'} className="w-full" />
+        </label>
+        <label className="space-y-1 text-xs text-bull-text-faint">
+          <span>min pool ({symbol})</span>
+          <AdminInput value={minPool} onChange={(e) => setMinPool(e.target.value)} inputMode="decimal" placeholder={fmtAmount(minPoolToFire, dec)} className="w-full" />
+        </label>
+      </div>
+
+      {bootstrapped === false ? (
+        <div className="space-y-1">
+          <WriteButton
+            tx={tx}
+            disabled={!parsed}
+            onClick={() =>
+              parsed &&
+              void tx.run({
+                address: potAddress,
+                abi: JackpotAbi,
+                functionName: 'bootstrapPayoutParams',
+                args: [parsed.odds, parsed.bps, parsed.minPool],
+              })
+            }
+          >
+            bootstrap payout params
+          </WriteButton>
+          <p className="text-[11px] text-bull-text-faint">
+            one-shot, no timelock — this pot has not been configured yet. after this, changes go
+            through the propose/commit flow below.
+          </p>
+          <TxStatus tx={tx} />
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <WriteButton
+              tx={tx}
+              disabled={!parsed}
+              onClick={() =>
+                parsed &&
+                void tx.run({
+                  address: potAddress,
+                  abi: JackpotAbi,
+                  functionName: 'proposePayoutParams',
+                  args: [parsed.odds, parsed.bps, parsed.minPool],
+                })
+              }
+            >
+              propose
+            </WriteButton>
+            <WriteButton
+              tx={commitTx}
+              disabled={!ready}
+              onClick={() => void commitTx.run({ address: potAddress, abi: JackpotAbi, functionName: 'commitPayoutParams' })}
+            >
+              commit
+            </WriteButton>
+            <WriteButton
+              tx={cancelTx}
+              danger
+              disabled={!hasPending}
+              onClick={() => void cancelTx.run({ address: potAddress, abi: JackpotAbi, functionName: 'cancelPayoutParams' })}
+            >
+              cancel
+            </WriteButton>
+          </div>
+          <p className="text-[11px] text-bull-text-faint">
+            two steps: propose the new numbers, wait out the delay, then commit. cancel drops a
+            pending proposal.
+          </p>
+          <TxStatus tx={tx} />
+          <TxStatus tx={commitTx} />
+          <TxStatus tx={cancelTx} />
+        </div>
+      )}
+    </div>
+  );
+}

@@ -459,12 +459,20 @@ export const DEAL = {
    * lands in the pot matching the currency that side actually paid in.
    * Winner 90% · pot 3% · dev 7%, from `duelDefaultDevBps = 1000` and
    * `potShareBps = 3000`.
+   *
+   * ⚠ THE MINT/REVIVE SPLIT IS PER PAYMENT ASSET, NOT UNIVERSAL. E2E-verified
+   * 2026-08-08: BNB payments route 20% BNBULL-buy / 10% BNB / 70% dev, but
+   * BNBULL payments route 30 / 0 / 70 — the never-sell default (owner decision
+   * 2026-08-06) means the game never swaps $BNBULL into anything, so the whole
+   * pot leg stays in the gold pot. "30% into the pots" is the only sentence
+   * true of both currencies; the copy below leads with it for that reason.
    */
   body:
-    'every mint and every revive feeds two pots: 20% buys $BNBULL, 10% goes to BNB. ' +
-    'every fight feeds them too: the winner takes 90% of the money in the middle and 3% ' +
-    'drops into the pot for whichever currency was played. they stack until someone ' +
-    'hits, and the winner takes the lot.',
+    'every mint and every revive drops 30% into the pots. paid in bnb, 20% of it buys ' +
+    '$BNBULL and 10% goes to the BNB pot. paid in $BNBULL, all 30% stays $BNBULL, ' +
+    'because the game never sells it. every fight feeds them too: the winner takes 90% ' +
+    'of the money in the middle and 3% drops into the pot for whichever currency was ' +
+    'played. they stack until someone hits, and the winner takes the lot.',
 } as const;
 
 // ─── safety refrain (VOICE-AND-BRAND §4, on every page footer) ───────

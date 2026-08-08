@@ -52,13 +52,15 @@ export default function MintPage() {
             guarantee starts AT THE POT, and saying where the line is beats
             letting a sceptic find it in the source. */}
         <p className="mt-2 max-w-xl text-sm text-bull-text-dim">
-          20% of every mint buys ${TICKER} into one pot and 10% goes to the other. once money
-          reaches a pot it can never come back out, for us or for anyone.
+          30% of every mint lands in the pots. pay bnb and 20% buys ${TICKER} for one pot while
+          10% goes to the other. pay ${TICKER} and the whole 30% stays ${TICKER}, never sold.
+          once money reaches a pot it can never come back out, for us or for anyone.
         </p>
         <p className="mt-2 max-w-xl text-sm text-bull-text-faint">
-          the one gap, while the curve is still filling: ${TICKER} cannot be bought yet, so that
-          20% waits in a holding bucket on the mint contract instead, and money in that bucket
-          has not reached a pot yet. the bnb leg has no such gap. the long version is on{' '}
+          the one gap, while the curve is still filling: ${TICKER} cannot be bought yet, so the $
+          {TICKER} buy leg waits in a holding bucket on the mint contract instead, and money in
+          that bucket has not reached a pot yet. the bnb leg has no such gap. the long version is
+          on{' '}
           <Link href="/about" className="text-bull-gold hover:underline">
             how to play
           </Link>

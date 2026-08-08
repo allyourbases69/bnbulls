@@ -73,6 +73,7 @@ import {
   type CommitStore,
   type DuelCommit,
 } from '@/lib/duelCommit';
+import { restCommitStoreFromEnv } from '@/lib/commitStoreRest';
 import {
   findStakeAssetByKind,
   readFightPricing,
@@ -183,20 +184,32 @@ function rateLimited(ip: string): boolean {
 /**
  * Where standing fights live.
  *
- * ⚠ Process memory, and that is a known gap — see `MemoryCommitStore`'s header.
- * Fighting Fefers backed the same interface with Postgres; bnbulls has no
- * database wired yet. The warning fires once per instance so it cannot be
- * missed in a deploy log.
+ * Shared REST-Redis (Vercel KV / Upstash) whenever the env carries its
+ * credentials — see `commitStoreRest.ts` for activation, keying and the
+ * fail-closed rule. Without them: process memory, which is a known gap — see
+ * `MemoryCommitStore`'s header. Either way ONE line lands in the deploy log
+ * saying which world this instance is in, so it cannot be missed.
  */
 const memoryCommitStore = new MemoryCommitStore();
-let warnedNoSharedStore = false;
-function commitStore(): CommitStore {
-  if (!warnedNoSharedStore) {
-    warnedNoSharedStore = true;
+let announcedStore = false;
+let restStore: CommitStore | null | undefined;
+function commitStore(namespace: string): CommitStore {
+  if (restStore === undefined) restStore = restCommitStoreFromEnv(namespace);
+  if (restStore) {
+    if (!announcedStore) {
+      announcedStore = true;
+      console.info(`[run-duel] standing fights in the SHARED commit store (${namespace})`);
+    }
+    return restStore;
+  }
+  if (!announcedStore) {
+    announcedStore = true;
     console.warn(
       '[run-duel] standing fights are kept in PROCESS MEMORY. Serverless ' +
         'instances do not share it, so the one-fight-per-wallet anti-grind ' +
-        'guarantee is best-effort only. Wire a shared CommitStore before mainnet.',
+        'guarantee is best-effort only. Set KV_REST_API_URL + KV_REST_API_TOKEN ' +
+        '(or the UPSTASH_REDIS_REST_* pair) to activate the shared store — ' +
+        'required before mainnet.',
     );
   }
   return memoryCommitStore;
@@ -771,7 +784,7 @@ export async function POST(request: Request) {
     // One unsettled outcome per WALLET, and it does not expire on a clock. See
     // `lib/duelCommit.ts` for why the slot moved from the token (fefers) to the
     // wallet here, and why every release reason is outside the caller's control.
-    const store = commitStore();
+    const store = commitStore(`${env.chainId}:${env.duelAddress.toLowerCase()}`);
     const standingRaw = await store.get(requesterLc);
     let facts: CommitFacts | null = null;
     if (standingRaw) {

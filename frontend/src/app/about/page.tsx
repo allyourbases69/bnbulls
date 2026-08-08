@@ -230,9 +230,16 @@ export default function AboutPage() {
             </Link>
             , never recomputed by this site.
           </p>
+          {/* ⚠ THE SPLIT IS PER PAYMENT ASSET. E2E-verified 2026-08-08: bnb
+              payments route 20/10/70 but BNBULL payments route 30/0/70 — the
+              never-sell default means the game never swaps $BNBULL away, so
+              the whole pot leg stays in the gold pot. This paragraph used to
+              state the bnb split as if it were universal. */}
           <p>
-            <strong className="text-bull-text">20% of every mint buys ${TICKER}</strong> into the{' '}
-            {TICKER} pot and <strong className="text-bull-text">10% goes to the BNB pot</strong>.{' '}
+            <strong className="text-bull-text">30% of every mint lands in the pots.</strong> paid
+            in bnb, 20% buys ${TICKER} into the {TICKER} pot and 10% goes to the BNB pot. paid in
+            ${TICKER}, the whole 30% goes to the {TICKER} pot, because the game never sells $
+            {TICKER}.{' '}
             <strong className="text-bull-text">
               once money reaches a pot it can never come back out
             </strong>
@@ -251,12 +258,12 @@ export default function AboutPage() {
               it in the source. */}
           <p className="rounded border border-bull-border bg-bull-panel p-4">
             <strong className="text-bull-text">one caveat while the curve is filling,</strong>{' '}
-            and it is the honest one: ${TICKER} cannot be bought yet, so that 20% cannot be spent
-            yet either. it waits in a holding bucket on the mint contract until there is a real
-            pool, and money in that bucket has not reached a pot, so the dev can pull it out to
-            place the buy by hand. that is the one step in the money path where you are trusting
-            a person rather than the code. the 10% bnb leg has no such gap: it lands in the bnb
-            pot on the first mint, and once anything is in a pot it is in for good.
+            and it is the honest one: ${TICKER} cannot be bought yet, so the ${TICKER} buy leg
+            cannot be spent yet either. it waits in a holding bucket on the mint contract until
+            there is a real pool, and money in that bucket has not reached a pot, so the dev can
+            pull it out to place the buy by hand. that is the one step in the money path where
+            you are trusting a person rather than the code. the bnb leg has no such gap: it lands
+            in the bnb pot on the first mint, and once anything is in a pot it is in for good.
           </p>
           <p>
             every bull rolls its own hide, horns, eyes, weapon and gear. rarity is fixed at

@@ -464,11 +464,17 @@ abstract contract WireCore is BnbullsConfig {
         // sitting available to whoever holds the owner key — which is the whole
         // thing the timelock exists to remove.
         //
-        // The values re-assert what the constructor already set (50 / 100) plus
-        // the contract defaults, so this changes no behaviour. It only closes
-        // the door behind them. `Verify` asserts it happened.
+        // Odds come from the constructor (BNB 1-in-75, BNBULL 1-in-150) and
+        // payoutBps stays the 100% full-drain default (owner: "winner takes the
+        // lot"). The one value set HERE is the minPoolToFire dust guard (owner
+        // decision 2026-08-08): ~$10 of WBNB on the BNB pot so a near-empty pot
+        // never "pays", and 0 on the BNBULL pot, which has no USD peg
+        // pre-graduation. A dust guard need not track USD precisely, so a fixed
+        // WBNB wei is fine. Spends the one free payout-param write; `Verify`
+        // asserts it happened.
         if (!p.payoutParamsBootstrapped()) {
-            p.bootstrapPayoutParams(p.oddsOneIn(), p.payoutBps(), p.minPoolToFire());
+            uint256 minPool = address(p) == d.jackpotBnb ? 0.0168 ether : 0;
+            p.bootstrapPayoutParams(p.oddsOneIn(), p.payoutBps(), minPool);
             _note(string.concat(tag, ".payoutParams bootstrapped"), true);
         } else {
             _note(string.concat(tag, ".payoutParams bootstrapped"), false);

@@ -31,7 +31,7 @@ export function ConnectButton() {
   const { address, isConnected, chainId } = useAccount();
   const { connectors, connect, isPending } = useConnect();
   const { disconnect } = useDisconnect();
-  const { switchChain } = useSwitchChain();
+  const { switchChainAsync } = useSwitchChain();
 
   const wrongChain = isConnected && chainId !== undefined && chainId !== CHAIN_ID;
 
@@ -40,9 +40,21 @@ export function ConnectButton() {
   // which is indistinguishable from a broken site.
   const promptedFor = useRef<string | null>(null);
 
-  const goToRightChain = useCallback(() => {
-    switchChain({ chainId: CHAIN_ID });
-  }, [switchChain]);
+  // ⚠ SWITCH, AND ADD IF THE WALLET DOESN'T HAVE BNB. `switchChainAsync` asks
+  // the wallet to switch; because `bnbChain()` (chain.ts) carries the full
+  // rpcUrls / nativeCurrency / blockExplorers, wagmi falls back to
+  // `wallet_addEthereumChain` when the wallet returns 4902 (chain not present),
+  // so a wallet with no BNB entry is prompted to add it. Works for every active
+  // connector (injected, WalletConnect). On failure — the user rejected, or the
+  // add was refused — we clear `promptedFor` so a later render can retry and the
+  // manual button stays up, rather than silently giving up.
+  const goToRightChain = useCallback(async () => {
+    try {
+      await switchChainAsync({ chainId: CHAIN_ID });
+    } catch {
+      promptedFor.current = null;
+    }
+  }, [switchChainAsync]);
 
   useEffect(() => {
     if (!wrongChain || IS_TESTNET) return;

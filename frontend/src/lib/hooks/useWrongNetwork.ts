@@ -44,13 +44,23 @@ export const CHAIN_LABEL = IS_TESTNET ? 'bnb testnet' : 'bnb chain';
  */
 export function useWrongNetwork() {
   const { isConnected, chainId } = useAccount();
-  const { switchChain, isPending } = useSwitchChain();
+  const { switchChainAsync, isPending } = useSwitchChain();
 
   const wrongNetwork = isConnected && chainId !== undefined && chainId !== CHAIN_ID;
 
-  const switchToRightChain = useCallback(() => {
-    switchChain({ chainId: CHAIN_ID });
-  }, [switchChain]);
+  // Asks the wallet to switch, and — because `bnbChain()` carries the full
+  // rpcUrls / nativeCurrency / blockExplorers — wagmi falls back to
+  // `wallet_addEthereumChain` when the wallet doesn't have BNB (error 4902), so
+  // a wallet with no BNB entry is prompted to add it. Same across every
+  // connector. Swallow rejection so a declined prompt doesn't surface as an
+  // unhandled error; the button stays visible for a retry.
+  const switchToRightChain = useCallback(async () => {
+    try {
+      await switchChainAsync({ chainId: CHAIN_ID });
+    } catch {
+      /* user rejected the switch or the add; leave the button up to retry */
+    }
+  }, [switchChainAsync]);
 
   return {
     /** True only when a wallet is connected AND it is on some other chain. */

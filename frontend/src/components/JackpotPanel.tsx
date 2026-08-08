@@ -176,11 +176,16 @@ export function JackpotPanel({ pot, compact = false, className = '' }: JackpotPa
               style={{ width: `${fillPct}%` }}
             />
           </div>
+          {/* ⚠ FULL-DRAIN AWARE. Launch runs `payoutBps = 10000` (100%, owner
+              decision 2026-08-08: "winner takes the lot"), so the pool IS the
+              prize and nothing rides on. The "rest rides on to the one after"
+              wording only makes sense below 100% — say each honestly. */}
           <p className="mt-1.5 text-[11px] text-bull-text-faint">
             {potFigure(read, 'pool')}
             {symbol ? ` ${symbol}` : ''} in the pool.{' '}
-            {read.payoutBps !== undefined ? formatBps(read.payoutBps) : '—'} of it goes to the next
-            winner, the rest rides on to the one after.
+            {read.payoutBps === 10000n
+              ? 'the whole pool goes to the next bull that hits.'
+              : `${read.payoutBps !== undefined ? formatBps(read.payoutBps) : '—'} of it goes to the next winner, the rest rides on to the one after.`}
           </p>
         </div>
       )}

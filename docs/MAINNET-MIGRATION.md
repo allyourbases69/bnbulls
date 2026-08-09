@@ -134,7 +134,7 @@ transactions.
 | 3 | **Duel** | `DeployParams{initialOwner, bulls, bnbull, wbnb, trustedSigner, devTreasury, defaultDevShareBps: 1000}` — EIP-712 domain `"BNBullsDuel"` / version `"1"` is a baked-in constant and must be right **before** the first deploy (`DECISIONS.md §13`). |
 | 3b | **Yards** | `(initialOwner, bullsAddress)` |
 | 4 | **Graveyard** | `(initialOwner, bulls, bnbull, resurrectTreasury)` |
-| 5 | **Jackpot ×2** | `(prizeToken, _owner, vrfCoordinator, oddsOneIn)`<br>BNBULL pot: `(bnbull, 0, coordinator, 50)`<br>BNB pot: `(wbnb, 0, coordinator, 100)`<br>⚠ `_owner = 0` **on purpose** — see §9.2. |
+| 5 | **Jackpot ×2** | `(prizeToken, _owner, vrfCoordinator, oddsOneIn)`<br>BNBULL pot: `(bnbull, 0, coordinator, 150)`<br>BNB pot: `(wbnb, 0, coordinator, 75)`<br>(odds retuned 2026-08-08, owner call — DECISIONS §13)<br>⚠ `_owner = 0` **on purpose** — see §9.2. |
 | 6 | **Marketplace** | `(bulls, feeTreasury, feeBps: 750, initialOwner)` |
 | 7 | **MintBnbullSplitter** | `(initialOwner, wbnb, keeper)` — policy 20/10/70, retains the dev share |
 | 7 | **ReviveBuySplitter** | `(initialOwner, wbnb, keeper)` — 100% to pots, 2:1 BNBULL:BNB |

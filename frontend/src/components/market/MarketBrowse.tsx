@@ -254,9 +254,11 @@ export function MarketBrowse() {
                 browse the herd
               </Link>
             )}
-            <button type="button" className="bull-btn bull-btn-secondary" onClick={refetch}>
-              retry
-            </button>
+            {/* ⚠ NO `retry` HERE. This branch is only reached when the read
+                SUCCEEDED and the answer was honestly "nothing listed" — a
+                retry button next to that reads as though the page failed, which
+                is the one thing an empty marketplace must not look like. The
+                failure paths above both carry their own retry. */}
           </div>
         </div>
       )}

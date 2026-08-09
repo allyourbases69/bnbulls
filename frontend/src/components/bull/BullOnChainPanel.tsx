@@ -60,6 +60,49 @@ export function BullOnChainPanel({ tokenId, isKing }: { tokenId: number; isKing:
     query: { enabled: !!bullsAddress },
   });
 
+  /**
+   * ⚠ "IS THIS MINTED" IS ANSWERED BY A CALL THAT SUCCEEDS, NOT BY ONE THAT
+   * REVERTS. `ownerOf` reverts for an unminted token, so this panel used to
+   * read "not minted" off `ownerError` alone — which is wrong in BOTH
+   * directions. A rate-limited or failed rpc raises the same flag, so a live
+   * bull whose owner call bounced was told to the world as "hasn't been
+   * minted", and while the query sat retrying, the table underneath printed
+   * `loading…` with nothing to ever resolve it (the owner hit exactly this on
+   * /bull/11, still spinning after nine seconds).
+   *
+   * `nextTokenId` and `kingMinted` always return, so they decide the question
+   * on their own: ids `1 .. nextTokenId-1` are minted, and the king is minted
+   * when he says he is. `ownerError` is then only ever used to explain a
+   * FAILURE, never to invent a fact.
+   */
+  const {
+    data: nextTokenId,
+    isError: supplyError,
+  } = useReadContract({
+    address: bullsAddress ?? undefined,
+    abi: BullsAbi,
+    functionName: 'nextTokenId',
+    query: { enabled: !!bullsAddress && !isKing },
+  });
+
+  const {
+    data: kingIsMinted,
+    isError: kingError,
+  } = useReadContract({
+    address: bullsAddress ?? undefined,
+    abi: BullsAbi,
+    functionName: 'kingMinted',
+    query: { enabled: !!bullsAddress && isKing },
+  });
+
+  /** true / false when the chain has told us; undefined while it has not. */
+  const minted: boolean | undefined = isKing
+    ? (kingIsMinted as boolean | undefined)
+    : nextTokenId === undefined
+      ? undefined
+      : tokenId < Number(nextTokenId);
+  const supplyUnreadable = isKing ? kingError : supplyError;
+
   const { data: bullData, isLoading: bullLoading } = useReadContract({
     address: bullsAddress ?? undefined,
     abi: BullsAbi,
@@ -103,12 +146,28 @@ export function BullOnChainPanel({ tokenId, isKing }: { tokenId: number; isKing:
     return <NotDeployed what="the bulls collection" />;
   }
 
-  if (!ownerLoading && ownerError) {
+  // The chain says plainly that nobody owns this one yet.
+  if (minted === false) {
     return (
       <div className="rounded border border-bull-border bg-bull-panel px-4 py-3 text-sm text-bull-text-dim">
         {isKing ? 'the king ' : 'this bull '}hasn&apos;t been minted yet. the contract is live,
         token #{tokenId} just doesn&apos;t exist on chain yet. this is a preview of exactly
-        what it will look like the moment it does.
+        what it will look like the moment it does.{' '}
+        <Link href="/mint" className="text-bull-gold hover:underline">
+          mint one →
+        </Link>
+      </div>
+    );
+  }
+
+  // ⚠ A FAILED READ IS A FAILED READ. It is minted (or we could not even ask),
+  // and the owner call bounced — say so and offer a reload, rather than
+  // printing `loading…` forever or claiming the bull does not exist.
+  if (ownerError && (minted === true || supplyUnreadable)) {
+    return (
+      <div className="rounded border border-bull-border bg-bull-panel px-4 py-3 text-sm text-bull-text-dim">
+        couldn&apos;t read this bull off the chain just now. that is an rpc having a moment,
+        not a missing bull. give it a second and reload.
       </div>
     );
   }

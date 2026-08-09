@@ -77,6 +77,60 @@ export function ListBullForm({ listedIds }: { listedIds: number[] }) {
     (wires as readonly [`0x${string}`, `0x${string}`] | undefined) ?? [undefined, undefined];
   const { decimals: bnbullDecimals } = useTokenDecimals(bnbullAddr);
 
+  /**
+   * ⚠ PEGGED IS A TRAP WHENEVER THE PEG IS NOT FRESH, AND `list` WILL NOT STOP
+   * YOU. `Marketplace.list` only runs `_validateBnbullTerms`, which never looks
+   * at the peg — so a Pegged listing is accepted happily and then `buy` reverts
+   * `BnbullPegUnavailable` (Marketplace.sol:796) for every buyer who tries to
+   * pay in BNBULL. The seller is left with a leg nobody can take and no
+   * indication why.
+   *
+   * This mirrors the contract's own rule EXACTLY (`_bnbullPegFresh`,
+   * Marketplace.sol:1217) off live reads, so it re-enables itself the moment
+   * the price-keeper publishes a real peg at graduation. No hardcoded flag, no
+   * date to remember.
+   */
+  const { data: pegPrice, isError: pegPriceFailed } = useReadContract({
+    address: marketAddress ?? undefined,
+    abi: MarketplaceAbi,
+    functionName: 'bnbullUsd1e18',
+    query: { enabled: !!marketAddress },
+  });
+  const { data: pegAt, isError: pegAtFailed } = useReadContract({
+    address: marketAddress ?? undefined,
+    abi: MarketplaceAbi,
+    functionName: 'bnbullUsdUpdatedAt',
+    query: { enabled: !!marketAddress },
+  });
+  const { data: pegMaxAge, isError: pegMaxAgeFailed } = useReadContract({
+    address: marketAddress ?? undefined,
+    abi: MarketplaceAbi,
+    functionName: 'maxBnbullPegAge',
+    query: { enabled: !!marketAddress },
+  });
+
+  /** true / false once all three reads land; undefined while they have not. */
+  const pegFresh: boolean | undefined = useMemo(() => {
+    if (pegPriceFailed || pegAtFailed || pegMaxAgeFailed) return undefined;
+    if (pegPrice === undefined || pegAt === undefined || pegMaxAge === undefined) return undefined;
+    const price = pegPrice as bigint;
+    const at = BigInt(pegAt as bigint | number);
+    const maxAge = pegMaxAge as bigint;
+    if (price === 0n || at === 0n) return false;
+    return BigInt(Math.floor(Date.now() / 1000)) <= at + maxAge;
+  }, [pegPrice, pegAt, pegMaxAge, pegPriceFailed, pegAtFailed, pegMaxAgeFailed]);
+
+  // ⚠ ONLY a definitive `false` closes the door. An unread peg leaves the
+  // option alone — the same rule the bull page follows for the pit: never
+  // tell somebody they cannot do a thing off a call that did not come back.
+  const pegUnusable = pegFresh === false;
+
+  // ⚠ DERIVED, NOT AN EFFECT. If the peg goes stale while this form is open,
+  // held state may still say `pegged`; every read of the mode from here down
+  // goes through this, so a dead peg can never reach `list` even then.
+  const effectiveMode: keyof typeof BNBULL_MODE =
+    pegUnusable && bnbullMode === 'pegged' ? 'off' : bnbullMode;
+
   const { data: isApproved, refetch: refetchApproval } = useReadContract({
     address: marketAddress ?? undefined,
     abi: MarketplaceAbi,
@@ -125,14 +179,14 @@ export function ListBullForm({ listedIds }: { listedIds: number[] }) {
     setRevert(null);
     const usdPrice1e18 = parseUnits(usd, 18);
     const bnbullPrice =
-      bnbullMode === 'fixed' && bnbullAmount && bnbullDecimals !== undefined
+      effectiveMode === 'fixed' && bnbullAmount && bnbullDecimals !== undefined
         ? parseUnits(bnbullAmount, bnbullDecimals)
         : 0n;
     const call = {
       address: marketAddress,
       abi: MarketplaceAbi,
       functionName: 'list' as const,
-      args: [BigInt(selected), usdPrice1e18, BNBULL_MODE[bnbullMode], bnbullPrice] as const,
+      args: [BigInt(selected), usdPrice1e18, BNBULL_MODE[effectiveMode], bnbullPrice] as const,
     };
     const pre = await preflight(call);
     if (!pre.ok) {
@@ -204,17 +258,19 @@ export function ListBullForm({ listedIds }: { listedIds: number[] }) {
             bnbull leg
           </span>
           <select
-            value={bnbullMode}
+            value={effectiveMode}
             onChange={(e) => setBnbullMode(e.target.value as keyof typeof BNBULL_MODE)}
             className="mt-1 rounded border border-bull-border bg-bull-bg px-2 py-2 text-sm"
           >
             <option value="off">off</option>
-            <option value="pegged">pegged to the sticker</option>
+            <option value="pegged" disabled={pegUnusable}>
+              pegged to the sticker{pegUnusable ? ' (not available yet)' : ''}
+            </option>
             <option value="fixed">fixed amount</option>
           </select>
         </label>
 
-        {bnbullMode === 'fixed' && (
+        {effectiveMode === 'fixed' && (
           <label className="text-xs">
             <span className="block font-mono uppercase tracking-wide text-bull-text-faint">
               bnbull amount
@@ -230,6 +286,14 @@ export function ListBullForm({ listedIds }: { listedIds: number[] }) {
           </label>
         )}
       </div>
+
+      {pegUnusable && (
+        <p className="mt-3 text-xs text-bull-text-faint">
+          there is no live bnbull price published right now, so a pegged listing could not be
+          paid in bnbull and would just sit there. take the sticker price in bnb instead. this
+          switches itself back on the moment the price keeper publishes a peg.
+        </p>
+      )}
 
       <WrongNetworkNotice className="mt-4" />
 

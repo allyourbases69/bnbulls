@@ -1352,7 +1352,12 @@ function AllowanceRow({
             ✓ {label}: {fightsAllowed} fight{fightsAllowed === 1 ? '' : 's'} allowed
           </span>
         ) : (
-          <span className="text-bull-text-faint">{label}: no fights allowed yet</span>
+          // ⚠ THIS IS AN ALLOWANCE, NOT A BAN. It read "no fights allowed
+          // yet", which sounds like the game is shut - and on the bnb leg it is
+          // flatly wrong, because your own side rides in as `msg.value` with no
+          // allowance at all (see `nativeSelfPay` above). All a zero here means
+          // is that nothing is approved in this currency yet.
+          <span className="text-bull-text-faint">{label}: nothing approved yet</span>
         )}
         {hasAny && (
           <button

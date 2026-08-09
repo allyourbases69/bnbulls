@@ -400,6 +400,39 @@ export const CURRENCY = {
    * fighting. It is rendered on `/mint` only, and it says so.
    */
   discount: 'bnbull is the only leg that carries a discount on a mint.',
+
+  /**
+   * ⚠ FIGHTING IN BNB NEEDS NOTHING SET UP. SAY IT PLAINLY AND SAY IT FIRST.
+   *
+   * `Duel._takeSide`'s native path takes YOUR side straight out of the
+   * transaction:
+   *
+   *     if (asset == address(wbnb) && owner_ == msg.sender && credit >= stake)
+   *
+   * and `_collectStakes` wraps only what that side owed and refunds the rest.
+   * So a player who starts fights needs no wbnb, no approval and no wrap, ever.
+   *
+   * This string exists because the site taught the opposite. A wrap-then-approve
+   * ladder sat in the primary slot of step 2, so every player read it as the
+   * price of entry — six mainnet wallets signed approvals they never needed, and
+   * three of them wrapped nothing, which left them approved-but-empty and
+   * unfightable. The setup below is real and worth having, but it buys ONE
+   * thing, and it is not the ability to fight.
+   */
+  fightNeedsNothing:
+    'fighting in bnb needs nothing set up. the amount rides along with the ' +
+    'transaction and the contract hands back whatever it did not need.',
+
+  /**
+   * The honest one-liner for the OPTIONAL setup, and it does not dress the
+   * mechanism up. Owner call, 2026-08-10: wbnb is not to be hidden behind a
+   * friendlier name — it is to be kept out of the normal path and explained
+   * where it genuinely applies.
+   */
+  challengeSetup:
+    'to be challenged while you are offline your side has to be pulled from an ' +
+    'allowance, and only wrapped bnb can be pulled that way. it is one for one ' +
+    'with bnb and unwraps the same way.',
 } as const;
 
 // ─── the pre-launch state (DECISIONS.md §29) ─────────────────────────

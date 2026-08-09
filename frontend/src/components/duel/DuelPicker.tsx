@@ -99,30 +99,39 @@
  *    five bulls runs five fights back to back. It is not a batch submit and
  *    nothing here pretends it is.
  *
- * 3. ⚠⚠ **BNB NEEDS AN ALLOWANCE TOO.** This was reported the other way round
- *    once and it is the most expensive thing on this page to get wrong, so it
- *    is written out in full. `Duel._takeSide`:
+ * 3. ⚠⚠ **FIGHTING IN BNB NEEDS NO ALLOWANCE, NO WBNB AND NO WRAP.** This page
+ *    spent a day teaching the opposite and it cost real players real
+ *    signatures, so the true shape is written out in full. `Duel._takeSide`:
  *
  *        // The native convenience path: only ever for the wallet that sent
  *        // the BNB, because only `msg.sender` can post value. A passive
  *        // opponent stakes by allowance, always.
  *        if (asset == address(wbnb) && owner_ == msg.sender && credit >= stake)
  *
- *    `owner_ == msg.sender` is the whole story. Raw `msg.value` covers YOUR
- *    side on a fight YOU submit. The instant somebody else picks one of your
- *    bulls you are the PASSIVE side, that branch fails, and settlement drops
- *    to the WBNB `balanceOf` + `allowance` path underneath it — reverting
- *    `StakeNotApproved` with no allowance.
+ *    `owner_ == msg.sender` is the whole story, and it cuts BOTH ways:
  *
- *    ⚠ IT USED TO FAIL SILENTLY. `/api/run-duel`'s `resolveSide` `continue`d
- *    past a side that was not `erc20Ready`, so on the old AUTO pick those bulls
- *    were never matched, never errored and never explained themselves. AUTO is
- *    gone and every unusable currency now reports a named blocker, but the
- *    underlying fact is unchanged: a player told "bnb needs no approval" still
- *    ends up with bulls nobody can pick.
+ *      · YOU START A FIGHT → you are `msg.sender`, the branch hits, and
+ *        `_collectStakes` wraps only what your side owed out of `msg.value` and
+ *        REFUNDS THE REST. Nothing to approve. Nothing to hold. Nothing to wrap.
+ *      · SOMEBODY ELSE PICKS YOUR BULL → you are the PASSIVE side, you are not
+ *        signing, the branch fails, and settlement drops to the WBNB
+ *        `balanceOf` + `allowance` path underneath. Native bnb has no allowance
+ *        primitive on any EVM chain, so this is the only way a wallet that is
+ *        not sending the transaction can be charged at all.
  *
- *    So step 2 carries an allowance block for BOTH currencies, and the gate on
- *    step 3 is deliberately NOT the same thing — see `moneyReady`.
+ *    ⚠⚠ SO THE ALLOWANCE BUYS EXACTLY ONE THING: being challengeable while you
+ *    are offline. It is OPTIONAL, it is not a step in fighting, and it must
+ *    never take the primary slot on the bnb leg. It did, for one day, as a
+ *    wrap-then-approve ladder — and six mainnet wallets signed approvals they
+ *    did not need while three of them wrapped nothing at all, which left them
+ *    approved-with-an-empty-balance and unfightable. The setup is real and
+ *    worth offering; presenting it as the price of entry was the bug.
+ *
+ *    ⚠ BNBULL IS THE OTHER WAY ROUND and that asymmetry is the reason the
+ *    ladder branches on currency rather than on a flag. Bnbull can ONLY move by
+ *    allowance, so on that leg the approval genuinely does gate your own fight.
+ *    See `approvalBlocksMyFight` and `moneyReady` — they are different questions
+ *    and step 3's gate is the second one.
  */
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
@@ -568,15 +577,13 @@ export function DuelPicker() {
   const primaryCurrencyLabel = primaryIsBnbull ? 'bnbull' : 'bnb';
 
   /**
-   * NOTHING STANDING IN THE CURRENCY YOU PICKED.
+   * NOTHING APPROVED YET IN THE CURRENCY YOU PICKED.
    *
-   * ⚠ THIS IS THE ONE APPROVAL THAT IS NOT OPTIONAL, WHICHEVER CURRENCY IT IS.
-   * On bnbull it stops you fighting at all. On bnb it does not — your own side
-   * rides in as `msg.value` — but it is the ONLY thing that lets somebody else
-   * pick one of your bulls, because `Duel._takeSide` gates the raw-bnb path on
-   * `owner_ == msg.sender` and a passive opponent stakes by allowance, always.
-   * A herd with no allowance is a herd nobody can challenge while you are
-   * offline, which is the silent failure this whole page exists to stop.
+   * ⚠ THIS IS A FACT, NOT A BLOCKER — read `approvalBlocksMyFight` below before
+   * wiring it to anything. On bnbull an empty allowance really does stop you
+   * fighting. On bnb it stops NOTHING you are trying to do here: your own side
+   * rides in as `msg.value`. All it changes on the bnb leg is whether somebody
+   * else can pick your bulls while you are offline.
    *
    * ⚠ AND IT IS NOT ASKED FOR WHEN IT WOULD CHANGE NOTHING. When the BALANCE is
    * the binding constraint, approving more buys zero extra fights, so the ladder
@@ -588,40 +595,43 @@ export function DuelPicker() {
     !primaryAllowance.limitedByBalance;
 
   /**
-   * WRAPPING IS A PREREQUISITE, NOT A TOP-UP — SO IT TAKES THE PRIMARY SLOT.
+   * ⚠⚠ THE ONE QUESTION THE STEP-2 LADDER IS ALLOWED TO ASK: does this stop the
+   * player fighting RIGHT NOW?
    *
-   * ⚠ THIS IS THE MECHANISM THAT TRAPPED EVERY WALLET ON MAINNET, and it failed
-   * in two different directions depending on whether they had approved yet:
+   * Only on bnbull, because bnbull can only ever move by allowance. On bnb the
+   * answer is always no — `Duel._takeSide` takes your side out of `msg.value`
+   * and `_collectStakes` refunds the remainder.
    *
-   *   • approved, holds nothing (0x04230AB8, 0xbafb0340, 0x613794Dc — all three
-   *     approved ~0.1655 wbnb, fifty fights' worth, holding ZERO): `fightsAllowed`
-   *     floors to 0 but `limitedByBalance` is true, so `needsFirstApproval` is
-   *     FALSE and step 2 said "nothing to sign here. step 3 is your move." Step 3
-   *     could never work. Eight bulls in the pit, not one fight possible.
-   *   • fresh wallet, holds nothing and approved nothing: `limitedByBalance` is
-   *     false (0 < 0 is false), so `needsFirstApproval` is TRUE and the loud gold
-   *     button asked for an approval over an empty balance — a real signature
-   *     that buys exactly nothing, because `Duel._takeSide` checks `balanceOf`
-   *     as well as `allowance`.
-   *
-   * Both are the same missing step. The dependency is wrap → approve → fight, so
-   * the wrap gets the primary button and the approve waits its turn.
+   * This distinction is the whole fix. The ladder used to ask "is there an
+   * allowance?" and put a gold button in front of every bnb player who did not
+   * have one, which taught six mainnet wallets that wbnb was the price of entry.
+   * Three of them approved ~0.1655 wbnb (fifty fights' worth) while holding
+   * ZERO, so `fightsAllowed` floored to 0 with `limitedByBalance` true, step 2
+   * declared itself done, and step 3 could never work. The setup was never the
+   * problem; presenting it as a prerequisite was.
    */
-  const primaryWrap = useWrapBnb(primaryIsBnbull ? undefined : primaryAllowance.token, {
-    balance: primaryAllowance.balance,
-    perFight: primaryAllowance.perFight,
-    fights: fightsWanted,
-  });
-  const wrapFirst = !primaryIsBnbull && primaryWrap.cannotCoverOne;
-  // ⚠ THERE IS DELIBERATELY NO `wantsTopUp` GATE HERE. An allowance that
-  // already covers a fight but not the whole run the player asked for is
-  // OPTIONAL, so it never takes the primary slot and never holds step 2 open.
-  // `AllowanceRow` offers it as a quiet button next to the live figure instead.
-  /** Step 2 has no signature left to collect. Fefers' `nothingWaiting`.
-   *  ⚠ `wrapFirst` BELONGS HERE. Without it step 2 closed itself as done for a
-   *  wallet holding no wbnb, which is exactly how three live wallets were told
-   *  "step 3 is your move" when step 3 could not possibly work. */
-  const nothingOutstanding = sendInIds.length === 0 && !needsFirstApproval && !wrapFirst;
+  const approvalBlocksMyFight = primaryIsBnbull && needsFirstApproval;
+
+  /**
+   * THE OPTIONAL SETUP: wrapping bnb so your bulls can be CHALLENGED offline.
+   *
+   * ⚠ IT IS NEVER THE PRIMARY BUTTON AND IT NEVER HOLDS STEP 2 OPEN. Wrapping
+   * buys exactly one thing — being pickable while you are not at the keyboard —
+   * and a player who only ever starts their own fights never needs a single wei
+   * of it. It lives under the divider, behind a disclosure that says what it is
+   * for, and `AllowanceRow` owns the control and its own `useWrapBnb` sizing.
+   *
+   * ⚠ THE STEP DELIBERATELY DOES NOT CALL `useWrapBnb` ITSELF ANY MORE. It did,
+   * to drive a primary wrap button, and that button is exactly what this change
+   * removes — a second copy of the sizing up here would only invite it back.
+   */
+  /** Has this wallet opted into being challenged at all? Drives the disclosure's
+   *  summary line, so it reads as a state rather than a chore. */
+  const challengeable = !primaryIsBnbull && primaryAllowance.fightsAllowed > 0;
+  /** ⚠ THERE IS DELIBERATELY NO `wantsTopUp` GATE HERE, and no wrap gate either.
+   *  The only signature step 2 will ever hold itself open for is one that blocks
+   *  the fight in front of the player. Everything else is offered, not demanded. */
+  const nothingOutstanding = sendInIds.length === 0 && !approvalBlocksMyFight;
 
   // ── STEP STATE ───────────────────────────────────────────────────
   const step2Done = step1Done && pitReady && moneyReady && nothingOutstanding;
@@ -800,11 +810,28 @@ export function DuelPicker() {
               /* SATISFIED, SO IT FOLDS TO ONE LINE. The two facts a player
                  actually checks stay readable; they just stop being controls. */
               <div className="flex flex-wrap items-start justify-between gap-3">
+                {/* ⚠ CURRENCY-AWARE, BECAUSE "0 fights allowed in bnb" IS A LIE
+                    BY OMISSION. On the bnb leg the allowance has nothing to do
+                    with whether the player can fight — it only decides whether
+                    OTHERS can pick their bulls — so a bare zero here read as a
+                    broken wallet on the one line step 2 leaves behind. The
+                    bnbull leg keeps the figure, because there it is the gate. */}
                 <p className="min-w-0 font-mono text-sm text-bull-text-dim">
-                  <span className="text-bull-gold">{myInPitCount}</span> of yours in {PIT.short} ·{' '}
-                  <span className="text-bull-text">{primaryAllowance.fightsAllowed}</span> fight
-                  {primaryAllowance.fightsAllowed === 1 ? '' : 's'} allowed in{' '}
-                  {primaryCurrencyLabel}
+                  <span className="text-bull-gold">{myInPitCount}</span> of yours in {PIT.short}
+                  {primaryIsBnbull ? (
+                    <>
+                      {' '}
+                      · <span className="text-bull-text">{primaryAllowance.fightsAllowed}</span>{' '}
+                      fight{primaryAllowance.fightsAllowed === 1 ? '' : 's'} allowed in{' '}
+                      {primaryCurrencyLabel}
+                    </>
+                  ) : (
+                    <>
+                      {' '}
+                      · paying in <span className="text-bull-text">bnb</span>
+                      {challengeable ? ' · challengeable while away' : ''}
+                    </>
+                  )}
                 </p>
                 <button
                   type="button"
@@ -941,8 +968,17 @@ export function DuelPicker() {
                       {/* Only quote a number somebody is actually about to sign
                           for. An allowance that already reaches the count reads
                           "already covered", not a figure nobody is being asked
-                          for. */}
-                      {primaryAllowance.covers ? (
+                          for.
+
+                          ⚠ AND ON THE BNB LEG NOBODY IS BEING ASKED FOR ONE AT
+                          ALL, so no token figure belongs here. It used to read
+                          "= 0.169560 wbnb" next to the fight count, which is the
+                          single most direct way this page told a bnb player that
+                          wbnb was what a run of fights costs. It is not: it is
+                          what the OPTIONAL challenge setup would approve, and
+                          that number belongs next to that control, which is
+                          where `AllowanceRow` puts it. */}
+                      {!primaryIsBnbull ? null : primaryAllowance.covers ? (
                         <span className="text-bull-gold">already covered</span>
                       ) : primaryAllowance.approvalTotal !== undefined ? (
                         <>
@@ -959,10 +995,9 @@ export function DuelPicker() {
                   </div>
 
                   <p className="text-[11px] text-bull-text-faint">
-                    one signature, sized for that many. the chain remembers it, so every fight
-                    after it is a single confirm until the run is used up. it is one shared pool
-                    and not a budget per bull, so the first fight by any of them draws on the
-                    lot.
+                    {primaryIsBnbull
+                      ? 'one signature, sized for that many. the chain remembers it, so every fight after it is a single confirm until the run is used up. it is one shared pool and not a budget per bull, so the first fight by any of them draws on the lot.'
+                      : 'how many you are up for in one sitting. it sizes the optional setup below, and a top-up if the price moves mid-run. paying for your own fights needs no signature at all.'}
                   </p>
                 </div>
 
@@ -984,60 +1019,19 @@ export function DuelPicker() {
                     note={PIT.enterInstant}
                     onChanged={pit.refetch}
                   />
-                ) : wrapFirst ? (
-                  /* ⚠ WRAP IS THE PRIMARY, AND APPROVE IS DELIBERATELY BELOW IT
-                     AND DISABLED. Leaving approve reachable here is precisely
-                     what let three wallets sign fifty fights' worth of
-                     permission against an empty balance and walk away thinking
-                     they were done. The order is the real dependency: wrap,
-                     then approve, then fight. */
-                  <div>
-                    <button
-                      type="button"
-                      className="bull-btn w-full whitespace-normal text-center"
-                      disabled={!primaryWrap.canWrap || primaryWrap.isWrapping}
-                      onClick={async () => {
-                        await primaryWrap.wrap(primaryWrap.amount);
-                        primaryWrap.refetch();
-                        primaryAllowance.refetch();
-                      }}
-                    >
-                      {primaryWrap.isWrapping
-                        ? 'wrapping…'
-                        : primaryWrap.canWrap
-                          ? `wrap ${formatToken(primaryWrap.amount, NATIVE_BNB_DECIMALS)} bnb → wbnb`
-                          : primaryWrap.nativeBalance === undefined
-                            ? 'checking your bnb…'
-                            : 'not enough bnb to wrap'}
-                    </button>
-                    <p className="mt-1.5 text-[11px] text-bull-text-faint">
-                      {primaryWrap.canWrap || primaryWrap.nativeBalance === undefined
-                        ? 'one fight needs wbnb sitting in the wallet, not just an approval. somebody else picking your bull pays out of an allowance, and only wrapped bnb can be pulled like that. it is one for one and unwraps the same way.'
-                        : 'this wallet needs a little more bnb first. some is always left behind for gas, because the approve and the fights after it still have to be paid for.'}
-                    </p>
-                    {needsFirstApproval && (
-                      <button
-                        type="button"
-                        disabled
-                        title="wrap first, then this"
-                        className="mt-2 w-full whitespace-normal rounded-full border border-bull-border px-3 py-1.5 text-center text-xs font-medium text-bull-text-faint opacity-50"
-                      >
-                        then approve {fightsWanted} fight{fightsWanted === 1 ? '' : 's'}
-                      </button>
-                    )}
-                    <p className="mt-1.5 text-[11px] text-bull-text-faint">
-                      {needsFirstApproval
-                        ? 'the approval comes after the wrap. signing it against an empty balance buys nothing, because a fight checks what you hold as well as what you approved.'
-                        : `you have already approved ${primaryTokenLabel}, there is just none of it in the wallet yet. the wrap above is the whole job.`}
-                    </p>
-                  </div>
-                ) : needsFirstApproval ? (
+                ) : approvalBlocksMyFight ? (
+                  /* ⚠ BNBULL ONLY. This is the one currency where an empty
+                     allowance genuinely stops the player fighting, because
+                     bnbull can only ever move by `transferFrom`. The bnb leg
+                     never reaches this branch — its own side comes out of
+                     `msg.value` — and putting it here is exactly what taught six
+                     wallets that wbnb was the price of entry. */
                   <div>
                     <button
                       type="button"
                       // ⚠ `whitespace-normal` OVERRIDES `.bull-btn`'s nowrap.
                       // This label carries a count AND an amount ("approve 50
-                      // fights · 0.169560 wbnb"), which is well past what a
+                      // fights · 12,500,000 bnbull"), which is well past what a
                       // 390px phone fits on one line.
                       className="bull-btn w-full whitespace-normal text-center"
                       disabled={
@@ -1058,15 +1052,21 @@ export function DuelPicker() {
                           } ${primaryTokenLabel}`}
                     </button>
                     <p className="mt-1.5 text-[11px] text-bull-text-faint">
-                      {primaryIsBnbull
-                        ? 'bnbull can only ever move by allowance, so this covers your own side and lets somebody else pick your bulls.'
-                        : 'paying for your own fight in bnb never needs this: the amount rides with the transaction. this is the bit that lets anybody else pick your bulls while you are offline.'}
+                      bnbull can only ever move by allowance, so this covers your own side and
+                      lets somebody else pick your bulls.
                     </p>
                   </div>
                 ) : (
-                  <p className="font-mono text-sm text-bull-text-dim">
-                    nothing to sign here. step 3 is your move.
-                  </p>
+                  /* ⚠ THE BNB PLAYER LANDS HERE WITH NOTHING TO SIGN, AND THAT IS
+                     THE CORRECT ANSWER — not a gap to fill with a wrap button. */
+                  <div className="font-mono text-sm text-bull-text-dim">
+                    <p>nothing to sign here. step 3 is your move.</p>
+                    {!primaryIsBnbull && (
+                      <p className="mt-1.5 font-sans text-[11px] text-bull-text-faint">
+                        {CURRENCY.fightNeedsNothing}
+                      </p>
+                    )}
+                  </div>
                 )}
 
                 {/* ═══ QUIET, UNDER A DIVIDER ═══════════════════════
@@ -1083,24 +1083,46 @@ export function DuelPicker() {
                       fights={fightsWanted}
                       packSize={pending.length}
                       nativeSelfPay={false}
-                      hideApprove={needsFirstApproval}
+                      hideApprove={approvalBlocksMyFight}
                       unavailable={bnbullUnusable}
                       unavailableNote={CURRENCY.bnbullPending}
                     />
                   ) : (
-                    <AllowanceRow
-                      label="bnb"
-                      tokenLabel="wbnb"
-                      allowance={bnbAllowance}
-                      decimals={wbnbDecimals}
-                      fights={fightsWanted}
-                      packSize={pending.length}
-                      nativeSelfPay
-                      wrappable
-                      hideWrap={wrapFirst}
-                      hideApprove={needsFirstApproval}
-                      unavailableNote="no bnb fight cost is registered on the duel contract yet."
-                    />
+                    /* ═══ OPT-IN, AND FOLDED BY DEFAULT ═══════════════
+                       ⚠ THE WHOLE BNB SETUP LIVES BEHIND THIS DISCLOSURE, and
+                       that placement IS the fix. It was a gold button in the
+                       primary slot yesterday, which read as the price of entry
+                       and got six wallets to sign for something none of them
+                       needed to fight. What it actually buys is one thing —
+                       your bulls being pickable while you are not here — so it
+                       is offered as that, by name, and nothing above it depends
+                       on it. Deliberately NOT deleted: async challenge is the
+                       point of the bull pit, and the owner said keep it. */
+                    <details>
+                      <summary className="cursor-pointer font-mono text-[11px] uppercase tracking-wide text-bull-text-faint">
+                        let others fight your bulls while you are away
+                        {challengeable ? ' · on' : ' · off'}
+                      </summary>
+                      <p className="mt-2 text-[11px] text-bull-text-faint">
+                        {CURRENCY.challengeSetup}
+                      </p>
+                      <p className="mt-1 text-[11px] text-bull-text-faint">
+                        you never need this to start fights yourself.
+                      </p>
+                      <div className="mt-2">
+                        <AllowanceRow
+                          label="bnb"
+                          tokenLabel="wbnb"
+                          allowance={bnbAllowance}
+                          decimals={wbnbDecimals}
+                          fights={fightsWanted}
+                          packSize={pending.length}
+                          nativeSelfPay
+                          wrappable
+                          unavailableNote="no bnb fight cost is registered on the duel contract yet."
+                        />
+                      </div>
+                    </details>
                   )}
 
                   <details>
@@ -1439,7 +1461,6 @@ function AllowanceRow({
   unavailable = false,
   unavailableNote,
   wrappable = false,
-  hideWrap = false,
 }: {
   label: string;
   tokenLabel: string;
@@ -1469,9 +1490,6 @@ function AllowanceRow({
    * up here instead of leaving for a DEX. Only the bnb row passes it.
    */
   wrappable?: boolean;
-  /** Step 2's primary control is already this exact wrap. Same reasoning as
-   *  `hideApprove`: one action, one button, never two. */
-  hideWrap?: boolean;
 }) {
   const {
     configured,
@@ -1530,7 +1548,14 @@ function AllowanceRow({
           // floored to zero and this line told them to go and approve the thing
           // they had already approved. The approval is not the problem; the empty
           // balance is, and they are different jobs with different buttons.
-          <span className="text-bull-red">{label}: approved, but no wbnb behind it</span>
+          //
+          // ⚠ RED ONLY WHERE SOMETHING IS ACTUALLY BROKEN. On the bnb leg this
+          // state costs the player nothing they were trying to do — they can
+          // still fight all day — so alarm colours here would be crying wolf
+          // about an optional feature that is simply switched off.
+          <span className={nativeSelfPay ? 'text-bull-text-faint' : 'text-bull-red'}>
+            {label}: approved, but no wbnb behind it
+          </span>
         ) : (
           // ⚠ THIS IS AN ALLOWANCE, NOT A BAN. It read "no fights allowed
           // yet", which sounds like the game is shut - and on the bnb leg it is
@@ -1566,25 +1591,34 @@ function AllowanceRow({
           `Duel._takeSide` checks `balanceOf` as well as `allowance`, so a
           wallet with fifty fights approved and no wbnb can be drawn into
           exactly none. Offering "approve" first is what let a live wallet sign
-          permission it could never use, and then leave thinking it was done. */}
-      {wrappable && shortForRun && hideWrap ? (
-        <p className="mt-2 text-[11px] text-bull-text-faint">
-          the wrap button above covers this one.
-        </p>
-      ) : null}
+          permission it could never use, and then leave thinking it was done.
 
-      {wrappable && shortForRun && !hideWrap && (
+          ⚠ THIS IS THE ONLY PLACE THE WRAP IS OFFERED NOW. It briefly also had
+          a gold twin in step 2's primary slot; that twin taught every bnb
+          player that wrapping was how you start fighting, which is false, and
+          it is gone. `hideWrap` went with it — there is no longer a second
+          control for this row to defer to. */}
+      {wrappable && shortForRun && (
         <div
           className={`mt-2 rounded border p-2.5 ${
-            cannotCoverOne ? 'border-bull-red/50 bg-bull-red/5' : 'border-bull-border'
+            cannotCoverOne && !nativeSelfPay
+              ? 'border-bull-red/50 bg-bull-red/5'
+              : 'border-bull-border'
           }`}
         >
           <p className="text-[11px] text-bull-text-dim">
             {cannotCoverOne ? (
               <>
-                <strong className="text-bull-red">no wbnb to fight with.</strong> one fight needs{' '}
-                {perFight !== undefined ? formatToken(perFight, decimals) : '—'} wbnb and this
-                wallet holds {balance !== undefined ? formatToken(balance, decimals) : '—'}.
+                {/* ⚠ "no wbnb to FIGHT with" WAS FLATLY WRONG ON THE BNB LEG and
+                    it is the sentence that sold the whole misunderstanding: this
+                    wallet can fight perfectly well, it just cannot be picked by
+                    anyone else yet. Say the thing it actually blocks. */}
+                <strong className={nativeSelfPay ? 'text-bull-text' : 'text-bull-red'}>
+                  {nativeSelfPay ? 'not set up yet.' : 'no wbnb to fight with.'}
+                </strong>{' '}
+                {nativeSelfPay ? 'being picked by someone else needs ' : 'one fight needs '}
+                {perFight !== undefined ? formatToken(perFight, decimals) : '—'} wbnb a fight and
+                this wallet holds {balance !== undefined ? formatToken(balance, decimals) : '—'}.
               </>
             ) : (
               <>

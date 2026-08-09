@@ -4,6 +4,7 @@
 export { MintDropAbi } from './MintDrop';
 export { BullsAbi } from './Bulls';
 export { DuelAbi } from './Duel';
+export { DuelNativeAbi } from './DuelNative';
 export { GraveyardAbi } from './Graveyard';
 export { JackpotAbi } from './Jackpot';
 export { MarketplaceAbi } from './Marketplace';

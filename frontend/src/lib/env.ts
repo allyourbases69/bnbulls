@@ -30,6 +30,33 @@ export const CHAIN_ID: 56 | 97 = (() => {
  *  trying to buy a bull that does not exist. */
 export const IS_TESTNET = CHAIN_ID === 97;
 
+/**
+ * True once `NEXT_PUBLIC_DUEL` points at the NATIVE-BNB duel contract rather
+ * than the original WBNB-allowance one.
+ *
+ * ⚠ THIS IS A BUILD-TIME FLAG ON PURPOSE, AND THAT IS THE WHOLE DESIGN. The
+ * obvious alternative is to sniff the deployed contract at runtime — call a
+ * view that only exists on the native flavour (`totalBnbCredit`) and branch on
+ * whether it answers. That is exactly the trap this codebase keeps re-learning:
+ * a reverting call and an RPC that simply did not answer are INDISTINGUISHABLE
+ * from the client, so a flaky endpoint would silently pick a payment path the
+ * contract does not implement. Guessing "native" against the old contract sends
+ * a player into `deposit()`, which does not exist there and reverts; guessing
+ * "legacy" against the new one offers a WBNB approval that buys nothing. Both
+ * failure modes are avoidable by simply being TOLD which contract is deployed,
+ * which is knowledge the deployer already has.
+ *
+ * Set `NEXT_PUBLIC_DUEL_NATIVE=true` in `launch-frontend.ps1` at the SAME time
+ * `NEXT_PUBLIC_DUEL` is repointed at the new address — the two are one atomic
+ * decision and must never disagree. Unset (today) the whole app keeps the
+ * existing WBNB behaviour, so this ships dormant and changes nothing until the
+ * migration lands.
+ */
+export const NATIVE_DUEL: boolean = (() => {
+  const raw = process.env.NEXT_PUBLIC_DUEL_NATIVE?.trim().toLowerCase();
+  return raw === 'true' || raw === '1';
+})();
+
 function readList(value: string | undefined): string[] {
   if (!value) return [];
   return value

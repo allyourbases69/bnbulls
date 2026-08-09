@@ -42,6 +42,14 @@ const TARGETS: Target[] = [
   { exportName: 'MintDropAbi', file: 'MintDrop.ts', artifact: 'MintDrop.sol/MintDrop.json' },
   { exportName: 'BullsAbi', file: 'Bulls.ts', artifact: 'Bulls.sol/Bulls.json' },
   { exportName: 'DuelAbi', file: 'Duel.ts', artifact: 'Duel.sol/Duel.json' },
+  // The native-BNB replacement for `Duel`. Same fight surface, but the passive
+  // side is charged from a custodied `bnbCredit` balance instead of a WBNB
+  // allowance, and payouts accrue to that balance instead of transferring a
+  // token. BOTH ABIs ship: the live contract is still the WBNB one, and the
+  // frontend picks between them off `NATIVE_DUEL` so one build serves the
+  // cutover in either direction. Drop `Duel.ts` once the migration is done and
+  // no deployment references the old contract.
+  { exportName: 'DuelNativeAbi', file: 'DuelNative.ts', artifact: 'DuelNative.sol/DuelNative.json' },
   { exportName: 'GraveyardAbi', file: 'Graveyard.ts', artifact: 'Graveyard.sol/Graveyard.json' },
   { exportName: 'JackpotAbi', file: 'Jackpot.ts', artifact: 'Jackpot.sol/Jackpot.json' },
   {

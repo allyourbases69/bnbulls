@@ -433,6 +433,41 @@ export const CURRENCY = {
     'to be challenged while you are offline your side has to be pulled from an ' +
     'allowance, and only wrapped bnb can be pulled that way. it is one for one ' +
     'with bnb and unwraps the same way.',
+
+  // ─── the native fight balance (DuelNative) ──────────────────────────
+  //
+  // ⚠ THE STRINGS BELOW ARE THE POST-MIGRATION SET AND ARE DARK UNTIL
+  // `NATIVE_DUEL` IS ON. They replace `challengeSetup` above, which describes
+  // the WBNB allowance the new contract does away with. Keep BOTH until the
+  // old duel is retired: one build serves either side of the cutover.
+
+  /** Why a balance exists at all. Same honest shape as `challengeSetup`: it
+   *  buys ONE thing, and starting fights yourself is not it. */
+  balanceSetup:
+    'to be challenged while you are offline your side has to come from money the ' +
+    'duel contract is already holding for you, because only the wallet sending a ' +
+    'transaction can put bnb in it. top up here and your bulls can be picked while ' +
+    'you are away. it is plain bnb and you can take it out whenever you like.',
+
+  /**
+   * ⚠ THE SINGLE BIGGEST TRAP OF THE MIGRATION, AND THE ONE STRING THAT
+   * DEFUSES IT. `DuelNative._distributePot` pays a winner by CREDITING the
+   * fight balance rather than sending anything — which is what stops a winner
+   * with a reverting `receive()` from reverting the whole duel. The cost is
+   * that somebody wins, opens their wallet, sees no change and concludes the
+   * game stole from them. So the winnings say where they are and how to get
+   * them, every time, on the page they were won on.
+   */
+  winningsHeld:
+    'your winnings land in your fight balance, not straight in your wallet. that is ' +
+    'what keeps one broken wallet from being able to wreck a fight for everybody. ' +
+    'take it out whenever you like.',
+
+  /** Shown next to the withdraw control. The pause point matters: players are
+   *  right to distrust a contract that can freeze their money, and this one
+   *  deliberately cannot. */
+  withdrawAlways:
+    'withdrawing is never paused. even if fights stop, your money is yours to take.',
 } as const;
 
 // ─── the pre-launch state (DECISIONS.md §29) ─────────────────────────

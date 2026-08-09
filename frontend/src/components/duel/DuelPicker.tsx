@@ -138,13 +138,15 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import Link from 'next/link';
 import { useAccount, useReadContract, useReadContracts } from 'wagmi';
 import { DuelAbi, MarketplaceAbi } from '@/lib/abi';
-import { contractAddress } from '@/lib/env';
+import { contractAddress, NATIVE_DUEL } from '@/lib/env';
 import { formatToken, formatUsd1e18, formatBps } from '@/lib/format';
 import { useRoster, type RosterBull } from '@/lib/hooks/useRoster';
 import { useTokenDecimals, NATIVE_BNB_DECIMALS } from '@/lib/hooks/useTokenDecimals';
 import { useFightAllowance, type FightAllowance } from '@/lib/hooks/useFightAllowance';
 import { useBnbullLocked } from '@/lib/hooks/useBnbullLocked';
 import { useWrapBnb } from '@/lib/hooks/useWrapBnb';
+import { useFightBalance } from '@/lib/hooks/useFightBalance';
+import { FightBalanceRow, FightBalanceBanner } from '@/components/duel/FightBalanceRow';
 import { useDismissOnOutside } from '@/lib/hooks/useDismissOnOutside';
 import { rankOpponents, pickOpponent, ratingGap } from '@/lib/matchmaking';
 import { usePitPool } from '@/lib/hooks/useYards';
@@ -400,6 +402,27 @@ export function DuelPicker() {
   );
 
   /**
+   * ⚠ THE POST-MIGRATION BNB LEG. `DuelNative` charges a passive side from a
+   * balance it custodies (`bnbCredit`) instead of pulling a WBNB allowance, so
+   * `bnbAllowance` above has nothing to describe once the new contract is live.
+   *
+   * ⚠ CALLED UNCONDITIONALLY, AND IT HAS TO BE. Hooks cannot sit behind an
+   * `if`, so this runs on both sides of the cutover; `NATIVE_DUEL` decides only
+   * what gets RENDERED. Pre-cutover it is handed `undefined` for the address,
+   * which disables every read and write inside it, so today it costs one no-op
+   * hook and touches nothing.
+   *
+   * ⚠ THE BNBULL LEG IS UNCHANGED. $BNBULL is a real ERC-20 and its passive
+   * side still moves by allowance on both contracts — only the BNB leg was ever
+   * wrapped, and only the BNB leg becomes a balance.
+   */
+  const fightBalance = useFightBalance(
+    NATIVE_DUEL ? (duelAddress ?? undefined) : undefined,
+    wbnbCost,
+    fightsWanted,
+  );
+
+  /**
    * ⚠ IS THE BNBULL LEG USABLE AT ALL RIGHT NOW?
    *
    * Every OTHER bnbull leg on the site (mint, marketplace, graveyard) can ask
@@ -626,8 +649,18 @@ export function DuelPicker() {
    * removes — a second copy of the sizing up here would only invite it back.
    */
   /** Has this wallet opted into being challenged at all? Drives the disclosure's
-   *  summary line, so it reads as a state rather than a chore. */
-  const challengeable = !primaryIsBnbull && primaryAllowance.fightsAllowed > 0;
+   *  summary line, so it reads as a state rather than a chore.
+   *
+   *  ⚠ POST-MIGRATION THE ANSWER COMES FROM THE BALANCE, NOT AN ALLOWANCE.
+   *  `DuelNative` debits a custodied balance for a passive side, so the WBNB
+   *  allowance this used to read stops meaning anything the moment the new
+   *  contract is live — a wallet with a stale approval and no balance would
+   *  otherwise still be told it is challengeable. `fightsCovered` is already
+   *  floored to 0 on an unread balance, so an unanswered read reads as "off"
+   *  rather than claiming a readiness we have not confirmed. */
+  const challengeable = NATIVE_DUEL
+    ? fightBalance.fightsCovered > 0
+    : !primaryIsBnbull && primaryAllowance.fightsAllowed > 0;
   /** ⚠ THERE IS DELIBERATELY NO `wantsTopUp` GATE HERE, and no wrap gate either.
    *  The only signature step 2 will ever hold itself open for is one that blocks
    *  the fight in front of the player. Everything else is offered, not demanded. */
@@ -1098,31 +1131,53 @@ export function DuelPicker() {
                        is offered as that, by name, and nothing above it depends
                        on it. Deliberately NOT deleted: async challenge is the
                        point of the bull pit, and the owner said keep it. */
-                    <details>
-                      <summary className="cursor-pointer font-mono text-[11px] uppercase tracking-wide text-bull-text-faint">
-                        let others fight your bulls while you are away
-                        {challengeable ? ' · on' : ' · off'}
-                      </summary>
-                      <p className="mt-2 text-[11px] text-bull-text-faint">
-                        {CURRENCY.challengeSetup}
-                      </p>
-                      <p className="mt-1 text-[11px] text-bull-text-faint">
-                        you never need this to start fights yourself.
-                      </p>
-                      <div className="mt-2">
-                        <AllowanceRow
-                          label="bnb"
-                          tokenLabel="wbnb"
-                          allowance={bnbAllowance}
-                          decimals={wbnbDecimals}
-                          fights={fightsWanted}
-                          packSize={pending.length}
-                          nativeSelfPay
-                          wrappable
-                          unavailableNote="no bnb fight cost is registered on the duel contract yet."
-                        />
-                      </div>
-                    </details>
+                    <>
+                      {/* ⚠ WINNINGS, ABOVE THE FOLD AND OUTSIDE THE DISCLOSURE.
+                          Post-migration a win CREDITS the fight balance rather
+                          than sending anything, so a player who wins and checks
+                          their wallet sees nothing. Renders itself away when
+                          there is no balance, so it is silent until it matters —
+                          but when it matters it must never be something a player
+                          has to unfold to find. */}
+                      {NATIVE_DUEL && (
+                        <div className="mb-2">
+                          <FightBalanceBanner balance={fightBalance} decimals={wbnbDecimals} />
+                        </div>
+                      )}
+                      <details>
+                        <summary className="cursor-pointer font-mono text-[11px] uppercase tracking-wide text-bull-text-faint">
+                          let others fight your bulls while you are away
+                          {challengeable ? ' · on' : ' · off'}
+                        </summary>
+                        <p className="mt-2 text-[11px] text-bull-text-faint">
+                          {NATIVE_DUEL ? CURRENCY.balanceSetup : CURRENCY.challengeSetup}
+                        </p>
+                        <p className="mt-1 text-[11px] text-bull-text-faint">
+                          you never need this to start fights yourself.
+                        </p>
+                        <div className="mt-2">
+                          {NATIVE_DUEL ? (
+                            <FightBalanceRow
+                              balance={fightBalance}
+                              decimals={wbnbDecimals}
+                              fights={fightsWanted}
+                            />
+                          ) : (
+                            <AllowanceRow
+                              label="bnb"
+                              tokenLabel="wbnb"
+                              allowance={bnbAllowance}
+                              decimals={wbnbDecimals}
+                              fights={fightsWanted}
+                              packSize={pending.length}
+                              nativeSelfPay
+                              wrappable
+                              unavailableNote="no bnb fight cost is registered on the duel contract yet."
+                            />
+                          )}
+                        </div>
+                      </details>
+                    </>
                   )}
 
                   <details>
@@ -1136,17 +1191,28 @@ export function DuelPicker() {
                     </p>
                     <div className="mt-2">
                       {primaryIsBnbull ? (
-                        <AllowanceRow
-                          label="bnb"
-                          tokenLabel="wbnb"
-                          allowance={bnbAllowance}
-                          decimals={wbnbDecimals}
-                          fights={fightsWanted}
-                          packSize={pending.length}
-                          nativeSelfPay
-                          wrappable
-                          unavailableNote="no bnb fight cost is registered on the duel contract yet."
-                        />
+                        NATIVE_DUEL ? (
+                          /* Same balance, reached from the other currency's
+                             side of the picker. One ledger per wallet, so this
+                             is the identical control, not a second one. */
+                          <FightBalanceRow
+                            balance={fightBalance}
+                            decimals={wbnbDecimals}
+                            fights={fightsWanted}
+                          />
+                        ) : (
+                          <AllowanceRow
+                            label="bnb"
+                            tokenLabel="wbnb"
+                            allowance={bnbAllowance}
+                            decimals={wbnbDecimals}
+                            fights={fightsWanted}
+                            packSize={pending.length}
+                            nativeSelfPay
+                            wrappable
+                            unavailableNote="no bnb fight cost is registered on the duel contract yet."
+                          />
+                        )
                       ) : (
                         <AllowanceRow
                           label="bnbull"

@@ -24,10 +24,10 @@
  * the two payout-param paths apart.
  */
 import { useState } from 'react';
-import { useAccount, useReadContract, useReadContracts } from 'wagmi';
+import { useAccount, useBalance, useReadContract, useReadContracts } from 'wagmi';
 import { formatUnits, parseUnits } from 'viem';
 import { JackpotAbi, Erc20Abi } from '@/lib/abi';
-import { contractAddress } from '@/lib/env';
+import { CHAIN_ID, contractAddress } from '@/lib/env';
 import { useErc20Approval } from '@/lib/hooks/useErc20Approval';
 import { useTokenDecimals, useTokenSymbol } from '@/lib/hooks/useTokenDecimals';
 import { RevertNotice } from '@/components/shared/RevertNotice';
@@ -52,16 +52,24 @@ import {
 
 const ZERO = '0x0000000000000000000000000000000000000000' as const;
 
+// WBNB is an ERC20 (Erc20Abi covers approve/allowance/balanceOf) PLUS the
+// canonical native-wrap entrypoint, which the generated Erc20Abi doesn't carry.
+const WbnbAbi = [
+  { type: 'function', name: 'deposit', stateMutability: 'payable', inputs: [], outputs: [] },
+] as const;
+
 interface PotEntry {
   label: string;
   address: `0x${string}` | null;
   fallbackSym: string;
+  /** The BNB pot is WBNB-backed, so it can offer a native-BNB auto-wrap fill. */
+  isWbnb: boolean;
 }
 
 export function AdminPots() {
   const candidates: PotEntry[] = [
-    { label: POTS.bnbull.label, address: contractAddress('jackpotBnbull'), fallbackSym: POTS.bnbull.symbolFallback },
-    { label: POTS.bnb.label, address: contractAddress('jackpotBnb'), fallbackSym: POTS.bnb.symbolFallback },
+    { label: POTS.bnbull.label, address: contractAddress('jackpotBnbull'), fallbackSym: POTS.bnbull.symbolFallback, isWbnb: false },
+    { label: POTS.bnb.label, address: contractAddress('jackpotBnb'), fallbackSym: POTS.bnb.symbolFallback, isWbnb: true },
   ];
   const pots = candidates.filter(
     (p): p is PotEntry & { address: `0x${string}` } => p.address !== null,
@@ -88,7 +96,7 @@ export function AdminPots() {
       <p className="text-xs text-bull-text-dim">{POTS.grow}</p>
       <div className="grid gap-4 lg:grid-cols-2">
         {pots.map((p) => (
-          <PotPanel key={p.address} label={p.label} address={p.address} fallbackSym={p.fallbackSym} />
+          <PotPanel key={p.address} label={p.label} address={p.address} fallbackSym={p.fallbackSym} isWbnb={p.isWbnb} />
         ))}
       </div>
     </AdminSection>
@@ -99,10 +107,12 @@ function PotPanel({
   label,
   address,
   fallbackSym,
+  isWbnb,
 }: {
   label: string;
   address: `0x${string}`;
   fallbackSym: string;
+  isWbnb: boolean;
 }) {
   const c = { abi: JackpotAbi, address } as const;
   const { data, refetch } = useReadContracts({
@@ -181,6 +191,7 @@ function PotPanel({
         decimals={decimals}
         symbol={sym}
         owner={owner}
+        isWbnbPot={isWbnb}
         onDone={doRefetch}
       />
 
@@ -212,6 +223,7 @@ function FundControl({
   decimals,
   symbol,
   owner,
+  isWbnbPot,
   onDone,
 }: {
   potAddress: `0x${string}`;
@@ -219,11 +231,16 @@ function FundControl({
   decimals: number | undefined;
   symbol: string;
   owner: `0x${string}` | undefined;
+  isWbnbPot: boolean;
   onDone: () => void;
 }) {
   const { address: wallet } = useAccount();
   const [val, setVal] = useState('');
   const [approveErr, setApproveErr] = useState<DecodedRevert | null>(null);
+  // For the WBNB-backed pot, default to the native-BNB path so an owner holding
+  // only native BNB is not stuck at "no WBNB" — the UI wraps for them. WBNB
+  // direct stays one click away. The BNBULL pot has no wrap: token-direct only.
+  const [mode, setMode] = useState<'native' | 'wbnb'>(isWbnbPot ? 'native' : 'wbnb');
 
   // Is this wallet allowed to fund this pot, and by which door?
   const { data: gate } = useReadContracts({
@@ -236,7 +253,7 @@ function FundControl({
   // topUp beats fund when you are both: it is the owner door and cannot be shut.
   const route: 'topUp' | 'fund' | null = isOwner ? 'topUp' : isFunder ? 'fund' : null;
 
-  // Balance of the prize token in the connected wallet.
+  // Balance of the prize token (WBNB / BNBULL) in the connected wallet.
   const { data: balanceRaw, refetch: refetchBalance } = useReadContract({
     address: prizeToken,
     abi: Erc20Abi,
@@ -246,7 +263,16 @@ function FundControl({
   });
   const balance = typeof balanceRaw === 'bigint' ? balanceRaw : undefined;
 
-  // Parse the typed amount at the prize token's own decimals.
+  // Native BNB balance — the source for the wrap step (native mode only).
+  const { data: nativeBal, refetch: refetchNative } = useBalance({
+    address: wallet,
+    chainId: CHAIN_ID,
+    query: { enabled: mode === 'native' && !!wallet, refetchInterval: 15_000 },
+  });
+  const nativeValue = nativeBal?.value;
+
+  // Parse the typed amount at the prize token's own decimals. WBNB and native
+  // BNB are both 18-dp, so the same figure is the wrap value AND the topUp amount.
   let amount: bigint | null = null;
   let parseErr = false;
   const raw = val.trim();
@@ -266,15 +292,34 @@ function FundControl({
     amount ?? undefined,
   );
 
+  // Native mode step 1: wrap BNB -> WBNB by sending value to WBNB.deposit().
+  const wrapTx = useAdminTx(() => {
+    refetchBalance();
+    refetchNative();
+    refetchAllowance();
+  });
+
   const fundTx = useAdminTx(() => {
     setVal('');
     refetchAllowance();
     refetchBalance();
+    refetchNative();
     onDone();
   });
 
-  const overBalance = amount !== null && balance !== undefined && amount > balance;
-  const readyToFund = amount !== null && !overBalance && !needsApproval && route !== null;
+  // In native mode the wrap step is "done" once the wallet holds enough WBNB to
+  // cover the amount (from this wrap, or WBNB it already had).
+  const haveWbnbForAmount = amount !== null && balance !== undefined && balance >= amount;
+  const needWrap = mode === 'native' && !haveWbnbForAmount;
+
+  // Affordability: native BNB gates the wrap; WBNB gates a direct WBNB send.
+  const overWbnb = mode === 'wbnb' && amount !== null && balance !== undefined && amount > balance;
+  const overNative =
+    mode === 'native' && needWrap && amount !== null && nativeValue !== undefined && amount > nativeValue;
+  const overBalance = overWbnb || overNative;
+  // Post-wrap the send draws on WBNB (already held), so native balance no longer
+  // gates it — only the WBNB-direct path is balance-gated at send time.
+  const readyToFund = amount !== null && !needWrap && !needsApproval && route !== null && !overWbnb;
 
   return (
     <div className="space-y-2 border-t border-bull-border/60 pt-3">
@@ -290,6 +335,28 @@ function FundControl({
           )}
         </div>
       </div>
+
+      {isWbnbPot && (
+        <div className="flex items-center gap-2 text-xs">
+          <span className="text-bull-text-faint">pay with</span>
+          <div className="inline-flex overflow-hidden rounded border border-bull-border">
+            <button
+              type="button"
+              onClick={() => setMode('native')}
+              className={`px-2 py-1 ${mode === 'native' ? 'bg-bull-gold/20 text-bull-gold' : 'text-bull-text-dim hover:text-bull-text'}`}
+            >
+              native BNB (auto-wrap)
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('wbnb')}
+              className={`px-2 py-1 ${mode === 'wbnb' ? 'bg-bull-gold/20 text-bull-gold' : 'text-bull-text-dim hover:text-bull-text'}`}
+            >
+              WBNB direct
+            </button>
+          </div>
+        </div>
+      )}
 
       <p className="text-xs text-bull-red">
         this only goes one way. once it is in the pool nobody can pull it back out — not you, not
@@ -324,49 +391,92 @@ function FundControl({
                 <span className="font-mono text-bull-text">fund()</span>.
               </>
             )}{' '}
-            two transactions: the pot pulls the tokens off you, so you approve it first, then send.
+            {mode === 'native'
+              ? 'three transactions: wrap your BNB to WBNB, approve the pot, then send it in.'
+              : 'two transactions: the pot pulls the WBNB off you, so you approve it first, then send.'}
           </p>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="w-28 shrink-0 text-xs text-bull-text-faint">amount · {symbol}</span>
-            <AdminInput
-              value={val}
-              onChange={(e) => setVal(e.target.value)}
-              placeholder="e.g. 1000"
-              inputMode="decimal"
-              className="w-40"
-              aria-label={`amount of ${symbol} to add to the pool`}
-            />
-            <span className="text-xs text-bull-text-faint">
-              you hold{' '}
-              <button
-                type="button"
-                className="font-mono tabular-nums text-bull-text hover:text-bull-gold"
-                title="use the lot"
-                onClick={() => {
-                  if (balance !== undefined && decimals !== undefined) setVal(formatUnits(balance, decimals));
-                }}
-              >
-                {fmtAmount(balance, decimals ?? 18)}
-              </button>{' '}
-              {symbol}
-            </span>
-          </div>
+          {(() => {
+            const unit = mode === 'native' ? 'BNB' : symbol;
+            const held = mode === 'native' ? nativeValue : balance;
+            return (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="w-28 shrink-0 text-xs text-bull-text-faint">amount · {unit}</span>
+                <AdminInput
+                  value={val}
+                  onChange={(e) => setVal(e.target.value)}
+                  placeholder={mode === 'native' ? 'e.g. 0.05' : 'e.g. 1000'}
+                  inputMode="decimal"
+                  className="w-40"
+                  aria-label={`amount of ${unit} to add to the pool`}
+                />
+                <span className="text-xs text-bull-text-faint">
+                  you hold{' '}
+                  <button
+                    type="button"
+                    className="font-mono tabular-nums text-bull-text hover:text-bull-gold"
+                    title={mode === 'native' ? 'use it all, less a little for gas' : 'use the lot'}
+                    onClick={() => {
+                      if (held === undefined || decimals === undefined) return;
+                      if (mode === 'native') {
+                        // leave a little native BNB for gas across wrap/approve/send.
+                        const reserve = 5_000_000_000_000_000n; // 0.005 BNB
+                        setVal(formatUnits(held > reserve ? held - reserve : 0n, decimals));
+                      } else {
+                        setVal(formatUnits(held, decimals));
+                      }
+                    }}
+                  >
+                    {fmtAmount(held, decimals ?? 18)}
+                  </button>{' '}
+                  {unit}
+                </span>
+              </div>
+            );
+          })()}
 
           {parseErr && (
             <p className="font-mono text-xs text-bull-red">✗ that is not an amount. e.g. 1000 or 12.5.</p>
           )}
           {overBalance && (
-            <p className="font-mono text-xs text-bull-red">✗ that is more {symbol} than this wallet holds.</p>
+            <p className="font-mono text-xs text-bull-red">
+              ✗ that is more {mode === 'native' ? 'BNB' : symbol} than this wallet holds.
+            </p>
           )}
 
+          {mode === 'native' && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={`w-28 shrink-0 text-xs ${needWrap ? 'text-bull-gold' : 'text-bull-text-faint'}`}>
+                1 · wrap
+              </span>
+              <WriteButton
+                tx={wrapTx}
+                disabled={amount === null || overNative || !needWrap}
+                onClick={() => {
+                  if (amount === null || !prizeToken) return;
+                  void wrapTx.run({ address: prizeToken, abi: WbnbAbi, functionName: 'deposit', value: amount });
+                }}
+              >
+                wrap BNB → WBNB
+              </WriteButton>
+              <span className="font-mono text-xs text-bull-text-faint">
+                {amount === null
+                  ? '—'
+                  : needWrap
+                    ? `wraps ${fmtAmount(amount, decimals ?? 18)} BNB`
+                    : `✓ you hold ${fmtAmount(balance, decimals ?? 18)} WBNB`}
+              </span>
+            </div>
+          )}
+          {mode === 'native' && <TxStatus tx={wrapTx} />}
+
           <div className="flex flex-wrap items-center gap-2">
-            <span className={`w-28 shrink-0 text-xs ${needsApproval ? 'text-bull-gold' : 'text-bull-text-faint'}`}>
-              1 · approve
+            <span className={`w-28 shrink-0 text-xs ${needsApproval && !needWrap ? 'text-bull-gold' : 'text-bull-text-faint'}`}>
+              {mode === 'native' ? '2 · approve' : '1 · approve'}
             </span>
             <button
               type="button"
-              disabled={amount === null || overBalance || !needsApproval || isApproving}
+              disabled={amount === null || overBalance || needWrap || !needsApproval || isApproving}
               onClick={async () => {
                 setApproveErr(null);
                 try {
@@ -392,7 +502,7 @@ function FundControl({
 
           <div className="flex flex-wrap items-center gap-2">
             <span className={`w-28 shrink-0 text-xs ${readyToFund ? 'text-bull-gold' : 'text-bull-text-faint'}`}>
-              2 · send it in
+              {mode === 'native' ? '3 · send it in' : '2 · send it in'}
             </span>
             <WriteButton
               tx={fundTx}
@@ -417,9 +527,11 @@ function FundControl({
             <span className="text-xs text-bull-text-faint">
               {amount === null
                 ? 'put an amount in first.'
-                : needsApproval
-                  ? 'do step 1 first, this pulls the tokens off you.'
-                  : 'no take-backs after this one lands.'}
+                : needWrap
+                  ? 'wrap to WBNB first.'
+                  : needsApproval
+                    ? 'approve first, this pulls the WBNB off you.'
+                    : 'no take-backs after this one lands.'}
             </span>
           </div>
           <TxStatus tx={fundTx} />

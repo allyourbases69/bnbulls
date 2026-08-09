@@ -54,7 +54,7 @@ export const SITE_NAME = 'BNBulls';
  * Lowercase exactly as written.
  */
 export const HERO_LINE =
-  'build a herd, send them into the yards, keep them off the truck or they face the chop';
+  'build a herd, send them into the bull pit, keep them off the truck or they face the chop';
 
 /** For <title> and link previews ONLY. Never rendered on the landing page. */
 export const TAGLINE = 'pixel bull pvp on bnb chain. real money in the middle.';

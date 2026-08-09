@@ -135,7 +135,12 @@ export function validateServerDuelEnv(): ServerDuelEnvResult {
   // key produces a signature the contract rejects.
   const rawKey =
     process.env[`BNBULLS_SIGNER_KEY_${CHAIN_ID}`]?.trim() ||
-    process.env.BNBULLS_SIGNER_KEY?.trim();
+    process.env.BNBULLS_SIGNER_KEY?.trim() ||
+    // launch hotfix (2026-08-09): the SAME trusted signer (0xe9c4..5536) serves
+    // both chains, and only BNBULLS_SIGNER_KEY_97 was set in prod. Fall back to it
+    // so chain-56 duels can be signed. TODO: set BNBULLS_SIGNER_KEY_56 in Vercel
+    // and drop this fallback.
+    process.env.BNBULLS_SIGNER_KEY_97?.trim();
   if (!rawKey) errors.push(`BNBULLS_SIGNER_KEY_${CHAIN_ID} (or BNBULLS_SIGNER_KEY)`);
 
   if (errors.length > 0) return { ok: false, errors };

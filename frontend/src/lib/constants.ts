@@ -34,3 +34,18 @@ export const QUOTE_REFRESH_MS = 20_000;
  * nudging somebody to hold a fraction of a cent more.
  */
 export const MINT_GAS_HEADROOM_WEI = 2_000_000_000_000_000n; // 0.002 BNB
+
+/**
+ * Native BNB left behind when offering to wrap into WBNB.
+ *
+ * ⚠ BIGGER THAN THE MINT HEADROOM ON PURPOSE. Wrapping is never the last
+ * transaction a player makes: after it they still have to APPROVE the duel
+ * contract, and then pay gas on every fight they start themselves. A wallet
+ * that wrapped its way down to the mint headroom would be approved, funded,
+ * fightable, and unable to buy the block space to do any of it — the same
+ * unhelpful `OutOfFunds` dead end, one step further along.
+ *
+ * 0.005 BNB is a fraction of a cent at BSC's 0.05 gwei floor and covers an
+ * approve plus a long run of fights.
+ */
+export const WRAP_GAS_RESERVE_WEI = 5_000_000_000_000_000n; // 0.005 BNB

@@ -73,6 +73,8 @@ import { useErc20Approval } from './useErc20Approval';
 export interface FightAllowance {
   /** True once we know the token and what a fight costs in it. */
   readonly configured: boolean;
+  /** The ERC-20 being approved. The bnb row needs it to offer a wrap. */
+  readonly token: `0x${string}` | undefined;
   readonly perFight: bigint | undefined;
   readonly allowance: bigint | undefined;
   readonly balance: bigint | undefined;
@@ -140,6 +142,7 @@ export function useFightAllowance(
 
   return {
     configured: !!token && priced,
+    token,
     perFight,
     allowance: current,
     balance: bal,

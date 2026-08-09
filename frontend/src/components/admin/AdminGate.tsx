@@ -59,7 +59,7 @@ function NothingHere({ children }: { children?: React.ReactNode }) {
       <div className="bull-card w-full max-w-md space-y-4 p-8 text-center">
         <div className="bull-header text-xl text-bull-text">nothing here</div>
         <p className="text-sm text-bull-text-dim">
-          this page isn&rsquo;t for your wallet. head back to the yards.
+          this page isn&rsquo;t for your wallet. head back to the bull pit.
         </p>
         {children}
         <Link href="/" className="block text-sm text-bull-gold hover:underline">

@@ -18,3 +18,19 @@ export function withCushion(due: bigint): bigint {
  *  reasoning as the cushion above: the oracle moves, so a stale quote on
  *  screen is a failed transaction waiting to happen. */
 export const QUOTE_REFRESH_MS = 20_000;
+
+/**
+ * Native BNB held back when judging whether a wallet can afford a mint.
+ *
+ * ⚠ COST ALONE IS NOT ENOUGH TO PAY. A wallet holding exactly the mint price
+ * still cannot buy the block space, so a bare `balance < cost` check passes and
+ * the transaction then fails as `OutOfFunds` — which carries no revert data and
+ * so reads as the generic "something has moved, reload and try again". That is
+ * the single most confusing near-miss on the mint page.
+ *
+ * 0.002 BNB is roughly 40x a mint's gas at BSC's 0.05 gwei floor, so it stays
+ * honest if gas spikes without ever refusing a wallet that could clearly pay.
+ * Deliberately generous: refusing one affordable mint is a worse outcome than
+ * nudging somebody to hold a fraction of a cent more.
+ */
+export const MINT_GAS_HEADROOM_WEI = 2_000_000_000_000_000n; // 0.002 BNB

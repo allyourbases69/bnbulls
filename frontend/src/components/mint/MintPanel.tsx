@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { parseEventLogs } from 'viem';
 import { useQueryClient } from '@tanstack/react-query';
-import { useAccount, useReadContract, useReadContracts, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
+import { useAccount, useBalance, useReadContract, useReadContracts, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
 import { BullsAbi, MintDropAbi } from '@/lib/abi';
 import { contractAddress, CHAIN_ID, explorerBaseUrl } from '@/lib/env';
 import { formatUsd1e18, formatToken, formatBps } from '@/lib/format';
@@ -15,7 +15,7 @@ import { NotDeployed } from '@/components/shared/NotDeployed';
 import { WrongNetworkNotice } from '@/components/shared/WrongNetwork';
 import { BullCard, BullCardLink, type BullFacts } from '@/components/bulls/BullCard';
 import { isValidBullId } from '@/lib/art/collection';
-import { withCushion, QUOTE_REFRESH_MS } from '@/lib/constants';
+import { withCushion, QUOTE_REFRESH_MS, MINT_GAS_HEADROOM_WEI } from '@/lib/constants';
 import { CURRENCY, PIT } from '@/lib/brand';
 import { usePreflight } from '@/lib/hooks/usePreflight';
 import { RevertNotice } from '@/components/shared/RevertNotice';
@@ -186,7 +186,11 @@ export function MintPanel() {
   // Short TTL, shown — the BNB leg converts through Chainlink at PAY time
   // (DECISIONS.md §1), so a quote sitting stale on screen is a failed tx
   // waiting to happen. Refetch on a clock and surface the age.
-  const { data: quote, dataUpdatedAt: quoteUpdatedAt } = useReadContract({
+  const {
+    data: quote,
+    dataUpdatedAt: quoteUpdatedAt,
+    refetch: refetchQuote,
+  } = useReadContract({
     address: mintDropAddress ?? undefined,
     abi: MintDropAbi,
     functionName: 'quote',
@@ -243,6 +247,55 @@ export function MintPanel() {
   // holds the token transfer-locked until its curve fills, so the leg is
   // present in the contract and simply not switched on. Say so, do not error.
   const bnbullUnavailable = bnbullDue === undefined || bnbullDue === 0n;
+
+  /**
+   * ⚠ RUNNING OUT OF MONEY IS NOT AN ERROR, AND IT USED TO RENDER AS ONE.
+   *
+   * A wallet that cannot cover the mint simulates as `EVM error: OutOfFunds`,
+   * which carries no revert data — so `decodeRevert` bottoms out on the generic
+   * "something has moved since this screen loaded, so reload and try again".
+   * That sentence is actively wrong here: reloading never helps, and the player
+   * is never told the one thing they could act on. So this is checked BEFORE the
+   * click and said plainly.
+   *
+   * ⚠ AGAINST COST **PLUS GAS**, not the bare cost. A wallet holding exactly the
+   * mint price still cannot pay for the block space, and that near-miss is the
+   * most confusing one of the lot.
+   */
+  const { data: nativeBalance, isError: balanceFailed } = useBalance({
+    address: account,
+    chainId: CHAIN_ID,
+    query: { enabled: !!account, refetchInterval: QUOTE_REFRESH_MS },
+  });
+  const bnbSendValue = bnbDue !== undefined ? withCushion(bnbDue) : undefined;
+  const bnbNeeded = bnbSendValue !== undefined ? bnbSendValue + MINT_GAS_HEADROOM_WEI : undefined;
+  /**
+   * true / false only once the balance and the quote have both actually landed.
+   * ⚠ ONLY a definitive shortfall disables the button. A failed or in-flight
+   * balance read leaves it alone — the same rule the marketplace peg and the
+   * bull page follow: never tell somebody they cannot do a thing off a call
+   * that did not come back.
+   */
+  const shortOfBnb: boolean =
+    asset === 'bnb' &&
+    !balanceFailed &&
+    nativeBalance !== undefined &&
+    bnbNeeded !== undefined &&
+    nativeBalance.value < bnbNeeded;
+
+  /** How many this wallet could actually pay for, for the "try N instead" nudge. */
+  const affordableCount = useMemo(() => {
+    if (!shortOfBnb || bnbDue === undefined || bnbDue === 0n || nativeBalance === undefined) {
+      return null;
+    }
+    const perBull = withCushion(bnbDue) / BigInt(count); // count >= 1 by construction
+    if (perBull === 0n) return null;
+    const spendable = nativeBalance.value > MINT_GAS_HEADROOM_WEI
+      ? nativeBalance.value - MINT_GAS_HEADROOM_WEI
+      : 0n;
+    const n = Number(spendable / perBull);
+    return n >= 1 && n < count ? n : null;
+  }, [shortOfBnb, bnbDue, nativeBalance, count]);
 
   const approvalToken = asset === 'bnbull' ? (bnbullAddress as `0x${string}` | undefined) : undefined;
   const approvalRequired = asset === 'bnbull' ? bnbullDue : undefined;
@@ -434,14 +487,39 @@ export function MintPanel() {
     if (!mintDropAddress || !account || wrongNetwork) return;
     setMintRevert(null);
 
+    /**
+     * ⚠ RE-READ THE QUOTE, DO NOT TRUST THE RENDERED ONE. The price is pegged in
+     * DOLLARS and converts through Chainlink at PAY time, so the required wei
+     * moves every block: three reads seconds apart on mainnet gave 16565116…,
+     * 16561255…, 16562411…. The number on screen was fetched up to
+     * QUOTE_REFRESH_MS ago, and longer if the tab was ever backgrounded — react
+     * -query pauses its interval there. Sending that stale figure is how an
+     * honest mint bounces on `msg.value < due`, which surfaces as the generic
+     * "something has moved since this screen loaded" and reads as a broken site.
+     *
+     * The cushion below absorbs ordinary drift; this removes the stale baseline
+     * the cushion would otherwise be applied to. A failed refetch is not fatal —
+     * fall back to the rendered value and let the preflight have the last word.
+     */
+    let freshBnbDue = bnbDue;
+    if (asset === 'bnb') {
+      try {
+        const again = await refetchQuote();
+        const row = again.data as readonly [bigint, bigint, bigint, bigint] | undefined;
+        if (row?.[1] !== undefined) freshBnbDue = row[1];
+      } catch {
+        /* keep the rendered quote; the preflight still guards the send */
+      }
+    }
+
     const call =
-      asset === 'bnb' && bnbDue !== undefined
+      asset === 'bnb' && freshBnbDue !== undefined
         ? {
             address: mintDropAddress,
             abi: MintDropAbi,
             functionName: 'mintWithBNB' as const,
             args: [account, BigInt(count)] as const,
-            value: withCushion(bnbDue),
+            value: withCushion(freshBnbDue),
           }
         : asset === 'bnbull'
           ? {
@@ -460,14 +538,14 @@ export function MintPanel() {
     }
 
     try {
-      if (asset === 'bnb' && bnbDue !== undefined) {
+      if (asset === 'bnb' && freshBnbDue !== undefined) {
         await writeContractAsync({
           address: mintDropAddress,
           abi: MintDropAbi,
           chainId: CHAIN_ID,
           functionName: 'mintWithBNB',
           args: [account, BigInt(count)],
-          value: withCushion(bnbDue),
+          value: withCushion(freshBnbDue),
         });
       } else {
         await writeContractAsync({
@@ -650,7 +728,18 @@ export function MintPanel() {
               title={bnbullUnavailable ? CURRENCY.bnbullPending : undefined}
               className={`rounded-full border px-3 py-1.5 text-xs font-medium disabled:opacity-40 ${asset === 'bnbull' ? 'border-bull-gold text-bull-gold' : 'border-bull-border text-bull-text-dim'}`}
             >
-              bnbull{bnbullDiscountBps ? ` (−${formatBps(bnbullDiscountBps)})` : ''}
+              {/* ⚠ THE LABEL ITSELF SAYS "not yet". A greyed button that still
+                  advertises a discount reads as a thing you failed to click,
+                  and players kept clicking it. The leg cannot work at all until
+                  four.meme graduates: the token is transfer-locked (`_mode()=1`)
+                  and `mintWithBNBULL` does a `transferFrom`, so it is closed,
+                  not flaky. */}
+              bnbull
+              {bnbullUnavailable
+                ? ' (not yet)'
+                : bnbullDiscountBps
+                  ? ` (−${formatBps(bnbullDiscountBps)})`
+                  : ''}
             </button>
           </div>
 
@@ -668,6 +757,36 @@ export function MintPanel() {
           </p>
 
           <WrongNetworkNotice className="mt-4" />
+
+          {/* ⚠ A CALM PROMPT, NOT AN ERROR. Running out of money is a normal
+              thing that happens to people, not a fault, and it is the one
+              failure the player can actually fix. Shown before the click so the
+              wallet never opens on a transaction that cannot pay. */}
+          {shortOfBnb && nativeBalance && bnbNeeded !== undefined && (
+            <div className="mt-4 rounded border border-bull-gold/30 bg-bull-bg px-4 py-3 text-sm text-bull-text-dim">
+              <p>
+                <strong className="bull-header text-bull-gold">not enough bnb.</strong> minting{' '}
+                {count} {count === 1 ? 'bull' : 'bulls'} costs about{' '}
+                <span className="font-mono text-bull-text">
+                  {formatToken(bnbSendValue, NATIVE_BNB_DECIMALS)}
+                </span>{' '}
+                bnb plus gas, and this wallet holds{' '}
+                <span className="font-mono text-bull-text">
+                  {formatToken(nativeBalance.value, NATIVE_BNB_DECIMALS)}
+                </span>{' '}
+                bnb. top it up and the button comes back on its own.
+              </p>
+              {affordableCount !== null && (
+                <button
+                  type="button"
+                  onClick={() => setCount(affordableCount)}
+                  className="mt-3 rounded-full border border-bull-gold px-3 py-1.5 text-xs font-medium text-bull-gold"
+                >
+                  mint {affordableCount} instead
+                </button>
+              )}
+            </div>
+          )}
 
           {!account ? (
             <p className="mt-4 text-sm text-bull-text-faint">connect a wallet to mint.</p>
@@ -693,16 +812,18 @@ export function MintPanel() {
           ) : (
             <button
               onClick={handleMint}
-              disabled={isMinting || isConfirmingMint || wrongNetwork}
+              disabled={isMinting || isConfirmingMint || wrongNetwork || shortOfBnb}
               className="bull-btn bull-btn-pulse mt-4 w-full"
             >
               {wrongNetwork
                 ? 'wrong network'
-                : isMinting || isConfirmingMint
-                  ? 'minting…'
-                  : checking
-                    ? 'checking…'
-                    : `mint ${count}`}
+                : shortOfBnb
+                  ? 'not enough bnb'
+                  : isMinting || isConfirmingMint
+                    ? 'minting…'
+                    : checking
+                      ? 'checking…'
+                      : `mint ${count}`}
             </button>
           )}
           <RevertNotice error={mintRevert} className="mt-3" />

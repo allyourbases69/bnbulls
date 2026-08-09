@@ -535,6 +535,13 @@ export const FIXED_PALETTE = {
   G: [232, 188, 62],     // gold fitting
   H: [178, 60, 48],      // accessory primary (overridden per band)
   h: [232, 220, 196],    // accessory secondary
+  // ⚠ THE SECOND ACCESSORY'S OWN PAIR. A bull can roll TWO accessories
+  // (`ACC_POOLS`), and both used to be drawn with H/h while `derivePalette`
+  // only resolved `accessories[0]` — so the second accessory silently wore the
+  // first one's colours. On legendary ['crown','shades'] that painted the
+  // shades crown-gold over a gold hide and the face vanished entirely.
+  J: [178, 60, 48],      // 2nd accessory primary
+  j: [232, 220, 196],    // 2nd accessory secondary
   V: [240, 185, 11],     // horn vein — KING ONLY, BNB gold #F0B90B
   // ⚠ NOT near-white. At [250,236,196] the streaks read as scratches or
   // bandages on the hide; two notches down they read as fat in meat, which is
@@ -568,7 +575,13 @@ const ACC_COLOURS = {
               // on a near-black hide the default dark shades vanish, so epic
               // flips them: pale steel frame, dark glint.
               shades:  [[198, 212, 232], [48, 54, 68]] },
-  legendary: { horncaps: [[240, 185, 11], [255, 228, 122]],
+  // EVERY legendary hide is a gold tone (SKINS.legendary), so the default gold
+  // crown sat within ~10/255 of the skin under it and the skull read as one
+  // blob — the `epic` shades fix above, in the opposite direction. Deep crimson
+  // with a bright gold rim separates from all six golds and ties to the cape.
+  legendary: { crown:    [[136, 26, 44], [255, 214, 92]],
+               shades:   [[32, 34, 44], [240, 185, 11]],
+               horncaps: [[240, 185, 11], [255, 228, 122]],
                boots:    [[46, 40, 26], [240, 185, 11]] },
 };
 
@@ -1045,33 +1058,39 @@ function drawWeapon(g, display) {
   }
 }
 
+// ⚠ THE COLOUR PAIR IS CHOSEN BY SLOT, NOT BY ACCESSORY. `derivePalette` loads
+// accessory 0 into H/h and accessory 1 into J/j; drawing every accessory with a
+// hardcoded "H"/"h" is what made a second accessory wear the first's colours.
 function drawAccessories(g, kinds, king = false) {
-  for (const k of kinds) {
+  for (let i = 0; i < kinds.length; i++) {
+    const k = kinds[i];
+    const P = i === 0 ? "H" : "J";
+    const S = i === 0 ? "h" : "j";
     if (k === "horncaps") {
       for (const dir of [-1, 1]) {
-        ell(g, CX + dir * 13.6, 3.6, 2.4, 2.8, "H");
-        ell(g, CX + dir * 13.6, 2.8, 1.4, 1.5, "h");
+        ell(g, CX + dir * 13.6, 3.6, 2.4, 2.8, P);
+        ell(g, CX + dir * 13.6, 2.8, 1.4, 1.5, S);
       }
     } else if (k === "ringnose") {
-      ell(g, CX, HY + 12, 3.2, 2.8, "H");
+      ell(g, CX, HY + 12, 3.2, 2.8, P);
       ell(g, CX, HY + 12, 1.8, 1.5, ".");
-      put(g, CX, HY + 9, "h");
+      put(g, CX, HY + 9, S);
     } else if (k === "bandana") {
-      rect(g, CX - 9, HY - 8, CX + 9, HY - 6, "H");
-      rect(g, CX - 9, HY - 6, CX + 9, HY - 6, "h");
-      rect(g, CX + 9, HY - 7, CX + 13, HY - 6, "H");
-      put(g, CX + 13, HY - 5, "h");
+      rect(g, CX - 9, HY - 8, CX + 9, HY - 6, P);
+      rect(g, CX - 9, HY - 6, CX + 9, HY - 6, S);
+      rect(g, CX + 9, HY - 7, CX + 13, HY - 6, P);
+      put(g, CX + 13, HY - 5, S);
     } else if (k === "shades") {
-      rect(g, CX - 9, HY - 2, CX + 9, HY - 2, "H");
-      rect(g, CX - 9, HY - 1, CX - 3, HY + 2, "H");
-      rect(g, CX + 3, HY - 1, CX + 9, HY + 2, "H");
-      put(g, CX - 8, HY, "h"); put(g, CX + 4, HY, "h");
+      rect(g, CX - 9, HY - 2, CX + 9, HY - 2, P);
+      rect(g, CX - 9, HY - 1, CX - 3, HY + 2, P);
+      rect(g, CX + 3, HY - 1, CX + 9, HY + 2, P);
+      put(g, CX - 8, HY, S); put(g, CX + 4, HY, S);
     } else if (k === "boots") {
       for (const dir of [-1, 1]) {
         const x0 = dir < 0 ? CX - 10 : CX + 2;
-        rect(g, x0, 48, x0 + 8, 54, "H");    // boot over the hoof
-        rect(g, x0, 46, x0 + 8, 47, "h");    // cuff
-        rect(g, x0 + 1, 52, x0 + 7, 52, "h"); // sole line
+        rect(g, x0, 48, x0 + 8, 54, P);    // boot over the hoof
+        rect(g, x0, 46, x0 + 8, 47, S);    // cuff
+        rect(g, x0 + 1, 52, x0 + 7, 52, S); // sole line
       }
     } else if (k === "crown" && king) {
       // THE KING'S CROWN. Taller than the legendary coronet, five points with
@@ -1079,29 +1098,29 @@ function drawAccessories(g, kinds, king = false) {
       // else in the collection can roll. It reads at thumbnail size because it
       // breaks the SILHOUETTE (`§8`: that is the only kind of tell that
       // survives a marketplace grid).
-      rect(g, CX - 7, HY - 9, CX + 7, HY - 7, "H");      // band
-      rect(g, CX - 7, HY - 7, CX + 7, HY - 7, "h");      // lower edge
+      rect(g, CX - 7, HY - 9, CX + 7, HY - 7, P);      // band
+      rect(g, CX - 7, HY - 7, CX + 7, HY - 7, S);      // lower edge
       // three BROAD points with two small ones between. Rendered against a
       // five-point version in 1px-wide points, which read as a comb or a
       // fence: at 56px a crown point needs three columns before the outline
       // stops eating it.
       for (const [dx, rise] of [[-6, 3], [0, 5], [6, 3]]) {
-        rect(g, CX + dx - 1, HY - 9 - rise, CX + dx + 1, HY - 10, "H");
-        rect(g, CX + dx - 1, HY - 9 - rise, CX + dx + 1, HY - 9 - rise, "h");
+        rect(g, CX + dx - 1, HY - 9 - rise, CX + dx + 1, HY - 10, P);
+        rect(g, CX + dx - 1, HY - 9 - rise, CX + dx + 1, HY - 9 - rise, S);
       }
       for (const dx of [-3, 3]) {
-        rect(g, CX + dx, HY - 11, CX + dx, HY - 10, "H");
-        put(g, CX + dx, HY - 11, "h");
+        rect(g, CX + dx, HY - 11, CX + dx, HY - 10, P);
+        put(g, CX + dx, HY - 11, S);
       }
     } else if (k === "crown") {
       // sits low on the brow between the horns, not up in the horn sweep.
       // ⚠ the band ran CX-6..CX+5 — one column short on the right, so a
       // crowned bull was 0.5px off its own axis of symmetry. On a pass whose
       // entire subject is centring, that is not a rounding detail.
-      for (const dx of [-5, -2, 1, 4]) rect(g, CX + dx, HY - 11, CX + dx + 1, HY - 9, "H");
-      rect(g, CX - 6, HY - 9, CX + 6, HY - 7, "H");
-      rect(g, CX - 6, HY - 7, CX + 6, HY - 7, "h");
-      put(g, CX, HY - 11, "h");
+      for (const dx of [-5, -2, 1, 4]) rect(g, CX + dx, HY - 11, CX + dx + 1, HY - 9, P);
+      rect(g, CX - 6, HY - 9, CX + 6, HY - 7, P);
+      rect(g, CX - 6, HY - 7, CX + 6, HY - 7, S);
+      put(g, CX, HY - 11, S);
     }
   }
 }
@@ -1196,10 +1215,17 @@ export function derivePalette(token) {
   if (met) { pal.M = met.M; pal.m = met.m; pal.G = met.G; }
   if (token.horn) { pal.C = token.horn[1]; pal.c = token.horn[2]; }
   if (token.accessories.length) {
+    // ⚠ EVERY ACCESSORY GETS ITS OWN COLOURS — slot 0 into H/h, slot 1 into
+    // J/j, and `drawAccessories` picks the pair by index. Resolving only
+    // `accessories[0]` made a second accessory wear the first one's palette.
     const over = ACC_COLOURS[token.band] || {};
-    const key = token.accessories[0];
-    const [Hc, hc] = over[key] || ACC_COLOURS.default[key];
-    pal.H = Hc; pal.h = hc;
+    const resolve = (key) => over[key] || ACC_COLOURS.default[key];
+    const first = resolve(token.accessories[0]);
+    if (first) { pal.H = first[0]; pal.h = first[1]; }
+    // fall back to the first pair so J/j is ALWAYS a real colour — an
+    // undefined palette char renders as background, i.e. a hole in the sprite.
+    const second = (token.accessories[1] ? resolve(token.accessories[1]) : undefined) || first;
+    if (second) { pal.J = second[0]; pal.j = second[1]; }
   }
   return pal;
 }

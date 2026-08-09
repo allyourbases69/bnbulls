@@ -117,7 +117,29 @@ export function DuelHistoryPanel() {
             </div>
           )}
 
-          {shown.length === 0 ? (
+          {history.rows.length === 0 && history.incomplete ? (
+            /* ⚠ ZERO ROWS + INCOMPLETE IS A FAILED READ, NOT AN EMPTY RECORD.
+               The log walk skips ranges an rpc refuses to serve and reports
+               `incomplete` instead of throwing — so when EVERY chunk was
+               refused (a rate-limited public node does exactly this) the data
+               arrives as "no logs, incomplete". Rendering the quiet-pit line
+               for that state told a rate-limited phone the game had never had
+               a fight. Zero rows is only allowed to read as "quiet" when the
+               scan actually covered the record. */
+            <div className="mt-6 rounded border border-bull-border bg-bull-panel px-4 py-3 text-sm text-bull-text-dim">
+              <p>
+                couldn&apos;t read enough of the chain to show the record just now. that is
+                this page being rate-limited by an rpc, not an empty record.
+              </p>
+              <button
+                type="button"
+                onClick={history.refetch}
+                className="mt-3 rounded-full border border-bull-gold px-3 py-1.5 text-xs font-medium text-bull-gold"
+              >
+                try again
+              </button>
+            </div>
+          ) : shown.length === 0 ? (
             <div className="mt-6 rounded border border-bull-border bg-bull-panel px-4 py-6 text-center">
               <p className="text-sm text-bull-text-dim">
                 {filter === 'mine' ? PIT.noneOfMineFought : PIT.quiet}

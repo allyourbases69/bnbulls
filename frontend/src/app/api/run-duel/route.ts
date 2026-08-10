@@ -54,7 +54,6 @@ import {
   createPublicClient,
   getAddress,
   hashTypedData,
-  http,
   isAddress,
   keccak256,
   toHex,
@@ -65,7 +64,12 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { randomBytes } from 'node:crypto';
 import { BullsAbi, DuelAbi, DuelNativeAbi, Erc20Abi, MarketplaceAbi, YardsAbi } from '@/lib/abi';
 import { NATIVE_DUEL } from '@/lib/env';
-import { validateServerDuelEnv, serverChain, duelExpirySeconds } from '@/lib/serverEnv';
+import {
+  validateServerDuelEnv,
+  serverChain,
+  serverTransport,
+  duelExpirySeconds,
+} from '@/lib/serverEnv';
 import { checkSessionTerms, SESSION_ERROR } from '@/lib/duelSession';
 import {
   MemoryCommitStore,
@@ -685,9 +689,16 @@ export async function POST(request: Request) {
     );
   }
   const env = v.env;
+  // ⚠ THE POOL, NOT ONE URL. This signs real money, and it used to hang its
+  // whole existence on `NEXT_PUBLIC_RPC_URL` entry [0] — one endpoint changing
+  // policy or going down took fighting offline with it. That is not
+  // hypothetical: the same single-url client in `duelReplaySource.ts` is what
+  // killed every replay on 2026-08-10 when publicnode started refusing
+  // receipts. `serverTransport` steps to the next endpoint on a refusal, and
+  // every read here is a plain head read that all four can serve.
   const client = createPublicClient({
     chain: serverChain(env),
-    transport: http(env.rpcUrl),
+    transport: serverTransport(env.rpcUrls),
   }) as PublicClient;
 
   let signerAccount;

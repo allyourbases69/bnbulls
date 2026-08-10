@@ -28,10 +28,31 @@
  * a **409**. The usual cause is an RPC that cannot serve state that far back
  * (public BSC endpoints keep a rolling window), in which case the honest answer
  * is "no replay for this one", not a fight that never happened.
+ *
+ * ═══════════════════════════════════════════════════════════════════════
+ * ⚠ THIS ROUTE NEEDS THINGS THE REST OF THE SITE DOES NOT. READ serverEnv.
+ * ═══════════════════════════════════════════════════════════════════════
+ * It is the ONLY caller of `eth_getTransactionReceipt` in the codebase, and
+ * the only one that ever asks for state at an OLD block. Those are exactly the
+ * two things free BSC endpoints differ on, and they differ silently: on
+ * 2026-08-10 every replay on the live site failed because the server was built
+ * on `NEXT_PUBLIC_RPC_URL` entry [0] (publicnode), which serves `eth_getLogs`
+ * beautifully for the browser and 403s every single receipt. Fights were being
+ * signed, settled and listed the whole time. Nothing else asks for a receipt,
+ * so nothing else noticed.
+ *
+ * Build the client with `serverTransport(env.rpcUrls)` and never with a single
+ * `http()`. That table of what each endpoint actually answers lives in
+ * `lib/serverEnv.ts` next to the pool order it justifies.
  */
-import { createPublicClient, http, parseEventLogs, type Address, type PublicClient } from 'viem';
+import { createPublicClient, parseEventLogs, type Address, type PublicClient } from 'viem';
 import { BullsAbi, DuelAbi } from '@/lib/abi';
-import { validateServerDuelEnv, serverChain } from '@/lib/serverEnv';
+import {
+  validateServerDuelEnv,
+  serverChain,
+  serverTransport,
+  hasPrivateRpc,
+} from '@/lib/serverEnv';
 import { readBullAt } from '@/lib/bullOnchain';
 import { simulateFight } from '@/sim/combat';
 import { startingHp } from '@/core/stats';
@@ -81,7 +102,24 @@ export type ReplaySource =
   | { readonly ok: true; readonly input: ReplayInput; readonly meta: ReplayMeta }
   | {
       readonly ok: false;
-      readonly reason: 'config' | 'not-found' | 'no-duel' | 'rpc' | 'mismatch';
+      /**
+       * ⚠ `mismatch` AND `unverifiable` ARE NOT THE SAME ACCUSATION.
+       *
+       * `mismatch` means both bulls were read as they stood BEFORE the bell and
+       * the re-run still landed somewhere else. That is a real disagreement
+       * with the chain and it deserves the loud sentence.
+       *
+       * `unverifiable` means the re-run disagreed but the fighters had to be
+       * read as they stand NOW, because no endpoint here would serve their
+       * state at the fight block. A bull that has levelled since fights with
+       * different hp, so the re-run swings differently and lands somewhere
+       * else, and the fight it is "disagreeing" with is perfectly sound.
+       * Calling that "this one does not add up" is telling a player their money
+       * might be fake because our reader is on a free rpc. Still no picture,
+       * because an unproven replay is not worth showing — but a different
+       * sentence, and one that blames the right party.
+       */
+      readonly reason: 'config' | 'not-found' | 'no-duel' | 'rpc' | 'mismatch' | 'unverifiable';
       readonly detail: string;
     };
 
@@ -96,9 +134,14 @@ export async function replayInputFromChain(req: ReplaySourceRequest): Promise<Re
     return { ok: false, reason: 'config', detail: v.errors.join('; ') };
   }
   const env = v.env;
+  // ⚠ THE WHOLE POOL, NOT `http(env.rpcUrls[0])`. Entry [0] used to be
+  // publicnode, which 403s EVERY `eth_getTransactionReceipt` as an "archive
+  // request" — so the very first line of every replay failed and the site
+  // answered "the chain did not answer" for fights that were plainly on chain
+  // and plainly settling fine. See `serverEnv.serverRpcUrls`.
   const client = createPublicClient({
     chain: serverChain(env),
-    transport: http(env.rpcUrl),
+    transport: serverTransport(env.rpcUrls),
   }) as PublicClient;
 
   // ── the event ──
@@ -120,14 +163,20 @@ export async function replayInputFromChain(req: ReplaySourceRequest): Promise<Re
       return {
         ok: false,
         reason: 'not-found',
-        detail: `no transaction ${req.txHash} on chain ${env.chainId}`,
+        detail:
+          'no node has that transaction on bnb chain yet. if the fight only just ' +
+          'landed, give it a second and go again.',
       };
     }
     return { ok: false, reason: 'rpc', detail: msg };
   }
 
   if (!logs.length) {
-    return { ok: false, reason: 'no-duel', detail: `tx ${req.txHash} emitted no DuelCompleted` };
+    return {
+      ok: false,
+      reason: 'no-duel',
+      detail: 'that transaction is on chain, but no fight was settled in it.',
+    };
   }
   const chosen =
     req.logIndex === null || req.logIndex === undefined
@@ -137,7 +186,7 @@ export async function replayInputFromChain(req: ReplaySourceRequest): Promise<Re
     return {
       ok: false,
       reason: 'no-duel',
-      detail: `tx ${req.txHash} has no DuelCompleted at log index ${req.logIndex}`,
+      detail: `that transaction settled a fight, but not one at log ${req.logIndex}.`,
     };
   }
 
@@ -152,7 +201,9 @@ export async function replayInputFromChain(req: ReplaySourceRequest): Promise<Re
     return {
       ok: false,
       reason: 'no-duel',
-      detail: `tx ${req.txHash} names token ids outside the collection (${tokenA}, ${tokenB})`,
+      detail:
+        `that fight names bulls outside the collection (${tokenA}, ${tokenB}), so it ` +
+        'is not one of ours.',
     };
   }
 
@@ -175,17 +226,29 @@ export async function replayInputFromChain(req: ReplaySourceRequest): Promise<Re
       }) as Promise<number>,
     ]);
 
+  // ⚠ ONLY ASK FOR PINNED STATE IF SOMETHING CAN ACTUALLY SERVE IT. Not one
+  // free public BSC endpoint can (`serverEnv.hasPrivateRpc` lists what each
+  // one answers instead), so without a private archive url this attempt is a
+  // guaranteed loss of four reads across four endpoints, with viem's retries
+  // on top, while a player watches a spinner. Skipping straight to head state
+  // is the same ANSWER, several seconds sooner — and `statePinned: false` says
+  // out loud that it was the fallback, which the mismatch sentence below then
+  // uses to explain itself.
   let reads;
-  let statePinned = true;
-  try {
-    reads = await readAt(blockNumber - 1n);
-  } catch {
-    // Past the RPC's state window. Head state usually still replays correctly
-    // (stats never change and levels move slowly), and the verification below
-    // is what decides whether it actually did.
+  let statePinned = hasPrivateRpc();
+  if (statePinned) {
+    try {
+      reads = await readAt(blockNumber - 1n);
+    } catch {
+      // Past this endpoint's state window after all. Head state usually still
+      // replays correctly (stats never change and levels move slowly), and the
+      // verification below is what decides whether it actually did.
+      statePinned = false;
+    }
+  }
+  if (!reads) {
     try {
       reads = await readAt(undefined);
-      statePinned = false;
     } catch (e) {
       return { ok: false, reason: 'rpc', detail: e instanceof Error ? e.message : String(e) };
     }
@@ -212,14 +275,16 @@ export async function replayInputFromChain(req: ReplaySourceRequest): Promise<Re
   if (fight.winnerId !== expectWinner || fight.rounds !== loggedRounds) {
     return {
       ok: false,
-      reason: 'mismatch',
-      detail:
-        `replay disagrees with the chain: got winner ${fight.winnerId ?? 'draw'} in ` +
-        `${fight.rounds} round(s), event says ${expectWinner ?? 'draw'} in ${loggedRounds}. ` +
-        (statePinned
-          ? 'fighter state was read pre-fight, so this is a real divergence.'
-          : 'fighter state came from head because the rpc could not serve the fight block ' +
-            '— that is the likely cause.'),
+      // See the union above: only a PINNED re-run may accuse the chain.
+      reason: statePinned ? 'mismatch' : 'unverifiable',
+      detail: statePinned
+        ? `re-run gives winner ${fight.winnerId ?? 'draw'} in ${fight.rounds} round(s), ` +
+          `the chain recorded ${expectWinner ?? 'draw'} in ${loggedRounds}. both bulls were ` +
+          'read as they stood before the bell, so this is a real disagreement.'
+        : 'no node here would serve these bulls as they stood at the fight block, so the ' +
+          're-run had to use them as they stand now, and it landed somewhere else. the fight ' +
+          'itself is on chain and settled. we just cannot prove this one back to you, and we ' +
+          'will not draw a fight we cannot prove.',
     };
   }
 

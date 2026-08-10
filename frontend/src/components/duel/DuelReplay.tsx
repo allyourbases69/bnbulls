@@ -60,7 +60,8 @@ export function duelReplayUrl(txHash: string, logIndex?: number | null): string 
  *
  * ⚠ `mismatch` IS NOT IN HERE AND MUST NEVER BE. A 409 is a settled answer, not
  * a slow one, and retrying it would just burn the server's cpu re-proving the
- * same disagreement.
+ * same disagreement. Nor is `unverifiable`: that one is settled too, just by
+ * our rpc's reach rather than by the chain, and no number of retries widens it.
  */
 const TRANSIENT_REASONS: ReadonlySet<string> = new Set(['not-found', 'no-duel', 'rpc']);
 const RETRY_MS = 2_500;
@@ -204,11 +205,32 @@ function Loading() {
 /**
  * A refusal, in words.
  *
+ * ⚠ THREE DIFFERENT THINGS GO WRONG HERE AND THEY ARE NOT THE SAME NEWS.
+ * Every one of them used to print "NO REPLAY FOR THIS ONE", which meant a
+ * player could not tell "our reader fell over, your fight is fine" from "that
+ * transaction has no fight in it" from "the re-run disagreed with the chain".
+ * On a site about somebody's money the difference between "we broke" and "your
+ * fight might not be real" is the entire message, so the heading now names
+ * which one it is.
+ *
  * ⚠ THE 409 GETS ITS OWN SENTENCE, and it is not an apology. It is the one
  * failure that means the system worked: the replay was re-run from the signed
  * seed, it did not match what the chain recorded, and it refused to draw a
  * fight that never happened.
  */
+const HEADINGS: Record<string, string> = {
+  mismatch: 'this one does not add up',
+  // Not an accusation. Our reader could not see far enough back to prove it.
+  unverifiable: 'we cannot prove this one',
+  // Our end. The fight is settled on chain either way.
+  rpc: 'the chain went quiet on us',
+  config: 'replays are off here',
+  // The chain's answer, not a failure: there is no fight at that hash.
+  'not-found': 'nothing settled at that hash',
+  'no-duel': 'no fight in that one',
+  render: 'that one would not draw',
+};
+
 function Refusal({
   message,
   reason,
@@ -219,11 +241,12 @@ function Refusal({
   onRetry?: () => void;
 }) {
   const mismatch = reason === 'mismatch';
+  // Neither verdict gets better by asking again, so neither offers the button.
+  const settled = mismatch || reason === 'unverifiable';
+  const heading = (reason && HEADINGS[reason]) || 'no replay for this one';
   return (
     <div className="space-y-2 py-6 text-center">
-      <p className="bull-header text-xs uppercase tracking-wider text-bull-gold">
-        {mismatch ? 'this one does not add up' : 'no replay for this one'}
-      </p>
+      <p className="bull-header text-xs uppercase tracking-wider text-bull-gold">{heading}</p>
       {mismatch && (
         <p className="mx-auto max-w-md text-sm text-bull-text-dim">
           the fight was re-run from its own seed and it did not land on the same winner the
@@ -231,10 +254,8 @@ function Refusal({
           not the decoration, and a pretty lie is worse than no picture.
         </p>
       )}
-      <p className="mx-auto max-w-md break-words font-mono text-xs text-bull-text-faint">
-        {message}
-      </p>
-      {onRetry && !mismatch && (
+      <p className="mx-auto max-w-md break-words text-sm text-bull-text-dim">{message}</p>
+      {onRetry && !settled && (
         <button
           type="button"
           onClick={onRetry}

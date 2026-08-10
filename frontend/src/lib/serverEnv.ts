@@ -16,7 +16,7 @@
  * here**: an unset var yields `null` and the route answers with an honest
  * "not deployed" rather than pointing at a placeholder.
  */
-import { defineChain, type Chain } from 'viem';
+import { defineChain, fallback, http, type Chain, type Transport } from 'viem';
 import { CHAIN_ID, contractAddress, rpcUrls } from './env';
 
 /**
@@ -87,9 +87,119 @@ function assertServerOnly(): void {
   }
 }
 
+/**
+ * Endpoints only the SERVER may talk to, best first.
+ *
+ * ⚠ DELIBERATELY **NOT** `NEXT_PUBLIC_`. A keyed archive url is a credential:
+ * anything with the `NEXT_PUBLIC_` prefix is inlined into the client bundle at
+ * build time (`lib/env.ts` explains the mechanism), so putting the key there
+ * would hand it to every visitor and the bill would arrive by morning. This is
+ * read at REQUEST time inside a `runtime = 'nodejs'` route and never leaves the
+ * server.
+ *
+ * Comma-separated, so a spare can be listed behind the primary. Unset is a
+ * supported state: the public pool below still answers, it just cannot serve
+ * pre-fight state (see `hasPrivateRpc`).
+ */
+function privateRpcUrls(): string[] {
+  const raw =
+    process.env[`BNBULLS_RPC_URL_${CHAIN_ID}`]?.trim() ||
+    process.env.BNBULLS_RPC_URL?.trim() ||
+    '';
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
+/**
+ * True when a private endpoint is configured, which is the only realistic way
+ * to read state at an OLD block. Every free public BSC endpoint refuses:
+ * measured 2026-08-10, the dataseeds answer `-32000 missing trie node` and
+ * publicnode answers `403 Archive requests require a personal token`.
+ *
+ * The replay path uses this to decide whether attempting a pinned read is worth
+ * it at all. Without it the attempt is not merely slow, it is 4 reads x 4 dead
+ * endpoints x viem's retries before it can give up and fall back to head state,
+ * on a route a player is sitting and waiting on.
+ */
+export function hasPrivateRpc(): boolean {
+  return privateRpcUrls().length > 0;
+}
+
+/**
+ * ⚠ THE SERVER'S RPC POOL IS NOT THE BROWSER'S, AND THAT IS THE WHOLE BUG THIS
+ * FUNCTION EXISTS TO FIX.
+ *
+ * Both halves used to share `rpcUrls()` from `lib/env.ts` and both took entry
+ * [0] — `https://bsc-rpc.publicnode.com`. That endpoint is genuinely the best
+ * of the free four **for what the browser does**: it is the only one that will
+ * serve a wide `eth_getLogs`, which is what `/history`, the graveyard and the
+ * pots need, and it was picked for exactly that reason on launch day.
+ *
+ * But it classifies `eth_getTransactionReceipt` as an ARCHIVE request and 403s
+ * it, unconditionally, even for a transaction in the head block. Measured
+ * 2026-08-10 against a real duel:
+ *
+ *   endpoint                    getLogs(wide)   getTransactionReceipt   call@old
+ *   bsc-rpc.publicnode.com      ok (~7k back)   403 archive-token       403
+ *   bsc.drpc.org                ok when calm    429 public rate limit   500
+ *   bsc-dataseed1.defibit.io    -32005          ok                      -32000
+ *   bsc-dataseed.bnbchain.org   -32005          ok                      -32000
+ *   private/archive (below)     (key-capped)    ok                      ok
+ *
+ * `getTransactionReceipt` is used in exactly ONE place in this codebase —
+ * `lib/duelReplaySource.ts`, the first thing a replay does — so publicnode's
+ * one gap took out the replay of every fight ever, on a site where 100% of
+ * fights were being signed and settled perfectly. Nothing else noticed,
+ * because nothing else asks for a receipt.
+ *
+ * So the order here is the MEASURED order for what the server actually does,
+ * not a copy of the browser's:
+ *   1. the private endpoint, if configured — the only one that can do both
+ *   2. the two dataseeds — they serve receipts, and that is what a replay needs
+ *   3. publicnode — a working head-state read if the dataseeds go down
+ *   4. drpc — last, it spends most of the day rate-limited
+ *
+ * `serverTransport` wraps this in viem's `fallback`, so a refusal at one entry
+ * steps to the next instead of ending the request. A single `http()` cannot do
+ * that, and a single `http()` is what shipped.
+ */
+export function serverRpcUrls(): string[] {
+  const all = [
+    ...privateRpcUrls(),
+    'https://bsc-dataseed1.defibit.io',
+    'https://bsc-dataseed.bnbchain.org',
+    ...rpcUrls(),
+  ];
+  return all.filter((u, i) => all.indexOf(u) === i);
+}
+
+/**
+ * One client transport over the whole pool.
+ *
+ * ⚠ `fallback` ADVANCES ON A REFUSAL, WHICH IS THE POINT. viem only rethrows
+ * immediately for a rejected transaction or a rejected wallet prompt; a 403, a
+ * 429 or a `-32005` walks to the next endpoint. That is what turns "publicnode
+ * will not serve receipts" from an outage into a shrug.
+ *
+ * `retryCount: 1` because this pool already has four ways to be right. The
+ * default of 3 re-walks the ENTIRE list three more times when every entry
+ * fails, which on a player-facing route is a minute of nothing.
+ */
+export function serverTransport(urls: readonly string[] = serverRpcUrls()): Transport {
+  return fallback(
+    urls.map((u) => http(u)),
+    { retryCount: 1 },
+  );
+}
+
 export interface ServerDuelEnv {
   readonly chainId: number;
-  readonly rpcUrl: string;
+  /** The pool, best first. Build a client with `serverTransport(env.rpcUrls)` —
+   *  never `http(urls[0])`, which is the single point of failure that broke
+   *  every replay on 2026-08-10. */
+  readonly rpcUrls: readonly string[];
   readonly bullsAddress: `0x${string}`;
   readonly duelAddress: `0x${string}`;
   /* ⚠ NO `mintDropAddress` HERE ANY MORE. The signer used to read
@@ -120,9 +230,8 @@ export function validateServerDuelEnv(): ServerDuelEnvResult {
 
   const errors: string[] = [];
 
-  const urls = rpcUrls();
-  const rpcUrl = urls[0];
-  if (!rpcUrl) errors.push('NEXT_PUBLIC_RPC_URL (no usable rpc endpoint)');
+  const urls = serverRpcUrls();
+  if (urls.length === 0) errors.push('NEXT_PUBLIC_RPC_URL (no usable rpc endpoint)');
 
   const bullsAddress = contractAddress('bullsNft');
   if (!bullsAddress) errors.push('NEXT_PUBLIC_BULLS_NFT');
@@ -154,7 +263,7 @@ export function validateServerDuelEnv(): ServerDuelEnvResult {
     ok: true,
     env: {
       chainId: CHAIN_ID,
-      rpcUrl: rpcUrl!,
+      rpcUrls: urls,
       bullsAddress: bullsAddress!,
       duelAddress: duelAddress!,
       marketplaceAddress: contractAddress('marketplace'),
@@ -163,14 +272,22 @@ export function validateServerDuelEnv(): ServerDuelEnvResult {
   };
 }
 
-/** The chain the server talks to. Mirrors `lib/chain.ts` but takes the single
- *  primary rpc, because a server route has no wallet to fall back through. */
+/**
+ * The chain the server talks to. Mirrors `lib/chain.ts`, but carries the
+ * SERVER pool rather than the browser one — see `serverRpcUrls` for why the two
+ * are ordered differently.
+ *
+ * ⚠ The url list on a `Chain` is only a default for a client built without an
+ * explicit transport. It is NOT a fallback: a client built with `http(one_url)`
+ * talks to that one url and nothing else, no matter what this says. Pair it
+ * with `serverTransport()`.
+ */
 export function serverChain(env: ServerDuelEnv): Chain {
   return defineChain({
     id: env.chainId,
     name: 'BNB Smart Chain',
     nativeCurrency: { name: 'BNB', symbol: 'BNB', decimals: 18 },
-    rpcUrls: { default: { http: rpcUrls() } },
+    rpcUrls: { default: { http: [...env.rpcUrls] } },
     testnet: false,
   });
 }

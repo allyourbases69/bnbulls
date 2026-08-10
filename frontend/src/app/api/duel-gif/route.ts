@@ -83,6 +83,10 @@ const STATUS: Record<string, number> = {
   // The one that matters: the replay and the chain disagree, so there is no
   // honest picture to serve.
   mismatch: 409,
+  // Disagreed, but off unpinned state, so it proves nothing either way. 422,
+  // not 409: a 409 in a log is a claim that the chain and the sim conflict, and
+  // this is a claim that we could not read well enough to say.
+  unverifiable: 422,
 };
 
 export async function GET(request: Request) {
@@ -138,8 +142,15 @@ export async function GET(request: Request) {
       {
         error: internal
           ? src.reason === 'rpc'
-            ? 'the chain did not answer just now. try again shortly.'
-            : 'this server is not configured to serve replays yet.'
+            ? // ⚠ SAY WHOSE FAULT IT IS. The old sentence was "the chain did not
+              // answer just now", which reads as "your fight might not be real"
+              // and is the opposite of true: the fight is settled and on chain,
+              // and it is our reader that fell over. A player who cannot tell a
+              // broken read from a missing fight has to assume the worst about
+              // their money.
+              'we could not get an answer out of a node just now. the fight is settled ' +
+              'and sitting on chain, this bit is our end. give it a moment and go again.'
+            : 'replays are not switched on for this deployment yet.'
           : src.detail,
         reason: src.reason,
       },

@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import { ChainReadFailed } from './ChainReadFailed';
 import { explorerBaseUrl } from '@/lib/env';
 import { formatDuration, formatToken, formatUsd1e18, shortAddr } from '@/lib/format';
 import { usePotDeposits } from '@/lib/hooks/usePotDeposits';
@@ -76,36 +77,14 @@ export function PotDepositFeed({
       {isLoading ? (
         <p className="mt-4 text-sm text-bull-text-dim">reading the chain…</p>
       ) : isError || !data ? (
-        <FailedRead message={error instanceof Error ? error.message : null} onRetry={() => void refetch()} />
+        <ChainReadFailed
+          message={error instanceof Error ? error.message : null}
+          onRetry={() => void refetch()}
+        />
       ) : (
         <Loaded data={data} showAll={showAll} onShowAll={() => setShowAll(true)} refreshing={isFetching} />
       )}
     </section>
-  );
-}
-
-/**
- * ⚠ THIS IS NOT "no deposits yet", AND IT MUST NEVER READ LIKE IT. A read that
- * failed and a pot that is empty are completely different facts, and the only
- * one of them that is ever an accusation is the one we would be making by
- * accident.
- */
-function FailedRead({ message, onRetry }: { message: string | null; onRetry: () => void }) {
-  return (
-    <div className="mt-4 rounded border border-bull-border bg-black/20 p-3">
-      <p className="text-sm text-bull-text">we could not read the chain just now.</p>
-      <p className="mt-1 text-xs text-bull-text-faint">
-        this is a problem at our end, not an empty pot. the deposits are all still on chain.
-        {message ? ` (${message})` : ''}
-      </p>
-      <button
-        type="button"
-        onClick={onRetry}
-        className="mt-2 rounded-full border border-bull-gold px-3 py-1 font-mono text-[11px] uppercase tracking-wide text-bull-gold hover:bg-bull-gold/10"
-      >
-        try again
-      </button>
-    </div>
   );
 }
 

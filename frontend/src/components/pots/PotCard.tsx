@@ -1,6 +1,7 @@
 'use client';
 
 import { useReadContract } from 'wagmi';
+import { ChainReadFailed } from './ChainReadFailed';
 import { JackpotAbi, JackpotNativeAbi } from '@/lib/abi';
 import {
   contractAddress,
@@ -12,6 +13,7 @@ import {
 import { formatToken, shortAddr } from '@/lib/format';
 import { tickerToPrint, useTokenDecimals, useTokenSymbol } from '@/lib/hooks/useTokenDecimals';
 import { useJackpotAwards } from '@/lib/hooks/useJackpotAwards';
+import { awardCompleteness, type JackpotAwardsPayload } from '@/lib/jackpotAwards';
 import { QUOTE_REFRESH_MS } from '@/lib/constants';
 
 export function PotCard({
@@ -104,7 +106,14 @@ export function PotCard({
    *  number. Empty is the correct render while we are still asking. */
   const unit = symbol ? ` ${symbol}` : '';
 
-  const { awards, isLoading: loadingAwards, incomplete } = useJackpotAwards(name);
+  /**
+   * ⚠ THREE STATES, NEVER TWO. Real payouts, a pot nobody has hit yet, and a
+   * read that failed are three different facts and the card renders three
+   * different things. This list used to sweep logs from the browser and sit on
+   * "loading…" forever, on both pots, for every visitor — see `useJackpotAwards`
+   * and `lib/serverLogs.ts` for why that was never going to work.
+   */
+  const awardsRead = useJackpotAwards(name);
 
   /**
    * PRE-LAUNCH: the real card, at zero.
@@ -212,42 +221,107 @@ export function PotCard({
       <p className="mt-4 font-mono text-xs uppercase tracking-wide text-bull-text-faint">
         recent awards
       </p>
-      {loadingAwards ? (
-        <p className="mt-2 text-sm text-bull-text-dim">loading…</p>
-      ) : awards.length === 0 ? (
-        <p className="mt-2 text-sm text-bull-text-dim">none yet.</p>
+      {awardsRead.isLoading ? (
+        <p className="mt-2 text-sm text-bull-text-dim">reading the chain…</p>
+      ) : awardsRead.isError || !awardsRead.data ? (
+        <ChainReadFailed
+          className="mt-2"
+          message={awardsRead.error instanceof Error ? awardsRead.error.message : null}
+          onRetry={awardsRead.refetch}
+        />
       ) : (
-        <ul className="mt-2 space-y-1.5 text-sm">
-          {awards.slice(0, 8).map((a) => (
-            <li key={`${a.txHash}-${a.ticketId}`} className="flex items-center justify-between gap-2">
-              <a
-                href={`${explorer}/tx/${a.txHash}`}
-                target="_blank"
-                rel="noreferrer noopener"
-                className="font-mono text-xs text-bull-text-dim hover:text-bull-gold"
-              >
-                bull #{String(a.tokenId)} → {shortAddr(a.winner)}
-              </a>
-              <span className="font-mono text-xs text-bull-gold">
-                {formatToken(a.amount, decimals)}
-                {unit}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-      {/* ⚠ ONLY WHEN THERE IS A LIST TO QUALIFY. "history shown is bounded"
-          printed under "none yet." is a caveat about nothing: it reads as "we
-          could not see the whole record" sitting directly beneath a claim that
-          the record is empty, which are two different statements and only one
-          of them is on the page. With rows above it, it is a useful warning
-          that the list may be short; with no rows it is noise, and the pot's
-          own `wins` counter beside it is the real authority either way. */}
-      {incomplete && awards.length > 0 && (
-        <p className="mt-2 text-[11px] text-bull-text-faint">
-          this list only reaches back as far as the chain would let us read.
-        </p>
+        <Awards data={awardsRead.data} decimals={decimals} unit={unit} explorer={explorer} />
       )}
     </div>
+  );
+}
+
+/**
+ * The payout list, and the two honest ways it can be short.
+ *
+ * ⚠ AN EMPTY POT IS A COMPLETE RECORD, NOT A MISSING ONE. Neither pot has paid
+ * anybody yet, so "nobody has hit this pot yet" is simply the truth and has to
+ * look like a fact rather than a failure — no spinner, no shrug, no caveat
+ * underneath it. The caveats only appear when the pot's OWN win counter
+ * disagrees with what we can show, which is the one case where the list really
+ * is missing something.
+ */
+function Awards({
+  data,
+  decimals,
+  unit,
+  explorer,
+}: {
+  data: JackpotAwardsPayload;
+  decimals: number | undefined;
+  unit: string;
+  explorer: string;
+}) {
+  const state = awardCompleteness(data);
+
+  if (data.awards.length === 0) {
+    // ⚠ THE POT'S OWN COUNTER OVERRULES AN EMPTY LIST. `awardCount` ticks once
+    // per `Awarded` (`Jackpot.sol:795`), and it is printed as `wins` a few lines
+    // above this. If it says somebody has won and we have no rows, then the list
+    // is broken, not the pot — and saying "nobody has hit this pot yet" directly
+    // under "wins 3" is a flat contradiction on a card about money.
+    if (state === 'partial') {
+      return (
+        <p className="mt-2 text-sm text-bull-text-dim">
+          this pot has paid out, but we could not put the list of wins together just now. the
+          payouts are all on chain either way.
+        </p>
+      );
+    }
+    return (
+      <p className="mt-2 text-sm text-bull-text-dim">
+        nobody has hit this pot yet. it is all still money in the middle.
+      </p>
+    );
+  }
+
+  return (
+    <>
+      <ul className="mt-2 space-y-1.5 text-sm">
+        {/* ⚠ KEYED ON `logIndex`, NOT ON `ticketId`. One vrf fulfilment settles
+            every pending ticket in the queue, so a single transaction can emit
+            `Awarded` more than once; two payouts that agree on everything else
+            differ only here. Keyed on less, react merges two real wins into one
+            row and the card under-reports what the pot has paid. */}
+        {data.awards.slice(0, 8).map((a) => (
+          <li key={`${a.txHash}-${a.logIndex}`} className="flex items-center justify-between gap-2">
+            <a
+              href={`${explorer}/tx/${a.txHash}`}
+              target="_blank"
+              rel="noreferrer noopener"
+              className="font-mono text-xs text-bull-text-dim hover:text-bull-gold"
+            >
+              bull #{a.tokenId} → {shortAddr(a.winner)}
+            </a>
+            <span className="font-mono text-xs text-bull-gold">
+              {formatToken(BigInt(a.amount), decimals)}
+              {unit}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {/* ⚠ ONLY WHEN THE LIST IS ACTUALLY SHORT. Printed unconditionally this is
+          a caveat about nothing, and a caveat about nothing on a money card
+          reads as an admission. `complete` — including a complete record of no
+          payouts — says nothing at all. */}
+      {state === 'partial' ? (
+        <p className="mt-2 text-[11px] text-bull-text-faint">
+          this is not every win. the pot&apos;s own counter says{' '}
+          {data.awardCount === null ? 'there are more' : `${data.awardCount} of them`} and we can
+          only show {data.awards.length} here.
+        </p>
+      ) : null}
+      {state === 'unknown' ? (
+        <p className="mt-2 text-[11px] text-bull-text-faint">
+          we could not reach the pot&apos;s own win counter, so we cannot promise this is every
+          payout. what is listed is real and on chain either way.
+        </p>
+      ) : null}
+    </>
   );
 }

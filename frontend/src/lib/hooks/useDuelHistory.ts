@@ -1,30 +1,35 @@
 'use client';
 
 import { useMemo } from 'react';
-import { DuelAbi } from '@/lib/abi';
+import { useQuery } from '@tanstack/react-query';
 import { contractAddress } from '@/lib/env';
-import { isValidBullId } from '@/lib/art/collection';
-import { useContractLogs } from './useContractLogs';
+import type { DuelRecordPayload } from '@/lib/duelRecord';
 
 /**
- * Every fight ever settled on chain, newest first.
+ * Every fight ever settled on chain, newest first, read through
+ * `/api/duel-history`.
  *
- * ⚠ THE EVENT IS THE ONLY ARCHIVE. `Duel` keeps no list of past fights — the
- * standing-fight slot holds ONE row per wallet and is cleared the moment the
- * fight settles — so `DuelCompleted` is the whole record. That is also why a
- * replay needs nothing but a tx hash: the seed rides in the event and the fight
- * is deterministic from it (`lib/duelReplaySource.ts`).
+ * ⚠ THIS DELIBERATELY DOES NOT GO THROUGH `useContractLogs`, AND THAT IS THE
+ * WHOLE POINT. It used to, and the page was badly short without ever saying so
+ * in a way anyone could act on: the refused log ranges came back as NOTHING, not
+ * as errors, because neither a 403 nor a rate limit is the range-cap error the
+ * scanner's halving path looks for. Measured 2026-08-10, `/history` showed 31 of
+ * the 35 fights on chain and the gap widened daily. The endpoint-by-endpoint
+ * table is in `lib/serverLogs.ts`.
  *
- * ⚠ NO INDEXER, AND THAT IS THE DIFFERENCE FROM FEFERS. Fefers reads a postgres
- * cache first and falls back to chain. bnbulls has no history API, so this is
- * the chain leg only, through the same bounded, backward-walking scanner every
- * other log-reading surface here uses (`useContractLogs`). Its `incomplete`
- * flag comes straight through and the page MUST render it: a partial list shown
- * as a whole one is the quiet version of being wrong.
+ * ⚠ THE RETURN SHAPE IS UNCHANGED ON PURPOSE. `DuelHistoryPanel` and
+ * `DuelHistoryTable` render four states off these fields and key their rows on
+ * `txHash`+`logIndex`; swapping the source underneath is a data fix, not a ui
+ * change, so nothing downstream had to move.
  *
- * ⚠ `logIndex` IS CARRIED, NOT DROPPED. One transaction can settle more than
- * one duel, and `/api/duel-gif` takes `&log=` to say which. Without it every
- * replay from such a tx would play the first fight in it.
+ * ⚠ AN ERROR IS AN ERROR, NEVER AN EMPTY LIST. The route answers 502 when it
+ * could not read the chain, this hook throws on it, and `unavailable` carries it
+ * to the page. "the pit is quiet" printed because a read failed is the page
+ * telling a visitor the game is dead.
+ *
+ * ⚠ `logIndex` IS CARRIED, NOT DROPPED. One transaction can settle more than one
+ * duel, and `/api/duel-gif` takes `&log=` to say which. Without it every replay
+ * from such a tx would play the first fight in it.
  */
 export interface DuelHistoryRow {
   readonly tokenA: number;
@@ -46,99 +51,64 @@ export interface UseDuelHistoryResult {
   readonly isLoading: boolean;
   /** False when no `Duel` address is configured for this build. */
   readonly deployed: boolean;
-  /** The scan settled with no answer. NOT the same as "no fights yet". */
+  /** The read settled with no answer. NOT the same as "no fights yet". */
   readonly unavailable: boolean;
-  /** The scan could not cover full history. Say so out loud. */
+  /** The list is not the whole record. Say so out loud. */
   readonly incomplete: boolean;
   readonly refetch: () => void;
-}
-
-interface RawDuelLog {
-  args?: {
-    tokenA?: bigint;
-    tokenB?: bigint;
-    winnerId?: number;
-    rounds?: number;
-    newEloA?: number;
-    newEloB?: number;
-  };
-  blockNumber?: bigint | null;
-  transactionHash?: `0x${string}` | null;
-  logIndex?: number | null;
 }
 
 export function useDuelHistory(): UseDuelHistoryResult {
   const duelAddress = contractAddress('duel');
 
-  const { data, isLoading, error, refetch } = useContractLogs({
-    address: duelAddress,
-    abi: DuelAbi,
-    eventName: 'DuelCompleted',
+  const query = useQuery<DuelRecordPayload>({
+    queryKey: ['duel-history', duelAddress],
     enabled: !!duelAddress,
+    // The route caches for 45s behind a 45s cdn window; asking faster than that
+    // just re-reads the same cached answer.
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
+    retry: 1,
+    queryFn: async () => {
+      const res = await fetch('/api/duel-history', { cache: 'no-store' });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(body?.error ?? `the fight record endpoint answered ${res.status}`);
+      }
+      return (await res.json()) as DuelRecordPayload;
+    },
   });
 
-  const rows = useMemo<DuelHistoryRow[]>(() => {
-    if (!data) return [];
-    const out: DuelHistoryRow[] = [];
-    const seen = new Set<string>();
-    for (const log of data.logs) {
-      const l = log as RawDuelLog;
-      const a = l.args;
-      if (
-        !a ||
-        a.tokenA === undefined ||
-        a.tokenB === undefined ||
-        a.winnerId === undefined ||
-        a.rounds === undefined
-      ) {
-        continue;
-      }
-      const txHash = l.transactionHash;
-      const logIndex = l.logIndex;
-      // A log with no home cannot be replayed and cannot be linked, so it has
-      // nothing to offer a row. Dropping it beats rendering a dead ▶.
-      if (!txHash || logIndex === undefined || logIndex === null) continue;
-      const key = `${txHash}-${logIndex}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
+  // `blockNumber` comes back as a json number and goes out as a bigint, because
+  // that is what the table has always been handed and a silent type change is
+  // the kind of thing that renders as `NaN` three components away.
+  const rows = useMemo<DuelHistoryRow[]>(
+    () =>
+      (query.data?.fights ?? []).map((f) => ({
+        tokenA: f.tokenA,
+        tokenB: f.tokenB,
+        winnerId: f.winnerId,
+        rounds: f.rounds,
+        newEloA: f.newEloA,
+        newEloB: f.newEloB,
+        txHash: f.txHash,
+        blockNumber: BigInt(f.blockNumber),
+        logIndex: f.logIndex,
+      })),
+    [query.data],
+  );
 
-      const tokenA = Number(a.tokenA);
-      const tokenB = Number(a.tokenB);
-      // Ids outside the collection cannot be named, drawn or linked. `Duel`
-      // cannot emit one, so this only ever fires against a wrong address in
-      // config — in which case a blank list is the right answer.
-      if (!isValidBullId(tokenA) || !isValidBullId(tokenB)) continue;
-
-      out.push({
-        tokenA,
-        tokenB,
-        winnerId: Number(a.winnerId),
-        rounds: Number(a.rounds),
-        newEloA: Number(a.newEloA ?? 0),
-        newEloB: Number(a.newEloB ?? 0),
-        txHash,
-        blockNumber: l.blockNumber ?? 0n,
-        logIndex,
-      });
-    }
-    // Newest first. Same block: the later log is the later fight.
-    out.sort((x, y) => {
-      if (x.blockNumber !== y.blockNumber) return x.blockNumber > y.blockNumber ? -1 : 1;
-      return y.logIndex - x.logIndex;
-    });
-    return out;
-  }, [data]);
-
-  const loading = !!duelAddress && isLoading;
+  const loading = !!duelAddress && query.isLoading;
 
   return {
     rows,
     isLoading: loading,
     deployed: !!duelAddress,
-    unavailable: !!duelAddress && !loading && (error !== null || data === undefined),
-    incomplete: data?.incomplete ?? false,
+    unavailable: !!duelAddress && !loading && (query.isError || query.data === undefined),
+    incomplete: query.data?.truncated ?? false,
     refetch: () => {
-      void refetch();
+      void query.refetch();
     },
   };
 }

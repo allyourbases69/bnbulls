@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { PotCard } from './PotCard';
 import { PotDepositFeed } from './PotDepositFeed';
 import { POTS } from '@/lib/brand';
-import { contractsDeployed, isNativePot } from '@/lib/env';
+import { isNativePot } from '@/lib/env';
+import { useJackpotAwards } from '@/lib/hooks/useJackpotAwards';
 
 type PotName = 'jackpotBnbull' | 'jackpotBnb';
 
@@ -31,15 +32,22 @@ function potFromHash(hash: string): PotName | null {
 }
 
 export function PotsPanel() {
-  /* ⚠ "every row above is …" NEEDS ROWS ABOVE IT, AND PRE-LAUNCH THERE ARE
-     NONE. The award list that clause points at lives inside `PotCard`, and
-     with no address both cards are replaced by `NotDeployed` - so on the live
-     site the sentence pointed at two "not live yet" boxes. A confident
-     sentence referring to something that is not on the page is exactly what
-     makes a deliberate pre-launch state read as a half-finished one, which is
-     the one thing `PreLaunchNotice` exists to prevent. Only the clause that
-     needs rows is gated; the rest of the paragraph is true either way. */
-  const potsLive = contractsDeployed('jackpotBnbull', 'jackpotBnb');
+  /* ⚠ "every row above is …" NEEDS ROWS ABOVE IT, AND TODAY THERE ARE NONE.
+     The award list that clause points at lives inside `PotCard`, and neither
+     pot has ever paid anybody — so the sentence pointed at two cards that both
+     say "nobody has hit this pot yet". A confident sentence referring to
+     something that is not on the page is exactly what makes a working state
+     read as a half-finished one.
+
+     It used to be gated on the addresses merely EXISTING, which was the right
+     idea against the wrong fact: deployed is not the same as fought-for. The
+     gate is now the rows themselves. Both reads share `useJackpotAwards`'
+     query key with the cards below, so react-query serves them from the same
+     cache and this costs no extra request. Only the clause that needs rows is
+     gated; the rest of the paragraph is true either way. */
+  const bnbullAwards = useJackpotAwards('jackpotBnbull');
+  const bnbAwards = useJackpotAwards('jackpotBnb');
+  const anyAwards = bnbullAwards.awards.length > 0 || bnbAwards.awards.length > 0;
 
   /** Which pot's deposit history is showing. One at a time, on purpose: two
    *  open feeds means two columns of numbers in the same asset-less units. */
@@ -141,7 +149,7 @@ export function PotsPanel() {
           how the pots grow
         </p>
         <p className="mt-2 max-w-2xl text-sm text-bull-text-dim">
-          {POTS.grow} {POTS.rule} {potsLive ? 'every row above is somebody who rolled it. ' : ''}
+          {POTS.grow} {POTS.rule} {anyAwards ? 'every row above is somebody who rolled it. ' : ''}
           no entry fee and nothing to claim: the tokens just turn up.
         </p>
       </div>

@@ -208,6 +208,16 @@ export function JackpotPanel({ pot, compact = false, className = '' }: JackpotPa
           </dd>
         </div>
       </dl>
+
+      {/* Where the money came from. The full record lives on `/pots`, which is
+          the one page that owns the pots; this is just the door to it, so the
+          homepage does not have to carry a second copy of the feed. */}
+      <a
+        href={`/pots#${pot}`}
+        className="mt-3 inline-flex items-center gap-1 font-mono text-[11px] uppercase tracking-wide text-bull-text-faint hover:text-bull-gold"
+      >
+        see every deposit <span aria-hidden>→</span>
+      </a>
     </div>
   );
 }

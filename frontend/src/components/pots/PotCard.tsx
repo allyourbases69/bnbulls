@@ -20,6 +20,8 @@ export function PotCard({
   symbolFallback,
   odds,
   tone,
+  onOpenDeposits,
+  depositsOpen = false,
 }: {
   name: 'jackpotBnbull' | 'jackpotBnb';
   label: string;
@@ -36,6 +38,13 @@ export function PotCard({
    *  same vocabulary the ticker strip and the standing panels use so all three
    *  surfaces read as the same two pots. */
   tone: 'bnbull' | 'bnb';
+  /**
+   * Open this pot's deposit history. Absent, the card behaves exactly as it
+   * always did. The PANEL owns which pot is open, not the card, so the two
+   * cards can never both believe they are the one showing.
+   */
+  onOpenDeposits?: () => void;
+  depositsOpen?: boolean;
 }) {
   const address = contractAddress(name);
   const explorer = explorerBaseUrl();
@@ -141,10 +150,18 @@ export function PotCard({
     );
   }
 
-  return (
-    <div
-      className={`pot-card bull-card ${tone === 'bnbull' ? 'pot-bnbull' : 'pot-bnb'} rounded p-5`}
-    >
+  /**
+   * The head of the card, and the click target for the deposit history.
+   *
+   * ⚠ A BUTTON AROUND THIS BLOCK, NOT AROUND THE WHOLE CARD. The awards list
+   * below is a list of LINKS to bscscan, and an element that is both a button
+   * and full of anchors is invalid markup with genuinely unpredictable
+   * behaviour — the tap that was meant to open a transaction opens the feed
+   * instead, or neither fires. So the figure is the thing you press and the
+   * receipts stay pressable in their own right.
+   */
+  const head = (
+    <>
       <p className="font-mono text-xs uppercase tracking-[0.2em] text-bull-text-faint">{label}</p>
       <p className="pot-figure bull-header mt-2 font-mono">
         {formatToken(pool as bigint | undefined, decimals)}{' '}
@@ -167,6 +184,30 @@ export function PotCard({
           <dd className="font-mono">{awardCount !== undefined ? String(awardCount) : '—'}</dd>
         </div>
       </dl>
+      {onOpenDeposits ? (
+        <span className="mt-3 inline-flex items-center gap-1 font-mono text-[11px] uppercase tracking-wide text-bull-text-faint group-hover:text-bull-gold">
+          {depositsOpen ? 'showing every deposit' : 'see every deposit'} <span aria-hidden>→</span>
+        </span>
+      ) : null}
+    </>
+  );
+
+  return (
+    <div
+      className={`pot-card bull-card ${tone === 'bnbull' ? 'pot-bnbull' : 'pot-bnb'} rounded p-5`}
+    >
+      {onOpenDeposits ? (
+        <button
+          type="button"
+          onClick={onOpenDeposits}
+          aria-expanded={depositsOpen}
+          className="group w-full cursor-pointer text-left"
+        >
+          {head}
+        </button>
+      ) : (
+        <div>{head}</div>
+      )}
 
       <p className="mt-4 font-mono text-xs uppercase tracking-wide text-bull-text-faint">
         recent awards
@@ -195,9 +236,16 @@ export function PotCard({
           ))}
         </ul>
       )}
-      {incomplete && (
+      {/* ⚠ ONLY WHEN THERE IS A LIST TO QUALIFY. "history shown is bounded"
+          printed under "none yet." is a caveat about nothing: it reads as "we
+          could not see the whole record" sitting directly beneath a claim that
+          the record is empty, which are two different statements and only one
+          of them is on the page. With rows above it, it is a useful warning
+          that the list may be short; with no rows it is noise, and the pot's
+          own `wins` counter beside it is the real authority either way. */}
+      {incomplete && awards.length > 0 && (
         <p className="mt-2 text-[11px] text-bull-text-faint">
-          history shown is bounded by log range. see the deploy block config.
+          this list only reaches back as far as the chain would let us read.
         </p>
       )}
     </div>

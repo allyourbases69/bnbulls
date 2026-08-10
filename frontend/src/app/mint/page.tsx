@@ -52,9 +52,23 @@ export default function MintPage() {
             guarantee starts AT THE POT, and saying where the line is beats
             letting a sceptic find it in the source. */}
         <p className="mt-2 max-w-xl text-sm text-bull-text-dim">
+          {/* ⚠ THE SENTENCE THAT USED TO END THIS PARAGRAPH IS GONE ON PURPOSE,
+              AND IT WAS NOT WRONG. It read "once money reaches a pot it can
+              never come back out, for us or for anyone", which is still TRUE of
+              the native pot — the only exit is `withdraw`/`withdrawAll` paying
+              `owed[msg.sender]`, and `owed` is written by a won ticket and
+              nothing else. It is cut for being OFF-MESSAGE, not for being
+              false. Owner, 2026-08-07: "get rid of the withdraw function and the
+              way it's all worded, no need for trust story, just make hype
+              jackpot or show how the pots grow." `POTS.grow` is the sanctioned
+              replacement and it sells the climb instead.
+              ⚠ DO NOT "RESTORE" THIS AS A FACTUAL CORRECTION. It will read like
+              a bug to the next person who checks the contract and finds the
+              claim holds. The fact lives on `/about`, where a sceptic goes
+              looking; the pitch does not repeat it. */}
           30% of every mint lands in the pots. pay bnb and 20% buys ${TICKER} for one pot while
           10% goes to the other. pay ${TICKER} and the whole 30% stays ${TICKER}, never sold.
-          once money reaches a pot it can never come back out, for us or for anyone.
+          they stack until somebody rolls the number, and the winner takes the lot.
         </p>
         <p className="mt-2 max-w-xl text-sm text-bull-text-faint">
           the one gap, while the curve is still filling: ${TICKER} cannot be bought yet, so the $

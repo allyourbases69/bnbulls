@@ -15,6 +15,13 @@ interface IJackpotFund {
     function fund(uint256 amount, string calldata source) external;
 }
 
+/// @dev Minimal `BullPen` surface used by MintDrop. See `BullPen.sol` for why
+///      this returns a RESERVATION handle and not a token id: the id cannot
+///      exist yet without handing the buyer a free abort.
+interface IBullPen {
+    function reserve(address to, uint16 count) external returns (uint256 reservationId);
+}
+
 /// @dev Wrapped BNB. `deposit` is 1:1 and cannot fail on liquidity — it is a
 ///      wrap, not a swap, which is why the BNB leg of a BNB payment still
 ///      counts as "no DEX interaction at all" (`DECISIONS.md §13`).
@@ -274,6 +281,23 @@ contract MintDrop is Ownable, Pausable, ReentrancyGuard {
 
     mapping(uint8 => TimelockedAddress.Slot) private _wires;
 
+    /**
+     * @notice The randomised-assignment pen, if one is wired.
+     *
+     * @dev ⛔ DELIBERATELY **NOT** A MEMBER OF `Wire`. Appending to that enum
+     *      renumbers nothing but does widen `wires()`, `_afterWire` and BOTH
+     *      config builders in `script/lib/BnbullsConfig.sol` — and a field
+     *      added to `loadConfig` but not `loadVerifyConfig` makes `Verify`
+     *      compare the chain against a struct default of zero and report a
+     *      failure that is not real. A standalone slot touches none of that.
+     *
+     *      ZERO IS THE LEGACY PATH AND IT IS BYTE-FOR-BYTE TODAY'S BEHAVIOUR:
+     *      sequential `bulls.mint(to)`, same events, same return value. The pen
+     *      is opt-in at wiring time, which is the seam that lets this ship
+     *      without disturbing anything already live.
+     */
+    TimelockedAddress.Slot private _penWire;
+
     /// @notice Delay a wiring change must age before it can be committed.
     uint256 public wiringDelay = 24 hours;
 
@@ -483,6 +507,23 @@ contract MintDrop is Ownable, Pausable, ReentrancyGuard {
         uint256 usdSticker1e18,
         uint256 airdropped
     );
+    /**
+     * @notice Emitted INSTEAD OF `BullSold` when the pen is wired: the sale is
+     *         final but the token ids do not exist yet.
+     * @dev Indexers join this to `BullPen.Settled(reservationId, to, tokenIds)`
+     *      on `reservationId`. There is deliberately no `BullSold` with a zero
+     *      id — a zero token id in a sale event is exactly the sort of poison
+     *      sentinel that gets read as real.
+     */
+    event BullsReserved(
+        address indexed buyer,
+        uint256 indexed reservationId,
+        address indexed to,
+        uint256 count,
+        uint8 paymentType,
+        uint256 usdStickerTotal1e18,
+        uint256 airdropped
+    );
     /// @notice One receipt per payment. `bnbUsd1e18` is the oracle answer the
     ///         conversion actually used, so the price is auditable on chain.
     event MintPaid(
@@ -494,6 +535,10 @@ contract MintDrop is Ownable, Pausable, ReentrancyGuard {
         uint16 discountBps,
         uint256 bnbUsd1e18
     );
+    event PenWireBootstrapped(address indexed target);
+    event PenWireProposed(address indexed target, uint64 eta);
+    event PenWireCommitted(address indexed previous, address indexed next);
+    event PenWireCancelled(address indexed dropped);
     event PriceTiersSet(uint256 tierCount);
     event DiscountSet(address indexed asset, uint16 bps);
     event TreasuryChanged(address indexed previous, address indexed next);
@@ -833,12 +878,40 @@ contract MintDrop is Ownable, Pausable, ReentrancyGuard {
         if (totalSold + count > MAX_MINT) revert SupplyExhausted();
     }
 
+    /**
+     * @dev Two delivery modes, chosen by whether a pen is wired.
+     *
+     *      PEN UNWIRED (today, and every existing test): sequential
+     *      `bulls.mint(to)`, one `BullSold` each, ids returned. Unchanged.
+     *
+     *      PEN WIRED: the sale is recorded and the ids are drawn later, from a
+     *      seed that does not exist yet. `tokenIds` comes back EMPTY, because
+     *      there is genuinely nothing to return — see `BullPen.sol` for why
+     *      returning an id here at all would re-open the snipe.
+     */
     function _mintAndEmit(
         address to,
         uint256 count,
         uint8 paymentType,
         uint256[] memory perUnitUsd
     ) private returns (uint256[] memory tokenIds) {
+        address p = _penWire.current;
+        if (p != address(0)) {
+            uint256 reservationId = IBullPen(p).reserve(to, uint16(count));
+            uint256 usdTotal;
+            uint256 airdropped;
+            for (uint256 i = 0; i < count; i++) {
+                usdTotal += perUnitUsd[i];
+                // Kept per-mint so the airdrop budget drains at exactly the
+                // rate it does on the legacy path.
+                airdropped += _maybeAirdrop(to);
+            }
+            emit BullsReserved(
+                msg.sender, reservationId, to, count, paymentType, usdTotal, airdropped
+            );
+            return new uint256[](0);
+        }
+
         tokenIds = new uint256[](count);
         for (uint256 i = 0; i < count; i++) {
             uint256 id = bulls.mint(to);
@@ -1685,6 +1758,38 @@ contract MintDrop is Ownable, Pausable, ReentrancyGuard {
     function cancelWire(Wire slot) external onlyOwner {
         address dropped = _wires[uint8(slot)].cancel();
         emit WireCancelled(slot, dropped);
+    }
+
+    // ─── Admin: the pen (its own slot, see `_penWire`) ───────────────────
+
+    /// @notice Live pen, or zero for the legacy sequential path.
+    function penContract() public view returns (address) {
+        return _penWire.current;
+    }
+
+    function penWire() external view returns (address current, address pending, uint64 eta) {
+        TimelockedAddress.Slot storage s = _penWire;
+        return (s.current, s.pending, s.eta);
+    }
+
+    function bootstrapPen(address target) external onlyOwner {
+        _penWire.bootstrap(target);
+        emit PenWireBootstrapped(target);
+    }
+
+    function proposePen(address target) external onlyOwner returns (uint64 eta) {
+        eta = _penWire.propose(target, wiringDelay);
+        emit PenWireProposed(target, eta);
+    }
+
+    function commitPen() external onlyOwner {
+        (address previous, address next) = _penWire.commit();
+        emit PenWireCommitted(previous, next);
+    }
+
+    function cancelPen() external onlyOwner {
+        address dropped = _penWire.cancel();
+        emit PenWireCancelled(dropped);
     }
 
     function wireOf(Wire slot)

@@ -136,8 +136,8 @@ Must be shipped and dormant before stage 1:
 ## 5. Stage 1 — deploy, wire, propose (players unaffected)
 
 ```
-powershell -ExecutionPolicy Bypass -File "C:\tools\Claude\bnbulls\marketing\keeper\migrate-native.ps1" -Stage 1 -Simulate
-powershell -ExecutionPolicy Bypass -File "C:\tools\Claude\bnbulls\marketing\keeper\migrate-native.ps1" -Stage 1
+powershell -ExecutionPolicy Bypass -File .\keeper\migrate-native.ps1 -Stage 1 -Simulate
+powershell -ExecutionPolicy Bypass -File .\keeper\migrate-native.ps1 -Stage 1
 ```
 
 **Always simulate first.** On launch day simulation caught three separate gates
@@ -455,8 +455,8 @@ the frontend addresses on the next deploy.** Update or delete it.
 
 **9.6** Recreate:
 ```bash
-ssh truenas-discord "cd '<stack>' && export KEEPER_SECRETS_DIR=/mnt/tank/keeper-secrets && \
-  docker compose up -d --force-recreate --no-deps duel-bot alert-bot dev-bot fight-buy-bot jackpot-vrf-keeper"
+ssh <host> "cd '<stack>' && export KEEPER_SECRETS_DIR=<secrets-dir> && \
+  docker compose up -d --force-recreate --no-deps <services>"
 ```
 `docker compose restart` does **not** re-read env or code. Always `--force-recreate`.
 

@@ -29,11 +29,10 @@ secrets/
 # the tree by mistake can never be staged.
 .bnbulls-secrets
 .bnbulls-secrets/
-# Local Claude Code settings (a machine-specific permissions allow-list). On this
-# box it is ignored ONLY by the user's GLOBAL git ignore, which no other clone
-# and no other machine has -- so without this line it is one `git add -A` away
-# from being committed anywhere else.
-.claude/settings.local.json
+# Machine-local editor/tooling settings. Ignored only by a global ignore on the
+# box that made it, which no other clone has -- so without this line it is one
+# `git add -A` away from being committed anywhere else.
+.claude/
 
 # ── build output / caches ───────────────────────────────────────────────────
 node_modules/

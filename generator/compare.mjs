@@ -5,7 +5,9 @@ import { pathToFileURL } from "node:url";
 import { encodePng } from "./png.mjs";
 import * as bull from "./bull.mjs";
 
-const FEF = "C:/tools/Claude/Fighting_Fefers/generator/core.mjs";
+// Local-only dev comparison against a reference generator. Point this at your
+// own checkout; it is never imported by the build or the site.
+const FEF = process.env.REFERENCE_GENERATOR ?? "../reference/generator/core.mjs";
 const fef = await import(pathToFileURL(FEF).href);
 
 const PAD = 6, GAP = 10, BG = [233, 235, 240];

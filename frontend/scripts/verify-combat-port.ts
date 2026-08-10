@@ -39,7 +39,7 @@ const FRONTEND = join(here, '..');
 const REPO = join(FRONTEND, '..');
 const FEFERS_SRC =
   process.env.FEFERS_SRC ||
-  join(REPO, '..', 'Fighting_Fefers', 'app', 'frontend', 'src');
+  join(REPO, '..', 'reference', 'app', 'frontend', 'src');
 
 let failures = 0;
 let checks = 0;

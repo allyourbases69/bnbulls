@@ -39,6 +39,52 @@ export function formatToken(
   return n.toLocaleString('en-US', { maximumFractionDigits: maxFrac });
 }
 
+/**
+ * A dollar figure that stays honest when the amount is tiny.
+ *
+ * ⚠ `formatUsd1e18` PINS TWO DECIMALS, which is right for a mint price and
+ * wrong for a fight top-up: half a cent of BNB would print as "$0.00", and a
+ * zero next to an amount somebody is about to send is exactly the class of lie
+ * this app refuses everywhere else. Anything under a cent says so instead.
+ *
+ * Returns `—` for an unread input, never a guessed zero.
+ */
+export function formatUsdApprox(value: bigint | undefined | null): string {
+  if (value === undefined || value === null) return '—';
+  const n = Number(formatUnits(value, USD_DECIMALS));
+  if (n === 0) return '$0.00';
+  if (n < 0.01) return '<$0.01';
+  const maxFrac = n < 100 ? 2 : 0;
+  return `$${n.toLocaleString('en-US', { minimumFractionDigits: maxFrac, maximumFractionDigits: maxFrac })}`;
+}
+
+/**
+ * A native-BNB wei amount, restated on the protocol's 1e18 dollar scale.
+ *
+ * ⚠ THIS IS A DISPLAY CONVERSION, NOT A PRICE. `usdPerBnb1e18` must come from
+ * a LIVE `bnbUsdPrice()` read — the same Chainlink answer the contract itself
+ * converts the dollar sticker through — so the dollars beside a BNB figure move
+ * with the chain rather than with a constant somebody typed. `useBnbUsdPrice`
+ * is the only sanctioned source.
+ *
+ * ⚠ RETURNS `undefined` WHEN EITHER SIDE IS UNREAD, and callers must render a
+ * dash rather than filling it in. A dollar figure computed off a missing feed
+ * would be a confident wrong number attached to money about to be spent, which
+ * is the one failure this whole page is built to avoid.
+ */
+export function usdFromBnbWei(
+  wei: bigint | undefined | null,
+  usdPerBnb1e18: bigint | undefined | null,
+): bigint | undefined {
+  if (wei === undefined || wei === null) return undefined;
+  if (usdPerBnb1e18 === undefined || usdPerBnb1e18 === null || usdPerBnb1e18 <= 0n) {
+    return undefined;
+  }
+  // BNB is 18dp by chain invariant and the price is 1e18-scaled, so the two
+  // scales cancel to a plain 1e18 dollar figure.
+  return (wei * usdPerBnb1e18) / 10n ** 18n;
+}
+
 /** Basis points -> a percent string, e.g. 1000 -> "10%", 250 -> "2.5%". */
 export function formatBps(bps: number | bigint | undefined | null): string {
   if (bps === undefined || bps === null) return '—';

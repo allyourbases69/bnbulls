@@ -504,6 +504,172 @@ export const CURRENCY = {
    *  deliberately cannot. */
   withdrawAlways:
     'withdrawing is never paused. even if fights stop, your money is yours to take.',
+
+  /**
+   * ⚠ THE ANSWER TO "CAN I GET IT BACK", PUT WHERE THE DECISION IS MADE.
+   *
+   * Owner call, 2026-08-10: the exit belongs ABOVE the deposit control, not in
+   * fine print under it. `DuelNative.withdraw` is gated on nothing at all — no
+   * cooldown, no lock, no in-fight hold, and deliberately outside
+   * `whenNotPaused` — so this is the strongest true sentence available, and a
+   * player weighing up whether to put real bnb into a contract should read it
+   * before they type an amount rather than after they have sent one.
+   */
+  withdrawFirst:
+    'you can take it all back out whenever you like. no lock, no waiting, and no fight can hold ' +
+    'it up.',
+
+  /**
+   * ⚠ THE AWAY BUDGET IN ONE SENTENCE A NORMAL PERSON GETS, AND THE WORD
+   * "BUDGET" IS DOING ALL THE WORK.
+   *
+   * `_takeSide` DECREMENTS `passiveAllowance` on every passive fight, so it is a
+   * running total that empties, not a ceiling per fight. Somebody who reads it
+   * as "the most one fight can cost me" sets one fight's worth, gets exactly one
+   * away fight, and is then silently unchallengeable while believing the feature
+   * is on. That misreading is what a per-fight word like "limit", "cap" or "max"
+   * would produce, so none of them may be used here.
+   */
+  /**
+   * WHAT THE CURRENCY PICK COVERS, ON THE NATIVE CONTRACT.
+   *
+   * ⚠ REPLACES A LINE THAT DESCRIBED THE RETIRED MODEL ON THE LIVE FIGHT GATE.
+   * It read "somebody else picking one of your bulls draws on the allowance you
+   * gave the duel contract in step 2, in whichever currency you approved" —
+   * which is true of the OLD contract and flatly false of `DuelNative`, where a
+   * passive side is debited from the custodied balance and no allowance is
+   * involved on the bnb leg at all. It also put a banned word on the one screen
+   * a player reads immediately before signing.
+   */
+  pickCoversNative:
+    'this covers your own side of a fight you start, and it rides along with the transaction ' +
+    'straight out of your wallet. somebody else picking one of your bulls is paid from your ' +
+    'fight balance instead, because only the wallet sending a transaction can put bnb in with it.',
+
+  awayBudgetSpendsDown:
+    'think of it like petrol money, not a speed limit. each fight somebody else starts takes its ' +
+    'cost out of it, and when it hits empty your bulls quietly stop being pickable until you top ' +
+    'it back up.',
+} as const;
+
+// ─── the setup ladder · THE BULL PIT, STEP BY STEP ───────────────────
+//
+// ⚠ WHY THIS BLOCK EXISTS. Owner, 2026-08-10, verbatim: *"make the bullpit
+// extremely step by step user friendly. Cant see anywhere there easy it quotes
+// HOW MUCH bnb will be deposited etc."*
+//
+// The migration to native bnb split what used to be one signature into three
+// separate jobs, and the page presented none of them as a sequence:
+//
+//   1. `Yards.enter`               · gas only, and NOTHING fights without it
+//   2. `DuelNative.deposit`        · real bnb, for fights you did not start
+//   3. `DuelNative.setPassiveAllowance` · DEFAULTS TO ZERO
+//
+// Step 3 is the one that bit. A wallet can do 1 and 2, see its money sitting
+// there, and have every incoming fight refused with `PassiveAllowanceExceeded`
+// and no idea why — which is exactly the run of "cannot be fought" reports in
+// the telegram group. So the ladder is rendered as a ladder, with each rung's
+// live state on it, and a wallet that has parked money behind a zero budget is
+// told out loud that it is not finished.
+//
+// ⚠⚠ AND THE LADDER MUST NOT RE-TEACH THE LIE THE LAST FIX REMOVED. Starting
+// your own fight needs NONE of rungs 2 and 3: `_takeSide` spends `msg.value`
+// first, so the amount rides along with the transaction. Six mainnet wallets
+// once signed for setup they never needed because a control in the primary slot
+// read as the price of entry. The rungs are therefore split into two named
+// groups — what lets YOU fight, and what lets OTHERS fight your bulls — and the
+// second group says "optional" in its own heading rather than in a footnote.
+
+export const READY = {
+  /** The panel heading. */
+  heading: 'where you are up to',
+  /** Under the heading, for somebody who has never done this. The two halves
+   *  are named in the order they bite, and the second is flagged as skippable
+   *  in the same breath so nothing below it can read as the price of entry. */
+  lead: 'get the top half done and you can fight all day. the bottom half is what lets somebody ' +
+    'else pick your bulls while you are off doing something else, and it is the bit people miss.',
+
+  /** Group one: the rungs that decide whether YOU can fight. */
+  groupSelf: 'so you can fight',
+  /** Group two. ⚠ "optional" is in the heading on purpose. */
+  groupAway: 'so others can fight your bulls · optional',
+
+  // ── rung 1 · the pit ───────────────────────────────────────────────
+  pitTitle: 'get a bull in the bull pit',
+  pitLine: 'nothing fights until it is in. one transaction covers as many as you tick, and it ' +
+    'costs gas and nothing else.',
+  /** The price column for a rung that takes no bnb. Never blank: a blank cell
+   *  next to three priced ones reads as a figure that failed to load. */
+  pitFree: 'gas only',
+
+  // ── rung 2 · bnb in the wallet ─────────────────────────────────────
+  walletTitle: 'keep bnb in your wallet',
+  walletLine: 'a fight you start is paid straight out of your wallet with the transaction. ' +
+    'nothing to set up and nothing to sign in advance.',
+  /** Wallet is short of one fight. Not an error, just a fact with a fix. */
+  walletShort: 'not enough in the wallet for one fight right now. top the wallet up and you are ' +
+    'good to go.',
+
+  // ── rung 3 · the fight balance ─────────────────────────────────────
+  balanceTitle: 'put fight money in',
+  balanceLine: 'somebody else picking your bull cannot reach into your wallet, so away fights ' +
+    'come out of money the pit is already holding for you. it stays yours and comes back out ' +
+    'whenever you want it.',
+  balanceEmpty: 'nothing in yet, so nobody can pick your bulls.',
+
+  // ── rung 4 · the away budget ───────────────────────────────────────
+  budgetTitle: 'set an away budget',
+  budgetLine: 'the most those away fights may spend in total. it starts at zero, which is why ' +
+    'this one gets missed.',
+  /**
+   * ⚠⚠ THE SENTENCE THE WHOLE REDESIGN IS FOR. Money in, budget at zero: the
+   * contract refuses every incoming fight, the player sees a balance on screen
+   * and concludes the game is broken. Loud, gold, and never behind a fold.
+   */
+  budgetTrap: 'your money is in but your away budget is zero, so every fight anybody tries ' +
+    'against your bulls is getting refused. one more tap and they are in.',
+  budgetOff: 'not set, so nobody can pick your bulls while you are away.',
+
+  // ── states ─────────────────────────────────────────────────────────
+  done: 'done',
+  todo: 'to do',
+  optional: 'optional',
+  /** ⚠ A READ THAT HAS NOT LANDED IS NOT A ZERO. Every rung uses this rather
+   *  than defaulting to "not done", because "we do not know yet" and "you have
+   *  not done it" send a player to two different places. */
+  unread: 'checking…',
+  connect: 'connect a wallet',
+  /** A rung that cannot be started yet for a reason that is not the wallet
+   *  being absent, e.g. a connected wallet holding no bulls at all. */
+  notYet: 'nothing to do here yet',
+  /** Progress, right-aligned on the heading row. */
+  progress: (done: number, total: number) => `${done} of ${total} done`,
+
+  // ── the price line, above everything ───────────────────────────────
+  /** The eyebrow on the always-visible cost strip. */
+  priceLabel: 'one fight',
+  /** What the figure beside it means. Both sides put up the same. */
+  priceLine: 'each side puts in the same, and the winner takes 90% of it.',
+  /** ⚠ THE FIGURE MOVES. Never let a screenshot of it read as a fixed price. */
+  priceMoves: 'the price is a dollar sticker converted at the moment you pay, so this figure ' +
+    'moves with the market. what you sign for is what you pay.',
+  /**
+   * The read did not land. Distinct from a zero, and it has to be.
+   *
+   * ⚠ THE CONTRACT REFUSING TO QUOTE IS A DESIGNED ANSWER, NOT A FAULT.
+   * `stickerCost` reverts on a stale or out-of-band chainlink round rather than
+   * clamping, because a clamped price is a wrong price presented as a right one
+   * and here it would price a fight at a figure nobody chose. So this says the
+   * pit will not quote, never that the site is broken.
+   */
+  priceUnreadable: 'the price feed is not answering right now, so the pit will not quote a bnb ' +
+    'fight. nothing here will guess one.',
+  /**
+   * ⚠ A ZERO COST IS NOT A CHEAP FIGHT. `Duel.sol` treats a zero as a FREE
+   * fight, and in practice it means nobody has pegged that leg yet, so it must
+   * never be printed as "0.000000 bnb" beside a fight button.
+   */
+  priceUnset: 'no bnb price is registered on the duel contract yet.',
 } as const;
 
 // ─── the pre-launch state (DECISIONS.md §29) ─────────────────────────

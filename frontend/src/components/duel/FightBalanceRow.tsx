@@ -2,13 +2,19 @@
 
 import { useState } from 'react';
 import { formatUnits, parseUnits } from 'viem';
-import { CURRENCY } from '@/lib/brand';
+import { CURRENCY, READY } from '@/lib/brand';
+import { BnbAmount, bnbLabel } from '@/components/duel/BnbAmount';
 import type { FightBalance } from '@/lib/hooks/useFightBalance';
 
 /** The default we offer for the passive ceiling, in FIGHTS. Small on purpose:
  *  it is the blast radius of a leaked signer key, and topping it up later is
  *  one cheap transaction while getting it back is not possible at all. */
 const SUGGESTED_PASSIVE_FIGHTS = 5;
+
+/** Priced off the LIVE per-fight cost, never a constant. See the note on the
+ *  preset row below for why a hardcoded bnb ladder would be a bug. */
+const TOP_UP_FIGHTS = [1, 5, 10, 25, 50] as const;
+const BUDGET_FIGHTS = [1, 5, 10, 25] as const;
 
 /**
  * THE FIGHT BALANCE CONTROL — the native-BNB replacement for `AllowanceRow`.
@@ -26,25 +32,45 @@ const SUGGESTED_PASSIVE_FIGHTS = 5;
  * trapping player money" — so this component must never gate taking money out
  * on the pit, the picked count, fight-readiness, or a paused game. If there is
  * a balance, the way out is on screen.
+ *
+ * ═══════════════════════════════════════════════════════════════════════
+ * ⚠⚠ EVERY BUTTON IN HERE CARRIES THE AMOUNT IT IS ABOUT TO SPEND.
+ * ═══════════════════════════════════════════════════════════════════════
+ * Owner, 2026-08-10, verbatim: *"cant see anywhere there easy it quotes HOW MUCH
+ * bnb will be deposited."* He is right, and the reason it was invisible is worth
+ * keeping: the panel had a bare text box and a button labelled "top up", so the
+ * only place the figure ever appeared was the wallet confirmation — after the
+ * decision, in wei-precision, next to a gas estimate. A player either overshot
+ * or walked away.
+ *
+ * The rule now: NO CONTROL THAT MOVES BNB MAY BE LABELLED WITHOUT ITS FIGURE.
+ * `bnbLabel` builds every one of them, so a button cannot be added that forgets,
+ * and it returns a dash rather than a zero when the read has not landed.
+ *
+ * ⚠ AND THE EXIT IS STATED BEFORE THE ENTRY, NOT AFTER IT. "can i get it back
+ * out" is the question a player has BEFORE depositing. `withdraw` is gated on
+ * nothing at all, so the honest place for that sentence is above the box you
+ * type an amount into. It used to sit under the controls, three blocks down,
+ * which is fine print by another name.
  */
 export function FightBalanceRow({
   balance,
   decimals,
   fights,
+  usdPerBnb,
 }: {
   balance: FightBalance;
   /** BNB is 18dp; passed rather than assumed, same as `AllowanceRow`. */
   decimals: number | undefined;
   /** The one page-wide "how many fights are you up for" count. */
   fights: number;
+  /** Live `bnbUsdPrice()`. `undefined` renders no dollars anywhere. */
+  usdPerBnb: bigint | undefined;
 }) {
   const [topUp, setTopUp] = useState('');
   const [takeOut, setTakeOut] = useState('');
   const [cap, setCap] = useState('');
   const dp = decimals ?? 18;
-
-  const fmt = (v: bigint | undefined) =>
-    v === undefined ? '—' : Number(formatUnits(v, dp)).toFixed(6);
 
   /** ⚠ Parse defensively. A stray character must not throw inside a click
    *  handler and take the panel down with it — it just means "no amount yet". */
@@ -63,14 +89,21 @@ export function FightBalanceRow({
   const takeOutWei = parse(takeOut);
   const capWei = parse(cap);
 
-  /** A sensible default expressed the way a player thinks: a NUMBER OF FIGHTS,
-   *  priced off the live cost. Nobody should be asked to pick a raw wei figure
-   *  for a security control — the whole point is that they actually set it. */
-  const capFor = (n: number): bigint | undefined =>
-    balance.perFight === undefined ? undefined : balance.perFight * BigInt(n);
-  const suggestedCap = capFor(SUGGESTED_PASSIVE_FIGHTS);
+  /** N fights' worth, priced off the live cost. `undefined` while unread, which
+   *  is what keeps a preset from ever offering "10 fights · 0.0000 bnb". */
+  const forFights = (n: number): bigint | undefined =>
+    balance.perFight === undefined || balance.perFight === 0n
+      ? undefined
+      : balance.perFight * BigInt(n);
+  const suggestedCap = forFights(SUGGESTED_PASSIVE_FIGHTS);
   const overWithdraw =
     takeOutWei !== null && balance.credit !== undefined && takeOutWei > balance.credit;
+  const priced = balance.perFight !== undefined && balance.perFight > 0n;
+
+  /** How many fights an arbitrary typed amount buys, for the line under the
+   *  primary button. Integer division: a part-fight buys no fights. */
+  const fightsIn = (wei: bigint | null): number | undefined =>
+    wei === null || !priced ? undefined : Number(wei / balance.perFight!);
 
   if (!balance.configured) {
     return (
@@ -80,109 +113,159 @@ export function FightBalanceRow({
     );
   }
 
+  const presetCls = (active: boolean) =>
+    `rounded-full border px-2.5 py-1 font-mono text-[11px] transition ${
+      active
+        ? 'border-bull-gold bg-bull-gold/10 text-bull-gold'
+        : 'border-bull-border text-bull-text-dim hover:border-bull-gold hover:text-bull-gold'
+    }`;
+
   return (
-    <div className="space-y-2 text-[11px]">
-      <div className="flex flex-wrap items-baseline gap-x-2 text-bull-text-dim">
-        <span className="font-mono uppercase tracking-wide text-bull-text-faint">
-          fight balance
-        </span>
-        <span className="font-mono text-bull-text">{fmt(balance.credit)} bnb</span>
+    <div className="space-y-4 text-[11px]">
+      {/* ══ WHAT IS IN THERE NOW ══════════════════════════════════════ */}
+      <div className="rounded border border-bull-border bg-bull-bg p-3">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+          <span className="font-mono uppercase tracking-wide text-bull-text-faint">
+            fight balance
+          </span>
+          <BnbAmount
+            wei={balance.credit}
+            decimals={decimals}
+            usdPerBnb={usdPerBnb}
+            emphasis={balance.hasCredit}
+            className="text-sm"
+          />
+        </div>
         {/* ⚠ Only claim a fight count off a read that LANDED. `fightsCovered`
             is already 0 when unread, so it is gated on the balance itself. */}
         {balance.credit !== undefined && (
-          <span className="text-bull-text-faint">
-            covers {balance.fightsCovered} {balance.fightsCovered === 1 ? 'fight' : 'fights'}
-          </span>
+          <p className="mt-1 text-bull-text-faint">
+            covers {balance.fightsCovered} away fight
+            {balance.fightsCovered === 1 ? '' : 's'} at today&apos;s price.
+          </p>
+        )}
+
+        {balance.credit !== undefined && balance.cannotCoverOne && (
+          <p className="mt-1 text-bull-text-faint">
+            not enough in here for a fight, so nobody can pick your bulls while you are away. you
+            can still start fights yourself.
+          </p>
+        )}
+        {balance.credit !== undefined && !balance.cannotCoverOne && balance.shortForRun && (
+          <p className="mt-1 text-bull-text-faint">
+            enough for {balance.fightsCovered} of your {fights}. top up to cover the run.
+          </p>
         )}
       </div>
 
-      {balance.credit !== undefined && balance.cannotCoverOne && (
-        <p className="text-bull-text-faint">
-          not enough in here for a fight, so nobody can pick your bulls while you are away. you
-          can still start fights yourself.
-        </p>
-      )}
-      {balance.credit !== undefined && !balance.cannotCoverOne && balance.shortForRun && (
-        <p className="text-bull-text-faint">
-          enough for {balance.fightsCovered} of your {fights}. top up to cover the run.
-        </p>
-      )}
+      {/* ══ PUT MONEY IN ══════════════════════════════════════════════
+          ⚠ THE EXIT GOES FIRST. See the file header: this is the question a
+          player has before they type an amount, and `withdraw` is gated on
+          nothing, so answering it here costs nothing and buys the decision. */}
+      <div className="space-y-2">
+        {/* ⚠ THE THREE BLOCKS ARE LABELLED THE SAME WAY ON PURPOSE — put money
+            in, away budget, take it back out. This one had no heading at all,
+            which left the panel reading as one long column of controls with two
+            headings floating in it, and on a phone that is how somebody sets a
+            budget when they meant to deposit. */}
+        <span className="block font-mono uppercase tracking-wide text-bull-text-faint">
+          put money in
+        </span>
+        <p className="text-bull-text-dim">{CURRENCY.withdrawFirst}</p>
 
-      {/* ── how many fights, and EXACTLY what that costs ────────────────
-          ⚠ THE PRICE IS SHOWN, NOT IMPLIED. Owner call 2026-08-10: a player
-          putting money into a contract must see the exact BNB before they
-          click, for the number of fights they actually want. A bare "top up"
-          box asks someone to fund custody against a figure they have to work
-          out themselves, which is precisely when people either overshoot or
-          walk away.
+        {/* ── how many fights, and EXACTLY what that costs ────────────────
+            ⚠ THE PRICE IS SHOWN, NOT IMPLIED. A player putting money into a
+            contract must see the exact BNB before they click, for the number of
+            fights they actually want. A bare "top up" box asks somebody to fund
+            custody against a figure they have to work out themselves, which is
+            precisely when people either overshoot or walk away.
 
-          ⚠ PRICED OFF THE LIVE `perFight`, NEVER A CONSTANT. The BNB stake is
-          a USD sticker converted through chainlink, so it moves every block —
-          a hardcoded ladder would drift and quietly under-fund. When the read
-          has not landed, the row is not rendered at all rather than showing a
-          zero, because "1 fight · 0.0000 bnb" is a lie that costs money. */}
-      {balance.perFight !== undefined && balance.perFight > 0n && (
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-bull-text-faint">put in for</span>
-          {[1, 5, 10, 25, 50].map((n) => {
-            const wei = balance.perFight! * BigInt(n);
-            return (
-              <button
-                key={n}
-                type="button"
-                onClick={() => setTopUp(formatUnits(wei, dp))}
-                className="rounded-full border border-bull-border px-2 py-0.5 font-mono text-[11px] text-bull-text hover:border-bull-gold hover:text-bull-gold"
-              >
-                {n} {n === 1 ? 'fight' : 'fights'}
-                <span className="ml-1 text-bull-text-faint">{fmt(wei)}</span>
-              </button>
-            );
-          })}
-          <span className="text-bull-text-faint">
-            one fight is {fmt(balance.perFight)} bnb right now
-          </span>
+            ⚠ PRICED OFF THE LIVE `perFight`, NEVER A CONSTANT. The BNB stake is
+            a USD sticker converted through chainlink, so it moves every block —
+            a hardcoded ladder would drift and quietly under-fund. When the read
+            has not landed the row is not rendered at all rather than showing a
+            zero, because "1 fight · 0.0000 bnb" is a lie that costs money. */}
+        {priced && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-bull-text-faint">cover</span>
+            {TOP_UP_FIGHTS.map((n) => {
+              const wei = forFights(n)!;
+              return (
+                <button
+                  key={n}
+                  type="button"
+                  onClick={() => setTopUp(formatUnits(wei, dp))}
+                  className={presetCls(topUpWei === wei)}
+                >
+                  {n} {n === 1 ? 'fight' : 'fights'}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            type="text"
+            inputMode="decimal"
+            value={topUp}
+            onChange={(e) => setTopUp(e.target.value)}
+            placeholder={balance.suggested > 0n ? formatUnits(balance.suggested, dp) : '0.0'}
+            aria-label="bnb to add to your fight balance"
+            /* ⚠ THE PLACEHOLDER IS DIMMED EXPLICITLY. These boxes are
+               pre-filled with a SUGGESTION as placeholder text, and at the
+               browser default they render close enough to a real value that a
+               player reads "0.01664" as an amount they have already entered —
+               then presses a button that says it is waiting for one. Two
+               different meanings must not share a colour on a control that
+               moves money. */
+            className="w-32 rounded border border-bull-border bg-bull-bg px-2 py-1 font-mono text-[11px] text-bull-text placeholder:text-bull-text-faint"
+          />
+          <span className="text-bull-text-faint">bnb</span>
+          {balance.suggested > 0n && (
+            <button
+              type="button"
+              onClick={() => setTopUp(formatUnits(balance.suggested, dp))}
+              className="text-bull-text-faint underline hover:text-bull-gold"
+            >
+              {/* Deliberately the SUGGESTION, never the whole wallet: the hook
+                  holds a gas reserve back, because depositing is never the last
+                  transaction — the fights still have to be paid for. */}
+              enough for {fights}
+            </button>
+          )}
         </div>
-      )}
 
-      {/* ── top up ─────────────────────────────────────────────────── */}
-      <div className="flex flex-wrap items-center gap-2">
-        <input
-          type="text"
-          inputMode="decimal"
-          value={topUp}
-          onChange={(e) => setTopUp(e.target.value)}
-          placeholder={balance.suggested > 0n ? fmt(balance.suggested) : '0.0'}
-          aria-label="bnb to add to your fight balance"
-          className="w-28 rounded border border-bull-border bg-bull-bg px-2 py-1 font-mono text-[11px] text-bull-text"
-        />
+        {/* ⚠⚠ THE BUTTON IS THE QUOTE. Nothing else on this panel is allowed to
+            be the only place the amount appears, because the button is the last
+            thing read before a wallet opens. Disabled with no amount, and it
+            says what it is waiting for rather than sitting there dead. */}
         <button
           type="button"
           onClick={() => topUpWei && void balance.deposit(topUpWei)}
           disabled={!topUpWei || balance.isBusy}
-          className="rounded-full border border-bull-border px-3 py-1 text-[11px] text-bull-text hover:border-bull-gold hover:text-bull-gold disabled:opacity-40"
+          className="w-full whitespace-normal rounded-full border-2 border-bull-gold px-3 py-2 text-center font-mono text-xs font-medium text-bull-gold transition hover:bg-bull-gold/10 disabled:cursor-not-allowed disabled:opacity-40"
         >
-          {balance.isBusy ? 'working…' : 'top up'}
+          {balance.isBusy
+            ? 'working…'
+            : topUpWei
+              ? `put in ${bnbLabel(topUpWei, decimals, usdPerBnb)}`
+              : 'pick an amount above'}
         </button>
-        {balance.suggested > 0n && (
-          <button
-            type="button"
-            onClick={() => setTopUp(formatUnits(balance.suggested, dp))}
-            className="text-bull-text-faint underline hover:text-bull-gold"
-          >
-            {/* Deliberately the SUGGESTION, never the whole wallet: the hook
-                holds a gas reserve back, because depositing is never the last
-                transaction — the fights still have to be paid for. */}
-            enough for {fights}
-          </button>
+        {topUpWei !== null && fightsIn(topUpWei) !== undefined && (
+          <p className="text-bull-text-faint">
+            that is {fightsIn(topUpWei)} away fight{fightsIn(topUpWei) === 1 ? '' : 's'} at
+            today&apos;s price, and it is still yours the whole time it sits there.
+          </p>
+        )}
+        {balance.fallsShort && (
+          <p className="text-bull-text-faint">
+            that is everything this wallet can spare and still keep gas back for the fights.
+          </p>
         )}
       </div>
-      {balance.fallsShort && (
-        <p className="text-bull-text-faint">
-          that is everything this wallet can spare and still keep gas back for the fights.
-        </p>
-      )}
 
-      {/* ── step 2: the ceiling ─────────────────────────────────────────
+      {/* ══ THE AWAY BUDGET ═══════════════════════════════════════════
           ⚠ THIS IS THE APPROVAL CUSTODY DELETED, AND IT DEFAULTS TO ZERO.
           A wallet that has only topped up is STILL not challengeable, so this
           sits directly under the top-up rather than in a separate fold — the
@@ -192,31 +275,53 @@ export function FightBalanceRow({
           ⚠⚠ IT SPENDS DOWN. `_takeSide` decrements it per passive fight, so the
           copy says "budget", never "limit": somebody who reads it as a standing
           per-fight cap will be quietly unchallengeable after five and think it
-          broke. */}
-      <div className="space-y-2 border-t border-bull-border pt-2">
-        <div className="flex flex-wrap items-baseline gap-x-2 text-bull-text-dim">
+          broke. `CURRENCY.awayBudgetSpendsDown` is the plain-english version and
+          it is not optional decoration. */}
+      <div className="space-y-2 border-t border-bull-border pt-3">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
           <span className="font-mono uppercase tracking-wide text-bull-text-faint">
             away budget
           </span>
-          <span className="font-mono text-bull-text">{fmt(balance.passiveAllowance)} bnb</span>
-          {balance.passiveAllowance !== undefined && (
-            <span className="text-bull-text-faint">
-              {balance.passiveFightsLeft} {balance.passiveFightsLeft === 1 ? 'fight' : 'fights'} left
-            </span>
-          )}
+          <BnbAmount
+            wei={balance.passiveAllowance}
+            decimals={decimals}
+            usdPerBnb={usdPerBnb}
+            emphasis={balance.challengeable}
+            className="text-sm"
+          />
         </div>
+        {balance.passiveAllowance !== undefined && (
+          <p className="text-bull-text-faint">
+            {balance.passiveFightsLeft} away fight
+            {balance.passiveFightsLeft === 1 ? '' : 's'} left in it.
+          </p>
+        )}
 
-        <p className="text-bull-text-faint">
-          the most fights you did not start can take out of your balance in total. it counts down
-          as they happen, so top it back up when it runs out. set it to zero any time to switch
-          offline fights off.
-        </p>
+        <p className="text-bull-text-faint">{CURRENCY.awayBudgetSpendsDown}</p>
 
         {balance.allowanceUnset && balance.hasCredit && (
-          <p className="text-bull-gold">
-            you have money in here but no away budget, so nobody can pick your bulls yet. set one
-            below and they are in.
+          <p className="rounded border border-bull-gold/40 bg-bull-gold/5 p-2 text-bull-gold">
+            {READY.budgetTrap}
           </p>
+        )}
+
+        {priced && (
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-bull-text-faint">let away fights spend up to</span>
+            {BUDGET_FIGHTS.map((n) => {
+              const wei = forFights(n)!;
+              return (
+                <button
+                  key={n}
+                  type="button"
+                  onClick={() => setCap(formatUnits(wei, dp))}
+                  className={presetCls(capWei === wei)}
+                >
+                  {n} {n === 1 ? 'fight' : 'fights'}
+                </button>
+              );
+            })}
+          </div>
         )}
 
         <div className="flex flex-wrap items-center gap-2">
@@ -225,87 +330,120 @@ export function FightBalanceRow({
             inputMode="decimal"
             value={cap}
             onChange={(e) => setCap(e.target.value)}
-            placeholder={suggestedCap !== undefined ? fmt(suggestedCap) : '0.0'}
+            placeholder={suggestedCap !== undefined ? formatUnits(suggestedCap, dp) : '0.0'}
             aria-label="the most bnb fights you did not start may take, in total"
-            className="w-28 rounded border border-bull-border bg-bull-bg px-2 py-1 font-mono text-[11px] text-bull-text"
+            /* ⚠ THE PLACEHOLDER IS DIMMED EXPLICITLY. These boxes are
+               pre-filled with a SUGGESTION as placeholder text, and at the
+               browser default they render close enough to a real value that a
+               player reads "0.01664" as an amount they have already entered —
+               then presses a button that says it is waiting for one. Two
+               different meanings must not share a colour on a control that
+               moves money. */
+            className="w-32 rounded border border-bull-border bg-bull-bg px-2 py-1 font-mono text-[11px] text-bull-text placeholder:text-bull-text-faint"
           />
-          <button
-            type="button"
-            onClick={() => capWei && void balance.setPassiveAllowance(capWei)}
-            disabled={!capWei || balance.isBusy}
-            className="rounded-full border border-bull-border px-3 py-1 text-[11px] text-bull-text hover:border-bull-gold hover:text-bull-gold disabled:opacity-40"
-          >
-            {balance.isBusy ? 'working…' : 'set budget'}
-          </button>
+          <span className="text-bull-text-faint">bnb</span>
           {suggestedCap !== undefined && (
             <button
               type="button"
               onClick={() => setCap(formatUnits(suggestedCap, dp))}
               className="text-bull-text-faint underline hover:text-bull-gold"
             >
-              {SUGGESTED_PASSIVE_FIGHTS} fights
-            </button>
-          )}
-          {/* ⚠ ALWAYS REACHABLE, LIKE THE WITHDRAW. `setPassiveAllowance` is
-              unpausable and unguarded on the contract so a player can always
-              cut their exposure — gating this on anything would re-impose the
-              lock the contract deliberately refuses to have. */}
-          {balance.passiveAllowance !== undefined && balance.passiveAllowance > 0n && (
-            <button
-              type="button"
-              onClick={() => void balance.setPassiveAllowance(0n)}
-              disabled={balance.isBusy}
-              className="rounded-full border border-bull-border px-3 py-1 text-[11px] text-bull-text-dim hover:border-bull-red hover:text-bull-red disabled:opacity-40"
-            >
-              switch off
+              suggest {SUGGESTED_PASSIVE_FIGHTS}
             </button>
           )}
         </div>
+
+        {/* ⚠ SETTING A BUDGET SPENDS NO BNB, and the label must not imply that
+            it does. It is a ceiling on money already in the balance, so it says
+            "let away fights spend up to", never "pay". The figure is still on
+            the button, because a number a player is stating is a number they
+            should be able to read before they state it. */}
+        <button
+          type="button"
+          onClick={() => capWei && void balance.setPassiveAllowance(capWei)}
+          disabled={!capWei || balance.isBusy}
+          className="w-full whitespace-normal rounded-full border-2 border-bull-gold px-3 py-2 text-center font-mono text-xs font-medium text-bull-gold transition hover:bg-bull-gold/10 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {balance.isBusy
+            ? 'working…'
+            : capWei
+              ? `set the budget to ${bnbLabel(capWei, decimals, usdPerBnb)}`
+              : 'pick a budget above'}
+        </button>
+        {capWei !== null && fightsIn(capWei) !== undefined && (
+          <p className="text-bull-text-faint">
+            that is {fightsIn(capWei)} away fight{fightsIn(capWei) === 1 ? '' : 's'} before it runs
+            out. nothing is spent now, and nothing above it can ever be touched.
+          </p>
+        )}
+
+        {/* ⚠ ALWAYS REACHABLE, LIKE THE WITHDRAW. `setPassiveAllowance` is
+            unpausable and unguarded on the contract so a player can always
+            cut their exposure — gating this on anything would re-impose the
+            lock the contract deliberately refuses to have. */}
+        {balance.passiveAllowance !== undefined && balance.passiveAllowance > 0n && (
+          <button
+            type="button"
+            onClick={() => void balance.setPassiveAllowance(0n)}
+            disabled={balance.isBusy}
+            className="rounded-full border border-bull-border px-3 py-1 text-bull-text-dim transition hover:border-bull-red hover:text-bull-red disabled:opacity-40"
+          >
+            switch away fights off
+          </button>
+        )}
         <p className="text-bull-text-faint">{CURRENCY.awayBudgetWhy}</p>
       </div>
 
-      {/* ── take it out ────────────────────────────────────────────────
+      {/* ══ TAKE IT BACK OUT ══════════════════════════════════════════
           ⚠ ALWAYS RENDERED WHEN THERE IS A BALANCE. Never behind a fight
           gate, never behind a pause. See the file header. */}
       {balance.hasCredit && (
-        <div className="flex flex-wrap items-center gap-2 border-t border-bull-border pt-2">
-          {/* ⚠ SAY THE EXIT OUT LOUD, ABOVE THE CONTROLS. Owner call
-              2026-08-10. This is real BNB sitting in a contract, and the one
-              question a player has before putting it there is whether they can
-              get it back. `withdraw` is gated on NOTHING — no cooldown, no
-              pause, no in-fight lock — so the honest thing is to state that
-              where the decision is made, not in fine print underneath it. */}
-          <span className="w-full text-bull-text-faint">
-            didn&apos;t fight, or done? take it back any time — there is no lock and no waiting.
+        <div className="space-y-2 border-t border-bull-border pt-3">
+          <span className="block font-mono uppercase tracking-wide text-bull-text-faint">
+            take it back out
           </span>
-          <input
-            type="text"
-            inputMode="decimal"
-            value={takeOut}
-            onChange={(e) => setTakeOut(e.target.value)}
-            placeholder="0.0"
-            aria-label="bnb to take out of your fight balance"
-            className="w-28 rounded border border-bull-border bg-bull-bg px-2 py-1 font-mono text-[11px] text-bull-text"
-          />
-          <button
-            type="button"
-            onClick={() => takeOutWei && !overWithdraw && void balance.withdraw(takeOutWei)}
-            disabled={!takeOutWei || overWithdraw || balance.isBusy}
-            className="rounded-full border border-bull-border px-3 py-1 text-[11px] text-bull-text hover:border-bull-gold hover:text-bull-gold disabled:opacity-40"
-          >
-            take out
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              type="text"
+              inputMode="decimal"
+              value={takeOut}
+              onChange={(e) => setTakeOut(e.target.value)}
+              placeholder="0.0"
+              aria-label="bnb to take out of your fight balance"
+              /* ⚠ THE PLACEHOLDER IS DIMMED EXPLICITLY. These boxes are
+               pre-filled with a SUGGESTION as placeholder text, and at the
+               browser default they render close enough to a real value that a
+               player reads "0.01664" as an amount they have already entered —
+               then presses a button that says it is waiting for one. Two
+               different meanings must not share a colour on a control that
+               moves money. */
+            className="w-32 rounded border border-bull-border bg-bull-bg px-2 py-1 font-mono text-[11px] text-bull-text placeholder:text-bull-text-faint"
+            />
+            <span className="text-bull-text-faint">bnb</span>
+            <button
+              type="button"
+              onClick={() => takeOutWei && !overWithdraw && void balance.withdraw(takeOutWei)}
+              disabled={!takeOutWei || overWithdraw || balance.isBusy}
+              className="rounded-full border border-bull-border px-3 py-1 text-bull-text transition hover:border-bull-gold hover:text-bull-gold disabled:opacity-40"
+            >
+              {takeOutWei && !overWithdraw
+                ? `take out ${bnbLabel(takeOutWei, decimals, usdPerBnb)}`
+                : 'take out'}
+            </button>
+            {overWithdraw && <span className="text-bull-red">more than you have in there.</span>}
+          </div>
+          {/* The one-tap exit. It names the whole balance, because "take it all"
+              with no figure is the same missing quote as "top up" was. */}
           <button
             type="button"
             onClick={() => void balance.withdrawAll()}
             disabled={balance.isBusy}
-            className="rounded-full border border-bull-gold px-3 py-1 text-[11px] text-bull-gold hover:bg-bull-gold/10 disabled:opacity-40"
+            className="w-full whitespace-normal rounded-full border-2 border-bull-gold px-3 py-2 text-center font-mono text-xs font-medium text-bull-gold transition hover:bg-bull-gold/10 disabled:opacity-40"
           >
-            take it all
+            {balance.isBusy
+              ? 'working…'
+              : `take it all back · ${bnbLabel(balance.credit, decimals, usdPerBnb)}`}
           </button>
-          {overWithdraw && (
-            <span className="text-bull-red">more than you have in there.</span>
-          )}
         </div>
       )}
       <p className="text-bull-text-faint">{CURRENCY.withdrawAlways}</p>
@@ -329,23 +467,29 @@ export function FightBalanceRow({
 export function FightBalanceBanner({
   balance,
   decimals,
+  usdPerBnb,
 }: {
   balance: FightBalance;
   decimals: number | undefined;
+  usdPerBnb: bigint | undefined;
 }) {
   // ⚠ Off a read that LANDED, and never on an empty balance — a banner about
   // money that is not there would be noise, and noise is what people learn to
   // scroll past before the one time it matters.
   if (!balance.hasCredit) return null;
-  const dp = decimals ?? 18;
-  const amount = Number(formatUnits(balance.credit ?? 0n, dp)).toFixed(6);
 
   return (
     <div className="rounded border border-bull-gold/40 bg-bull-panel px-3 py-2 text-[11px]">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <span className="text-bull-text">
-          <strong className="bull-header text-bull-gold">{amount} bnb</strong> sitting in your
-          fight balance
+          <BnbAmount
+            wei={balance.credit}
+            decimals={decimals}
+            usdPerBnb={usdPerBnb}
+            emphasis
+            className="text-sm"
+          />{' '}
+          sitting in your fight balance
         </span>
         <button
           type="button"

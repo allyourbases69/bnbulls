@@ -146,7 +146,11 @@ import { useFightAllowance, type FightAllowance } from '@/lib/hooks/useFightAllo
 import { useBnbullLocked } from '@/lib/hooks/useBnbullLocked';
 import { useWrapBnb } from '@/lib/hooks/useWrapBnb';
 import { useFightBalance } from '@/lib/hooks/useFightBalance';
+import { useBnbUsdPrice } from '@/lib/hooks/useBnbUsd';
 import { FightBalanceRow, FightBalanceBanner } from '@/components/duel/FightBalanceRow';
+import { PitReadiness } from '@/components/duel/PitReadiness';
+import { FightPrice } from '@/components/duel/FightPrice';
+import { BnbAmount } from '@/components/duel/BnbAmount';
 import { JackpotPrizeBanner } from '@/components/pots/JackpotPrizeBanner';
 import { useDismissOnOutside } from '@/lib/hooks/useDismissOnOutside';
 import { rankOpponents, pickOpponent, ratingGap } from '@/lib/matchmaking';
@@ -159,7 +163,7 @@ import { PitPanel, PitEntryButton } from '@/components/duel/PitPanel';
 import { PitRoster } from '@/components/pit/PitRoster';
 import { DuelSection, useDuelSectionState } from '@/components/duel/DuelSection';
 import { DuelFlowStep, type DuelStepState } from '@/components/duel/DuelFlowStep';
-import { CURRENCY, PIT } from '@/lib/brand';
+import { CURRENCY, PIT, READY } from '@/lib/brand';
 
 const ZERO = '0x0000000000000000000000000000000000000000' as const;
 const APPROVE_FIGHT_OPTIONS = [1, 5, 10, 25, 50] as const;
@@ -221,6 +225,29 @@ export function DuelPicker() {
    * summary line the instant there is not. Straight off fefers' `openStep`.
    */
   const [openStep2, setOpenStep2] = useState(false);
+
+  /**
+   * THE AWAY-FIGHTS PANEL, OPENED FROM THE LADDER.
+   *
+   * ⚠ IT IS A DISCLOSURE AND IT STAYS ONE. The setup underneath buys exactly
+   * one thing — being pickable while you are not at the keyboard — and the last
+   * time it sat unfolded in the primary slot six mainnet wallets signed for it
+   * believing it was the price of entry. What changed is that a player can no
+   * longer fail to KNOW it is there: the ladder names it, states it as optional,
+   * and this is the button that takes them to it. Knowing about a thing and
+   * being pushed into it are different, and only the first was ever missing.
+   */
+  const [awayOpen, setAwayOpen] = useState(false);
+  const awayRef = useRef<HTMLDetailsElement>(null);
+  const openAway = useCallback(() => {
+    setOpenStep2(true);
+    setAwayOpen(true);
+    // The panel can be below the fold on a phone, and an unfold the player
+    // cannot see reads as a button that did nothing.
+    requestAnimationFrame(() => {
+      awayRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+  }, []);
 
   const { open: sections, setSection } = useDuelSectionState<DuelSectionId>(
     SECTION_STORAGE_KEY,
@@ -422,6 +449,21 @@ export function DuelPicker() {
     wbnbCost,
     fightsWanted,
   );
+
+  /**
+   * WHAT A BNB FIGURE IS WORTH IN DOLLARS, LIVE.
+   *
+   * ⚠ THE SAME CHAINLINK ANSWER THE CONTRACT PRICES WITH, not a second opinion
+   * off an exchange api — see `useBnbUsd`. It is display only: every amount a
+   * wallet is asked to sign for still comes off `fighterCost`, which does the
+   * conversion on chain.
+   *
+   * ⚠ `undefined` IS A REAL AND EXPECTED ANSWER. The oracle read reverts on a
+   * stale or out-of-band round by design, and every surface below renders the
+   * bnb on its own rather than inventing a dollar figure over the top of a
+   * refusal.
+   */
+  const usdPerBnb = useBnbUsdPrice(duelAddress ?? undefined);
 
   /**
    * ⚠ IS THE BNBULL LEG USABLE AT ALL RIGHT NOW?
@@ -713,8 +755,55 @@ export function DuelPicker() {
     return b ? `${b.name.toLowerCase()} #${id}` : `bull #${id}`;
   };
 
+  /**
+   * IS THE BULL THAT FIGHTS NEXT ACTUALLY IN, FOR THE LADDER.
+   *
+   * ⚠ THREE-VALUED, AND `unread` IS NOT `out`. `sendInIds` is empty both when
+   * everything ticked is already in AND when the membership reads have not
+   * answered, so the unread case has to be tested first or the ladder would
+   * cheerfully tick off a rung it has not read.
+   */
+  const ladderPitState: 'in' | 'out' | 'unread' = pitUnread
+    ? 'unread'
+    : sendInIds.length > 0
+      ? 'out'
+      : myInPitCount > 0
+        ? 'in'
+        : 'out';
+
+  /** The ladder describes the bnb custody controls, so it only makes sense
+   *  where those controls exist: the native contract, on the bnb leg. */
+  const awayApplies = NATIVE_DUEL && !primaryIsBnbull;
+
+  /** The one figure this whole page is about, for the strips and the ladder. */
+  const readiness = (
+    <PitReadiness
+      connected={!!account}
+      hasBulls={roster.mine.length > 0}
+      pitState={ladderPitState}
+      inPitCount={myInPitCount}
+      herdCount={roster.mine.length}
+      balance={fightBalance}
+      decimals={wbnbDecimals}
+      usdPerBnb={usdPerBnb}
+      awayApplies={awayApplies}
+      onOpenAway={openAway}
+    />
+  );
+
   return (
     <div className="space-y-4">
+      {/* ═══════════════════════════════════════════════════════════
+          THE PRICE, ABOVE EVERYTHING, FOR EVERYBODY.
+          ⚠ NO WALLET GATE AND NO FOLD. Owner, 2026-08-10: *"cant see anywhere
+          there easy it quotes HOW MUCH bnb."* The figure used to live inside a
+          folded per-currency table three sections down, behind a connection —
+          so the first question anybody has about a money game was the hardest
+          thing on the page to find. It is read off `fighterCost`, it moves
+          every block, and it is a dash when it has not landed.
+          ═══════════════════════════════════════════════════════════ */}
+      <FightPrice perFight={wbnbCost} decimals={wbnbDecimals} usdPerBnb={usdPerBnb} />
+
       {/* ═══════════════════════════════════════════════════════════
           SECTION 1 · YOUR FIGHT — the three-step flow, folded as one.
           Fefers wraps its whole stepper in a single "stomping ground"
@@ -831,55 +920,137 @@ export function DuelPicker() {
               top of this file before adding a control here. In order: what is
               about to happen, the money, ONE button, then everything else quiet
               under a divider. Nothing else goes above the button. */}
+          {/* ⚠ TITLED "get set up", NOT "send them in", BECAUSE THE STEP GREW.
+              It used to do one thing you could name in three words. Since the
+              native migration it covers the pit, the money and the away budget,
+              and a heading that names only the first of three jobs is how a
+              player concludes they are finished after doing it. The send-in is
+              still the step's primary button and still says so on the button. */}
           <DuelFlowStep
             n={2}
-            title="send them in"
+            title="get set up"
             state={step2State}
             status={!account ? 'connect a wallet' : step2Done ? 'sorted' : undefined}
           >
             {!account ? (
-              <p className="text-sm text-bull-text-dim">
-                connect your wallet and this is where you back your bull.
-              </p>
+              /* ⚠ THE EMPTY STATE STILL TEACHES THE GAME. A visitor with no
+                 wallet used to get one sentence and nothing else, so the only
+                 way to find out what the pit costs or what setting one up
+                 involves was to connect first and read as you went. The ladder
+                 renders for them with every rung in its `waiting` state, which
+                 shows the SHAPE of the job without claiming to know anything
+                 about a wallet that is not there. */
+              <div className="space-y-3">
+                <p className="text-sm text-bull-text-dim">
+                  connect your wallet and this is where you back your bull.
+                </p>
+                {readiness}
+              </div>
             ) : roster.mine.length === 0 ? (
-              <p className="text-sm text-bull-text-dim">{PIT.emptyWallet}</p>
+              <div className="space-y-3">
+                <p className="text-sm text-bull-text-dim">
+                  {PIT.emptyWallet}{' '}
+                  <Link href="/mint" className="text-bull-gold hover:underline">
+                    mint one
+                  </Link>{' '}
+                  and this is what happens next.
+                </p>
+                {readiness}
+              </div>
             ) : !step2Open ? (
               /* SATISFIED, SO IT FOLDS TO ONE LINE. The two facts a player
                  actually checks stay readable; they just stop being controls. */
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                {/* ⚠ CURRENCY-AWARE, BECAUSE "0 fights allowed in bnb" IS A LIE
-                    BY OMISSION. On the bnb leg the allowance has nothing to do
-                    with whether the player can fight — it only decides whether
-                    OTHERS can pick their bulls — so a bare zero here read as a
-                    broken wallet on the one line step 2 leaves behind. The
-                    bnbull leg keeps the figure, because there it is the gate. */}
-                <p className="min-w-0 font-mono text-sm text-bull-text-dim">
-                  <span className="text-bull-gold">{myInPitCount}</span> of yours in {PIT.short}
-                  {primaryIsBnbull ? (
-                    <>
-                      {' '}
-                      · <span className="text-bull-text">{primaryAllowance.fightsAllowed}</span>{' '}
-                      fight{primaryAllowance.fightsAllowed === 1 ? '' : 's'} allowed in{' '}
-                      {primaryCurrencyLabel}
-                    </>
-                  ) : (
-                    <>
-                      {' '}
-                      · paying in <span className="text-bull-text">bnb</span>
-                      {challengeable ? ' · challengeable while away' : ''}
-                    </>
-                  )}
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setOpenStep2(true)}
-                  className="shrink-0 py-1 font-mono text-xs text-bull-gold hover:underline"
-                >
-                  change
-                </button>
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  {/* ⚠ CURRENCY-AWARE, BECAUSE "0 fights allowed in bnb" IS A LIE
+                      BY OMISSION. On the bnb leg the allowance has nothing to do
+                      with whether the player can fight — it only decides whether
+                      OTHERS can pick their bulls — so a bare zero here read as a
+                      broken wallet on the one line step 2 leaves behind. The
+                      bnbull leg keeps the figure, because there it is the gate. */}
+                  <p className="min-w-0 font-mono text-sm text-bull-text-dim">
+                    <span className="text-bull-gold">{myInPitCount}</span> of yours in {PIT.short}
+                    {primaryIsBnbull ? (
+                      <>
+                        {' '}
+                        · <span className="text-bull-text">{primaryAllowance.fightsAllowed}</span>{' '}
+                        fight{primaryAllowance.fightsAllowed === 1 ? '' : 's'} allowed in{' '}
+                        {primaryCurrencyLabel}
+                      </>
+                    ) : (
+                      <>
+                        {' '}
+                        · paying in <span className="text-bull-text">bnb</span>
+                        {/* ⚠ THE AWAY STATE IS NAMED ON THE FOLDED LINE, ON OR
+                            OFF, AND IT USED TO ONLY APPEAR WHEN IT WAS ON. A
+                            step that folds to "sorted" while half the game is
+                            switched off is precisely how somebody ends up
+                            wondering why nobody ever fights their bulls, and
+                            an absent word is not a state anybody can read.
+                            The unread case stays a dash: `passiveAllowance`
+                            being unread is not the same as it being zero. */}
+                        {awayApplies && (
+                          <>
+                            {' · away fights '}
+                            <span
+                              className={
+                                fightBalance.passiveAllowance === undefined
+                                  ? 'text-bull-text-faint'
+                                  : challengeable
+                                    ? 'text-bull-gold'
+                                    : 'text-bull-red'
+                              }
+                            >
+                              {fightBalance.passiveAllowance === undefined
+                                ? '—'
+                                : challengeable
+                                  ? 'on'
+                                  : 'off'}
+                            </span>
+                          </>
+                        )}
+                      </>
+                    )}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setOpenStep2(true)}
+                    className="shrink-0 py-1 font-mono text-xs text-bull-gold hover:underline"
+                  >
+                    change
+                  </button>
+                </div>
+
+                {/* ⚠⚠ THE ONE STATE THAT GETS THROUGH THE FOLD. Money in and a
+                    zero budget means every incoming fight is being refused
+                    `PassiveAllowanceExceeded` against bnb the player has already
+                    parked — the exact state behind the run of "cannot be fought"
+                    reports. This is not nagging somebody into optional setup:
+                    they have already paid for it, and it is switched off. */}
+                {awayApplies && fightBalance.hasCredit && fightBalance.allowanceUnset && (
+                  <div className="rounded border border-bull-gold/50 bg-bull-gold/5 p-2.5">
+                    <p className="text-[11px] text-bull-gold">{READY.budgetTrap}</p>
+                    <button
+                      type="button"
+                      onClick={openAway}
+                      className="mt-2 rounded-full border border-bull-gold px-3 py-1 font-mono text-[11px] text-bull-gold transition hover:bg-bull-gold/10"
+                    >
+                      switch away fights on
+                    </button>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="space-y-3">
+                {/* ⚠ THE MAP GOES FIRST. Owner, 2026-08-10: *"make the bullpit
+                    extremely step by step user friendly."* Everything below
+                    this ladder is a control; the ladder is the only thing on the
+                    page that answers "where am i up to and what is left", which
+                    is the question somebody has before they can use any of
+                    them. See `PitReadiness` for why the rungs are grouped the
+                    way they are and why the bottom group says optional. */}
+                {readiness}
+
                 {/* WHAT IS ABOUT TO HAPPEN, IN NAMES. "we are sending these
                     three in" reads better than a count, wherever the list is
                     short enough to read. */}
@@ -1015,7 +1186,33 @@ export function DuelPicker() {
                           what the OPTIONAL challenge setup would approve, and
                           that number belongs next to that control, which is
                           where `AllowanceRow` puts it. */}
-                      {!primaryIsBnbull ? null : primaryAllowance.covers ? (
+                      {!primaryIsBnbull ? (
+                        /* ⚠ THIS SLOT WAS DELIBERATELY EMPTY AND IT IS NOW
+                           DELIBERATELY FULL, SO READ WHY BEFORE TOUCHING IT.
+                           It used to read "= 0.169560 wbnb" beside the fight
+                           count, which was the single most direct way this page
+                           told a bnb player that a wrapped token was what a run
+                           of fights costs. It is not, and that line was removed.
+                           What is here now is a different figure with a
+                           different meaning: the plain BNB a run of N fights
+                           takes out of the WALLET, at today's price, because
+                           `_takeSide` spends `msg.value` first for anybody
+                           starting their own fight. That is money the player
+                           genuinely spends, it is the headline thing the owner
+                           could not find anywhere on the page, and it is read
+                           off `fighterCost` rather than computed from a
+                           constant. A dash when the read has not landed. */
+                        <BnbAmount
+                          wei={
+                            wbnbCost !== undefined && wbnbCost > 0n
+                              ? wbnbCost * BigInt(fightsWanted)
+                              : undefined
+                          }
+                          decimals={wbnbDecimals}
+                          usdPerBnb={usdPerBnb}
+                          emphasis
+                        />
+                      ) : primaryAllowance.covers ? (
                         <span className="text-bull-gold">already covered</span>
                       ) : primaryAllowance.approvalTotal !== undefined ? (
                         <>
@@ -1034,7 +1231,14 @@ export function DuelPicker() {
                   <p className="text-[11px] text-bull-text-faint">
                     {primaryIsBnbull
                       ? 'one signature, sized for that many. the chain remembers it, so every fight after it is a single confirm until the run is used up. it is one shared pool and not a budget per bull, so the first fight by any of them draws on the lot.'
-                      : 'how many you are up for in one sitting. it sizes the optional setup below, and a top-up if the price moves mid-run. paying for your own fights needs no signature at all.'}
+                      : /* ⚠ "NOTHING IS TAKEN NOW" IS LOAD-BEARING. The figure
+                           beside the count is a RUN TOTAL, and a total sitting
+                           next to a number you just picked reads like a bill
+                           about to be charged. It is not: the contract settles
+                           one fight per wallet at a time and each one is paid as
+                           it happens, so the sentence has to say so in the same
+                           breath or the quote we just added becomes a scare. */
+                        'how many you are up for in one sitting. the figure beside it is what the whole run costs at the price right now, paid one fight at a time out of your wallet as you go. nothing is taken now, nothing is locked, and you can stop after any of them.'}
                   </p>
                 </div>
 
@@ -1145,7 +1349,11 @@ export function DuelPicker() {
                           has to unfold to find. */}
                       {NATIVE_DUEL && (
                         <div className="mb-2 space-y-2">
-                          <FightBalanceBanner balance={fightBalance} decimals={wbnbDecimals} />
+                          <FightBalanceBanner
+                            balance={fightBalance}
+                            decimals={wbnbDecimals}
+                            usdPerBnb={usdPerBnb}
+                          />
                           {/* An unclaimed JACKPOT is the same trap one size
                               larger: the telegram card shouts that they took
                               the whole pot, and the money is sitting in the pot
@@ -1155,10 +1363,29 @@ export function DuelPicker() {
                           <JackpotPrizeBanner />
                         </div>
                       )}
-                      <details>
+                      {/* ⚠ CONTROLLED, SO THE LADDER CAN OPEN IT. `open` is
+                          driven by state rather than left to the browser,
+                          because the rungs above hand a player a "set a budget"
+                          button and a button that scrolls to something still
+                          folded shut is a button that did nothing. The player
+                          can still close it themselves — `onToggle` writes the
+                          state back — so this steers the disclosure, it does not
+                          take it away from them. */}
+                      <details
+                        ref={awayRef}
+                        open={awayOpen}
+                        onToggle={(e) => setAwayOpen((e.currentTarget as HTMLDetailsElement).open)}
+                      >
                         <summary className="cursor-pointer font-mono text-[11px] uppercase tracking-wide text-bull-text-faint">
                           let others fight your bulls while you are away
-                          {challengeable ? ' · on' : ' · off'}
+                          {/* ⚠ THE STATE WORD IS THE POINT OF THIS SUMMARY. It
+                              is the only thing a folded panel says, and "off"
+                              here is the difference between a player knowing
+                              half the game is switched off and wondering why
+                              nobody fights their bulls. */}
+                          <span className={challengeable ? 'text-bull-gold' : 'text-bull-red'}>
+                            {challengeable ? ' · on' : ' · off'}
+                          </span>
                         </summary>
                         <p className="mt-2 text-[11px] text-bull-text-faint">
                           {NATIVE_DUEL ? CURRENCY.balanceSetup : CURRENCY.challengeSetup}
@@ -1172,6 +1399,7 @@ export function DuelPicker() {
                               balance={fightBalance}
                               decimals={wbnbDecimals}
                               fights={fightsWanted}
+                              usdPerBnb={usdPerBnb}
                             />
                           ) : (
                             <AllowanceRow
@@ -1210,6 +1438,7 @@ export function DuelPicker() {
                             balance={fightBalance}
                             decimals={wbnbDecimals}
                             fights={fightsWanted}
+                            usdPerBnb={usdPerBnb}
                           />
                         ) : (
                           <AllowanceRow
@@ -1496,6 +1725,22 @@ export function DuelPicker() {
 }
 
 /**
+ * ═══════════════════════════════════════════════════════════════════════
+ * ⚠ MOSTLY PRE-CUTOVER CODE. READ THIS BEFORE TOUCHING ITS COPY.
+ * ═══════════════════════════════════════════════════════════════════════
+ * Under `NATIVE_DUEL` this component is reached for the BNBULL leg ONLY —
+ * `FightBalanceRow` owns the bnb leg, and every `wrappable` call site is inside
+ * a `!NATIVE_DUEL` branch. So the wrap / approve / allowance wording below is
+ * DEAD on the live site today, and it is deliberately kept rather than deleted
+ * because one build flag serves either side of the cutover and a rollback must
+ * not ship a page that describes a contract it is not talking to.
+ *
+ * ⚠ IT IS ALSO ONE FLAG FROM BEING VISIBLE AGAIN, which is why it is marked
+ * here rather than left to be discovered. Do not lift sentences out of this
+ * component into anything on the native path: "wrap", "approve" and "allowance"
+ * are banned in live player copy, and the bnb leg has no allowance to describe.
+ *
+ * ─────────────────────────────────────────────────────────────────────
  * One currency's standing allowance: how many fights the WHOLE PACK is still
  * allowed in it, ONE approve control sized by the count above, and the revoke.
  *

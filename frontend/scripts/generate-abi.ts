@@ -80,6 +80,16 @@ const TARGETS: Target[] = [
   // player-facing name for it is `PIT` in `lib/brand.ts`, and the two are
   // deliberately allowed to differ (same as `/graveyard` being "the butcher").
   { exportName: 'YardsAbi', file: 'Yards.ts', artifact: 'Yards.sol/Yards.json' },
+  // The pen that holds the unsold bulls and deals them at random. The frontend
+  // needs the WHOLE surface, not just the views: `armFallback`,
+  // `pinFallbackSeed` and `settle` are PERMISSIONLESS, so the buyer's own
+  // browser is the thing that unsticks a reservation VRF abandoned. A read-only
+  // ABI here would leave a paid-for bull undeliverable with nobody to press the
+  // button. ⚠ Regenerating this also refreshes `MintDrop.ts`, which is where
+  // `penContract` / `penWire` / `BullsReserved` come from — the pen is useless
+  // to the UI without them, because `BullsReserved` is the ONLY thing a
+  // pen-wired mint receipt carries (no `BullMinted` fires in the buyer's tx).
+  { exportName: 'BullPenAbi', file: 'BullPen.ts', artifact: 'BullPen.sol/BullPen.json' },
   {
     exportName: 'Erc20Abi',
     file: 'Erc20.ts',

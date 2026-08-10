@@ -19,7 +19,14 @@ interface IJackpotFund {
 ///      this returns a RESERVATION handle and not a token id: the id cannot
 ///      exist yet without handing the buyer a free abort.
 interface IBullPen {
-    function reserve(address to, uint16 count) external returns (uint256 reservationId);
+    /// @param payer       Who gets the money back if this reservation is refunded.
+    ///                    The PAYER, not `to`: a gifted mint refunds the gifter.
+    /// @param tokenEscrow BNBULL already transferred to the pen for this
+    ///                    reservation. Native escrow rides in `msg.value`.
+    function reserve(address to, uint16 count, address payer, uint256 tokenEscrow)
+        external
+        payable
+        returns (uint256 reservationId);
 }
 
 /// @dev Wrapped BNB. `deposit` is 1:1 and cannot fail on liquidity — it is a
@@ -276,27 +283,29 @@ contract MintDrop is Ownable, Pausable, ReentrancyGuard {
         /// that graduates against something other than WBNB is still
         /// reachable. **Zero at deploy and expected to stay zero forever** —
         /// see `swapIntermediate`. APPENDED, so slots 0..3 keep their numbers.
-        SwapIntermediate
+        SwapIntermediate,
+        /// The randomised-assignment pen (`BullPen.sol`). Zero is the legacy
+        /// sequential path and is byte-for-byte today's behaviour.
+        ///
+        /// ⚠ MOVED HERE FROM A STANDALONE SLOT, FOR SPACE, NOT FOR TIDINESS.
+        /// A bespoke `_penWire` slot plus its four admin calls, its two views
+        /// and its four events costs roughly 800 bytes — and `MintDrop` had 803
+        /// bytes of EIP-170 headroom before any pen work began. The standalone
+        /// version did not fit: the committed source built to 24,715 bytes
+        /// against a 24,576 limit and could not be deployed at all.
+        ///
+        /// Reusing `_wires` gets the identical timelock, the identical
+        /// propose/commit ceremony and the identical public pending target and
+        /// ETA, through `bootstrapWire`/`proposeWire`/`commitWire`/`cancelWire`/
+        /// `wireOf`, for the cost of one enum member. `penContract()` survives
+        /// as a one-line view, so every READER (the site, the fleet, the deploy
+        /// pre-flight) is unchanged; only the admin ceremony moved.
+        ///
+        /// APPENDED, so slots 0..4 keep their numbers.
+        Pen
     }
 
     mapping(uint8 => TimelockedAddress.Slot) private _wires;
-
-    /**
-     * @notice The randomised-assignment pen, if one is wired.
-     *
-     * @dev ⛔ DELIBERATELY **NOT** A MEMBER OF `Wire`. Appending to that enum
-     *      renumbers nothing but does widen `wires()`, `_afterWire` and BOTH
-     *      config builders in `script/lib/BnbullsConfig.sol` — and a field
-     *      added to `loadConfig` but not `loadVerifyConfig` makes `Verify`
-     *      compare the chain against a struct default of zero and report a
-     *      failure that is not real. A standalone slot touches none of that.
-     *
-     *      ZERO IS THE LEGACY PATH AND IT IS BYTE-FOR-BYTE TODAY'S BEHAVIOUR:
-     *      sequential `bulls.mint(to)`, same events, same return value. The pen
-     *      is opt-in at wiring time, which is the seam that lets this ship
-     *      without disturbing anything already live.
-     */
-    TimelockedAddress.Slot private _penWire;
 
     /// @notice Delay a wiring change must age before it can be committed.
     uint256 public wiringDelay = 24 hours;
@@ -535,10 +544,6 @@ contract MintDrop is Ownable, Pausable, ReentrancyGuard {
         uint16 discountBps,
         uint256 bnbUsd1e18
     );
-    event PenWireBootstrapped(address indexed target);
-    event PenWireProposed(address indexed target, uint64 eta);
-    event PenWireCommitted(address indexed previous, address indexed next);
-    event PenWireCancelled(address indexed dropped);
     event PriceTiersSet(uint256 tierCount);
     event DiscountSet(address indexed asset, uint16 bps);
     event TreasuryChanged(address indexed previous, address indexed next);
@@ -832,8 +837,14 @@ contract MintDrop is Ownable, Pausable, ReentrancyGuard {
             totalSold += count;
         }
 
-        _routeNative(bnbDue);
-        tokenIds = _mintAndEmit(to, count, 0, q.perUnitUsd);
+        // ⚠ WHEN A PEN IS WIRED THE MONEY IS ESCROWED, NOT ROUTED. See
+        // `_mintAndEmit`. Routing here is what made a stuck reservation
+        // unrefundable: the dev share reaches an EOA and both pot slices reach
+        // `Jackpot.fund`, which is no-withdraw by design and therefore cannot
+        // be clawed back by anybody, ever.
+        address pen = _wire(Wire.Pen);
+        if (pen == address(0)) _routeNative(bnbDue);
+        tokenIds = _mintAndEmit(pen, to, count, 0, q.perUnitUsd, bnbDue, 0);
 
         emit MintPaid(
             msg.sender, 0, NATIVE, bnbDue, q.usdTotal, discountBpsOf[NATIVE], price
@@ -864,8 +875,9 @@ contract MintDrop is Ownable, Pausable, ReentrancyGuard {
         }
 
         uint256 received = _pullMeasured(bnbull, msg.sender, due);
-        _routeToken(PotSource.Bnbull, bnbull, received);
-        tokenIds = _mintAndEmit(to, count, 1, q.perUnitUsd);
+        address pen = _wire(Wire.Pen);
+        if (pen == address(0)) _routeToken(PotSource.Bnbull, bnbull, received);
+        tokenIds = _mintAndEmit(pen, to, count, 1, q.perUnitUsd, 0, received);
 
         emit MintPaid(
             msg.sender, 1, address(bnbull), received, q.usdTotal, discountBpsOf[address(bnbull)], 0
@@ -890,14 +902,21 @@ contract MintDrop is Ownable, Pausable, ReentrancyGuard {
      *      returning an id here at all would re-open the snipe.
      */
     function _mintAndEmit(
+        address p,
         address to,
         uint256 count,
         uint8 paymentType,
-        uint256[] memory perUnitUsd
+        uint256[] memory perUnitUsd,
+        uint256 nativeEscrow,
+        uint256 tokenEscrow
     ) private returns (uint256[] memory tokenIds) {
-        address p = _penWire.current;
         if (p != address(0)) {
-            uint256 reservationId = IBullPen(p).reserve(to, uint16(count));
+            // The pen custodies the payment until the reservation resolves. It
+            // sends it back through `routeReservedPayment` on settle, or back
+            // to the payer on a timeout refund.
+            if (tokenEscrow > 0) bnbull.safeTransfer(p, tokenEscrow);
+            uint256 reservationId =
+                IBullPen(p).reserve{value: nativeEscrow}(to, uint16(count), msg.sender, tokenEscrow);
             uint256 usdTotal;
             uint256 airdropped;
             for (uint256 i = 0; i < count; i++) {
@@ -1397,6 +1416,27 @@ contract MintDrop is Ownable, Pausable, ReentrancyGuard {
         }
     }
 
+    /**
+     * @notice The pen returning an escrowed payment once the bulls it bought
+     *         have actually been delivered. Routes it exactly as a direct mint
+     *         would have: `DECISIONS.md §13`, 20% BNBULL / 10% BNB / 70% dev.
+     *
+     * @dev ⚠ THE ONLY THING THIS CHANGES IS *WHEN*. The split, the never-fail
+     *      try/catch and the deferral buckets are the same code a direct mint
+     *      runs. The pots and the treasury are paid at SETTLE rather than at
+     *      RESERVE, which is a delay of one transaction in the normal case, and
+     *      it is the price of being able to hand a stuck buyer their money
+     *      back. Money that has entered a `Jackpot` can never come out.
+     *
+     *      Pen-only. Anything else calling it would be donating, and there are
+     *      already two doors for that.
+     */
+    function routeReservedPayment(uint256 tokenAmount) external payable nonReentrant {
+        if (msg.sender != _wire(Wire.Pen)) revert NotSelf();
+        if (msg.value > 0) _routeNative(msg.value);
+        if (tokenAmount > 0) _routeToken(PotSource.Bnbull, bnbull, tokenAmount);
+    }
+
     /// @dev Divide a pot-only amount in the configured ratio. With both shares
     ///      at zero (pots disabled) it all goes to the BNBULL leg rather than
     ///      dividing by zero or silently vanishing.
@@ -1762,34 +1802,11 @@ contract MintDrop is Ownable, Pausable, ReentrancyGuard {
 
     // ─── Admin: the pen (its own slot, see `_penWire`) ───────────────────
 
-    /// @notice Live pen, or zero for the legacy sequential path.
+    /// @notice Live pen, or zero for the legacy sequential path. Wired through
+    ///         the ordinary `Wire.Pen` slot, so the admin ceremony is
+    ///         `bootstrapWire(Wire.Pen, x)` then propose -> wait -> commit.
     function penContract() public view returns (address) {
-        return _penWire.current;
-    }
-
-    function penWire() external view returns (address current, address pending, uint64 eta) {
-        TimelockedAddress.Slot storage s = _penWire;
-        return (s.current, s.pending, s.eta);
-    }
-
-    function bootstrapPen(address target) external onlyOwner {
-        _penWire.bootstrap(target);
-        emit PenWireBootstrapped(target);
-    }
-
-    function proposePen(address target) external onlyOwner returns (uint64 eta) {
-        eta = _penWire.propose(target, wiringDelay);
-        emit PenWireProposed(target, eta);
-    }
-
-    function commitPen() external onlyOwner {
-        (address previous, address next) = _penWire.commit();
-        emit PenWireCommitted(previous, next);
-    }
-
-    function cancelPen() external onlyOwner {
-        address dropped = _penWire.cancel();
-        emit PenWireCancelled(dropped);
+        return _wire(Wire.Pen);
     }
 
     function wireOf(Wire slot)

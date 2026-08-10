@@ -14,7 +14,7 @@ import { SUPPLY } from '@/lib/art/bull';
  */
 export const metadata: Metadata = {
   title: 'rarity rank',
-  description: `every minted bull ranked by how rare it is. rank 1 = rarest, out of ${SUPPLY} plus the 1/1.`,
+  description: `every bull people hold, ranked by how rare it is. rank 1 = rarest, out of ${SUPPLY} plus the 1/1.`,
 };
 
 export default function RanksPage() {
@@ -23,8 +23,12 @@ export default function RanksPage() {
       <p className="bull-header text-xs uppercase tracking-[0.2em] text-bull-gold">the ladder</p>
       <h1 className="bull-header mt-3 text-3xl sm:text-4xl">rarity rank</h1>
       <p className="mt-3 max-w-2xl text-bull-text-dim">
+        {/* ⚠ "PEOPLE HOLD", not "minted". The pen is stocked by minting the
+            whole unsold supply into it, so a field of "every minted bull" would
+            be the entire drop from day one — and a rank measured against bulls
+            nobody has bought is a rank against a field that is not playing. */}
         rank 1 = rarest. the score adds up tier, weapon and stat-distribution rarity across
-        every bull minted so far. this is not your duel{' '}
+        every bull people hold so far. this is not your duel{' '}
         <Link href="/leaders" className="text-bull-gold hover:underline">
           rating
         </Link>

@@ -8,6 +8,7 @@ import { NotDeployed } from '@/components/shared/NotDeployed';
 import { getBull } from '@/lib/art/collection';
 import { SUPPLY } from '@/lib/art/bull';
 import { useRanks } from '@/lib/hooks/useRanks';
+import { usePen } from '@/lib/hooks/usePen';
 import { tierLabel, tierTextClass } from '@/lib/rarity';
 
 /**
@@ -35,6 +36,9 @@ const DEFAULT_PAGE_SIZE = 20;
 
 export function RanksTable() {
   const { ranks, rankOf, computedAt, deployed, isLoading, unavailable, refetch } = useRanks();
+  // ⚠ Only decides WHICH sentence of the warning below is true. It never gates
+  // the table itself: `useRanks` already ranks the circulating set either way.
+  const { isPen } = usePen();
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
 
@@ -66,8 +70,32 @@ export function RanksTable() {
               </>
             )}
           </p>
+          {/* ⚠ TWO WORDINGS FOR THE SAME WARNING, PICKED OFF THE LIVE WIRING,
+              AND THE SPLIT IS NOT HEDGING.
+
+              The pen version has to exist because "locks once the 500 drop
+              completes" quietly becomes FALSE at the pre-mint: `BullPen` is
+              stocked by minting the whole remaining supply straight into it, so
+              `nextTokenId` hits 501 on day one. A reader who knows that, or who
+              checks the contract, would take "the drop completed" at face value
+              and conclude these ranks were final. They are not. The trigger is
+              the pen emptying, not the tokens existing.
+
+              But the pen version cannot ship EARLY. Until the pen is wired there
+              is no pen, and "every time one comes out of the pen" would be a
+              sentence about machinery that does not exist yet, on the live site,
+              today. So the old wording stays until the day it stops being true,
+              which is the day `penContract()` goes non-zero. */}
           <p className="mt-2 text-sm text-bull-gold">
-            ⚠ rank may shift as more bulls mint. locks once the {SUPPLY} drop completes.
+            {isPen ? (
+              <>
+                ⚠ rank is measured against the bulls people actually hold, so it shifts every
+                time one comes out of the pen. it settles for good once all {SUPPLY} have been
+                bought.
+              </>
+            ) : (
+              <>⚠ rank may shift as more bulls mint. locks once the {SUPPLY} drop completes.</>
+            )}
           </p>
         </>
       )}

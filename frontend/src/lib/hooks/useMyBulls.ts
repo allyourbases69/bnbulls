@@ -1,9 +1,10 @@
 'use client';
 
 import { useMemo } from 'react';
-import { useAccount, useReadContract, useReadContracts } from 'wagmi';
+import { useAccount, useReadContracts } from 'wagmi';
 import { BullsAbi } from '@/lib/abi';
 import { contractAddress } from '@/lib/env';
+import { useMintedBulls } from './useMintedBulls';
 
 /**
  * Every bull the connected wallet currently owns.
@@ -12,37 +13,27 @@ import { contractAddress } from '@/lib/env';
  * `tokenOfOwnerByIndex`, no `totalSupply`), so there is no on-chain call that
  * lists "tokens owned by X" directly, and this app has no indexer or subgraph
  * behind it. With a fixed 501-token ceiling the honest, dependency-free
- * approach is to read `ownerOf` for every minted id and filter client-side —
- * `useReadContracts` batches that into a handful of multicall3 aggregate
- * calls (chain.ts wires multicall3 for chain 56), not 501 round trips. This
- * does NOT scale past a small fixed collection; a bigger or growing
- * collection would need a real indexer instead.
+ * approach is to read `ownerOf` for every circulating id and filter
+ * client-side — `useReadContracts` batches that into a handful of multicall3
+ * aggregate calls (chain.ts wires multicall3 for chain 56), not 501 round
+ * trips. This does NOT scale past a small fixed collection; a bigger or
+ * growing collection would need a real indexer instead.
+ *
+ * ⚠ THE MINTED-ID WALK IS NO LONGER HAND-ROLLED HERE, AND THAT IS A CORRECTNESS
+ * FIX RATHER THAN A TIDY-UP. This hook used to derive ids from `nextTokenId` +
+ * `kingMinted` itself, which was an exact copy of `useMintedBulls` — fine while
+ * the two agreed, and silently wrong the moment `BullPen` landed, because the
+ * pen holds several hundred MINTED, UNSOLD bulls that `nextTokenId` counts and
+ * nobody owns. The copy here would have kept asking `ownerOf` for all of them:
+ * 469 wasted multicall entries per load, every one of them answering with the
+ * pen's own address. Sharing the definition means there is one place that can
+ * be wrong, and it is the place that documents itself.
  */
 export function useMyBulls() {
   const { address } = useAccount();
   const bullsAddress = contractAddress('bullsNft');
-
-  const { data: nextTokenId, isLoading: loadingNext } = useReadContract({
-    address: bullsAddress ?? undefined,
-    abi: BullsAbi,
-    functionName: 'nextTokenId',
-    query: { enabled: !!bullsAddress },
-  });
-  const { data: kingMinted, isLoading: loadingKing } = useReadContract({
-    address: bullsAddress ?? undefined,
-    abi: BullsAbi,
-    functionName: 'kingMinted',
-    query: { enabled: !!bullsAddress },
-  });
-
-  // Minted ids run 1..nextTokenId-1 (nextTokenId starts at 1, pre-incremented
-  // on mint), plus #501 the king iff it has been minted.
-  const ids = useMemo(() => {
-    const upTo = nextTokenId !== undefined ? Number(nextTokenId) - 1 : 0;
-    const out = Array.from({ length: Math.max(0, upTo) }, (_, i) => i + 1);
-    if (kingMinted) out.push(501);
-    return out;
-  }, [nextTokenId, kingMinted]);
+  const minted = useMintedBulls();
+  const ids = minted.ids;
 
   const { data: owners, isLoading: loadingOwners } = useReadContracts({
     contracts: ids.map((id) => ({
@@ -60,14 +51,14 @@ export function useMyBulls() {
     const out: number[] = [];
     owners.forEach((r, i) => {
       const owner = r.status === 'success' ? (r.result as `0x${string}`) : undefined;
-      if (owner && owner.toLowerCase() === lower) out.push(ids[i]);
+      if (owner && owner.toLowerCase() === lower) out.push(ids[i]!);
     });
     return out;
   }, [owners, ids, address]);
 
   return {
     myIds,
-    isLoading: !bullsAddress ? false : loadingNext || loadingKing || loadingOwners,
+    isLoading: !bullsAddress ? false : minted.isLoading || (ids.length > 0 && loadingOwners),
     deployed: !!bullsAddress,
   };
 }

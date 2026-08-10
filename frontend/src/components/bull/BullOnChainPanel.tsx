@@ -7,6 +7,7 @@ import { contractAddress, explorerBaseUrl } from '@/lib/env';
 import { shortAddr, formatUsd1e18 } from '@/lib/format';
 import { NotDeployed } from '@/components/shared/NotDeployed';
 import { PIT } from '@/lib/brand';
+import { usePen } from '@/lib/hooks/usePen';
 
 interface BullStruct {
   strength: number;
@@ -71,9 +72,11 @@ export function BullOnChainPanel({ tokenId, isKing }: { tokenId: number; isKing:
    * /bull/11, still spinning after nine seconds).
    *
    * `nextTokenId` and `kingMinted` always return, so they decide the question
-   * on their own: ids `1 .. nextTokenId-1` are minted, and the king is minted
-   * when he says he is. `ownerError` is then only ever used to explain a
-   * FAILURE, never to invent a fact.
+   * on their own: ids `1 .. nextTokenId-1` EXIST, and the king exists when he
+   * says he does. `ownerError` is then only ever used to explain a FAILURE,
+   * never to invent a fact.
+   *
+   * ⚠ EXISTING IS NO LONGER THE SAME AS BEING SOLD — see the pen check below.
    */
   const {
     data: nextTokenId,
@@ -95,13 +98,46 @@ export function BullOnChainPanel({ tokenId, isKing }: { tokenId: number; isKing:
     query: { enabled: !!bullsAddress && isKing },
   });
 
-  /** true / false when the chain has told us; undefined while it has not. */
-  const minted: boolean | undefined = isKing
+  /** The token EXISTS on chain. true / false when the chain has told us;
+   *  undefined while it has not. */
+  const exists: boolean | undefined = isKing
     ? (kingIsMinted as boolean | undefined)
     : nextTokenId === undefined
       ? undefined
       : tokenId < Number(nextTokenId);
   const supplyUnreadable = isKing ? kingError : supplyError;
+
+  /**
+   * ⚠ "EXISTS" AND "SOLD" ARE TWO DIFFERENT QUESTIONS NOW, AND THIS PANEL HAS
+   * TO ANSWER BOTH.
+   *
+   * `BullPen` is stocked by minting the whole remaining supply straight to it,
+   * so after the pre-mint there are several hundred bulls that exist, have real
+   * stats, have a real `ownerOf` — and that nobody has bought. Judging "minted"
+   * off `nextTokenId` alone would put every one of them into the ordinary panel
+   * below, whose owner row would then link the PEN CONTRACT as if a person held
+   * it. A visitor reading that concludes the bull is taken.
+   *
+   * ⚠ THE OWNER COMPARISON IS THE PRIMARY TEST, NOT `poolIds()`. This page has
+   * already read `ownerOf` for its own sake, and `owner == the pen` is a direct
+   * fact about THIS token that stays true even if the pool read never lands.
+   * `heldIds` is kept as the second source only because it can answer before
+   * `ownerOf` does, so the page does not flash a pen address and then correct
+   * itself.
+   */
+  const pen = usePen();
+  const penAddr = pen.penAddress?.toLowerCase() ?? null;
+  const ownerIsPen =
+    !!penAddr && typeof owner === 'string' && (owner as string).toLowerCase() === penAddr;
+  const penHeld = ownerIsPen || (pen.isPen && pen.heldIds.has(tokenId));
+
+  // "Minted" in the player-facing sense — in circulation — is now
+  // `exists && !penHeld`, and it is expressed as the ORDER OF THE BRANCHES
+  // below rather than as a boolean, because the two halves need different
+  // screens: `exists === false` is "this token was never minted", `penHeld` is
+  // "minted, real, and nobody has bought it". A single flag would have to pick
+  // one of those sentences for both cases, and either choice is a lie about the
+  // other.
 
   const { data: bullData, isLoading: bullLoading } = useReadContract({
     address: bullsAddress ?? undefined,
@@ -142,12 +178,23 @@ export function BullOnChainPanel({ tokenId, isKing }: { tokenId: number; isKing:
       undefined,
     ];
 
+  // ⚠ Hoisted above the early returns: the pen branch below shows real stats
+  // too, and reading them there off a second cast would be the same fact
+  // decoded twice with two chances to drift.
+  const b = bullData as unknown as BullStruct | undefined;
+  const l = listing as unknown as ListingStruct | undefined;
+  const isListed = !!l && l.seller && l.seller !== ZERO_ADDR;
+
   if (!bullsAddress) {
     return <NotDeployed what="the bulls collection" />;
   }
 
-  // The chain says plainly that nobody owns this one yet.
-  if (minted === false) {
+  // The chain says plainly that this token does not exist at all.
+  // ⚠ GATED ON `exists`, NOT ON `minted`. A pen-held bull is `minted === false`
+  // by the definition above and it very much DOES exist — sending it down here
+  // would tell a visitor that a bull with live stats and a live owner has never
+  // been minted, and offer them a mint that cannot produce it.
+  if (exists === false) {
     return (
       <div className="rounded border border-bull-border bg-bull-panel px-4 py-3 text-sm text-bull-text-dim">
         {isKing ? 'the king ' : 'this bull '}hasn&apos;t been minted yet. the contract is live,
@@ -160,10 +207,85 @@ export function BullOnChainPanel({ tokenId, isKing }: { tokenId: number; isKing:
     );
   }
 
+  /**
+   * IN THE PEN: he exists, his papers are real, and nobody has bought him.
+   *
+   * ⚠ NO OWNER ROW, AND THAT IS THE WHOLE REASON THIS BRANCH EXISTS. The pen is
+   * the registered `ownerOf` this token, so the ordinary panel would print a
+   * contract address under "owner" and link it to the explorer — which reads,
+   * to anybody who is not holding the source, as "somebody already has this
+   * one". The honest answer is that he is unsold and up for grabs.
+   *
+   * ⚠ AND NO CLAIM ABOUT ODDS. The pool is public (`poolIds()` is a deliberate
+   * view — knowing what is left tells you the odds, which is the honest thing to
+   * publish) but WHICH bull a buyer is dealt is decided by a seed that does not
+   * exist when they pay. So this says "you cannot ask for him", plainly, rather
+   * than dressing the mint up as a way to get this particular bull.
+   */
+  if (penHeld) {
+    return (
+      <div className="rounded border border-bull-gold/40 bg-bull-panel p-4">
+        <p className="bull-header text-bull-gold">nobody owns this one yet.</p>
+        <p className="mt-2 text-sm text-bull-text-dim">
+          {isKing ? 'the king is' : 'he is'} minted and sitting in the pen with the rest of the
+          unsold bulls. everything on this page is real: the art, the stats, the weapon, the
+          name. he just has not been bought.
+        </p>
+        <p className="mt-2 text-sm text-bull-text-dim">
+          you cannot pick him. the pen deals a bull at random when you mint, off a seed that does
+          not exist yet when you pay, so nobody can wait for the good ones and nobody can aim at
+          this one.{' '}
+          {pen.poolSize !== null && (
+            <>
+              <span className="font-mono text-bull-text">{pen.poolSize}</span> bulls are in there
+              right now
+              {pen.sellable !== null && pen.sellable !== pen.poolSize ? (
+                <>
+                  , <span className="font-mono text-bull-text">{pen.sellable}</span> of them still
+                  up for grabs
+                </>
+              ) : null}
+              .{' '}
+            </>
+          )}
+        </p>
+        <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-4 border-t border-bull-border/60 pt-4 text-sm sm:grid-cols-3">
+          <div>
+            <dt className="font-mono text-xs uppercase tracking-wide text-bull-text-faint">
+              owner
+            </dt>
+            <dd className="mt-1 text-bull-text-faint">nobody · still in the pen</dd>
+          </div>
+          <div>
+            <dt className="font-mono text-xs uppercase tracking-wide text-bull-text-faint">elo</dt>
+            <dd className="mt-1 font-mono">{bullLoading || !b ? '—' : b.elo}</dd>
+          </div>
+          {/* ⚠ READ, NOT ASSUMED TO BE ZERO. An unsold bull has never fought,
+              so the honest answer is almost always 0/0/0 — but "almost always"
+              is not a licence to print a number this page did not read, and the
+              record is live chain state either way. */}
+          <div>
+            <dt className="font-mono text-xs uppercase tracking-wide text-bull-text-faint">
+              fight record
+            </dt>
+            <dd className="mt-1 font-mono">
+              {bullLoading || !b ? '—' : `${b.wins}W · ${b.losses}L · ${b.ties}T`}
+            </dd>
+          </div>
+        </dl>
+        <p className="mt-4">
+          <Link href="/mint" className="text-bull-gold hover:underline">
+            take a bull out of the pen →
+          </Link>
+        </p>
+      </div>
+    );
+  }
+
   // ⚠ A FAILED READ IS A FAILED READ. It is minted (or we could not even ask),
   // and the owner call bounced — say so and offer a reload, rather than
   // printing `loading…` forever or claiming the bull does not exist.
-  if (ownerError && (minted === true || supplyUnreadable)) {
+  if (ownerError && (exists === true || supplyUnreadable)) {
     return (
       <div className="rounded border border-bull-border bg-bull-panel px-4 py-3 text-sm text-bull-text-dim">
         couldn&apos;t read this bull off the chain just now. that is an rpc having a moment,
@@ -171,10 +293,6 @@ export function BullOnChainPanel({ tokenId, isKing }: { tokenId: number; isKing:
       </div>
     );
   }
-
-  const b = bullData as unknown as BullStruct | undefined;
-  const l = listing as unknown as ListingStruct | undefined;
-  const isListed = !!l && l.seller && l.seller !== ZERO_ADDR;
 
   return (
     <div className="rounded border border-bull-border bg-bull-panel p-4">

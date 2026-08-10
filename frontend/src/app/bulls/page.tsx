@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { BullsGrid } from '@/components/bulls/BullsGrid';
+import { PendingReservations } from '@/components/mint/PendingReservations';
 import { BullSprite } from '@/components/BullSprite';
 import { PreLaunchNotice } from '@/components/PreLaunchNotice';
 import { getBull } from '@/lib/art/collection';
@@ -14,10 +15,11 @@ import { contractsDeployed } from '@/lib/env';
  * landing page must NOT carry a wall of bulls; the browse page is where they
  * belong, filterable, the way fefers does it.
  *
- * ⚠ MINTED ONLY. Fefers' equivalent copy is "Every fefer minted to the
+ * ⚠ BOUGHT ONLY. Fefers' equivalent copy is "Every fefer minted to the
  * stomping ground" — the browse page is a record of what has been bought, not
- * a catalogue of the drop. `BullsGrid` enforces it against `nextTokenId`; see
- * its header for what that does and does NOT make secret.
+ * a catalogue of the drop. `BullsGrid` enforces it against the circulating set
+ * (`nextTokenId` MINUS whatever the pen is still holding); see its header for
+ * what that does and does NOT make secret.
  *
  * ⚠ BEFORE THE DROP OPENS THE GRID IS REPLACED, NOT LEFT EMPTY. A page of
  * filters that filter nothing, over a "not deployed" box, is the single worst
@@ -29,7 +31,7 @@ import { contractsDeployed } from '@/lib/env';
  */
 export const metadata: Metadata = {
   title: 'browse',
-  description: `every bull minted so far, out of ${SUPPLY} plus the 1/1. filter by tier, weapon and gear.`,
+  description: `every bull bought so far, out of ${SUPPLY} plus the 1/1. filter by tier, weapon and gear.`,
 };
 
 const king = getBull(KING_ID);
@@ -42,12 +44,28 @@ export default function BullsPage() {
   return (
     <div className="mx-auto max-w-6xl px-4 py-8 md:px-8">
       <p className="bull-header text-xs uppercase tracking-[0.2em] text-bull-gold">the herd</p>
-      <h1 className="bull-header mt-3 text-3xl sm:text-4xl">every bull minted so far</h1>
+      <h1 className="bull-header mt-3 text-3xl sm:text-4xl">every bull bought so far</h1>
+      {/* ⚠ "SOMEBODY OWNS" RATHER THAN "EXISTS ON CHAIN", AND THE SWAP IS NOT
+          A NICETY. The pen is stocked by minting the whole remaining supply
+          into it, so every one of the 500 exists on chain from day one — the
+          old sentence would have promised a grid of 500 and delivered a grid of
+          31, and it would have been the page contradicting itself rather than
+          the reader misunderstanding it. What is true either way is that this
+          page fills up as people buy. */}
       <p className="mt-3 max-w-2xl text-bull-text-dim">
-        only bulls that exist on chain show up here. the rest of the {SUPPLY}, and{' '}
-        {KING_NAME.toLowerCase()}, arrive as they are minted. filter by tier, weapon or gear
+        only bulls somebody owns show up here. the rest of the {SUPPLY}, and{' '}
+        {KING_NAME.toLowerCase()}, arrive as they are bought. filter by tier, weapon or gear
         to find one.
       </p>
+      {/* ⚠ THE HERD PAGE IS THE OTHER PLACE A PENDING RESERVATION HAS TO BE
+          FINDABLE, AND IT IS THE MORE IMPORTANT OF THE TWO. `/bulls?filter=mine`
+          is where the mint's own success panel sends people and where a buyer
+          goes when they want to look at what they bought — so it is exactly
+          where somebody lands when a bull has not turned up and they are
+          starting to wonder. It renders nothing on the legacy path, nothing
+          without a wallet, and nothing with nothing outstanding. */}
+      <PendingReservations className="mt-8" />
+
       <div className="mt-10">
         <BullsGrid />
       </div>

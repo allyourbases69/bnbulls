@@ -1,9 +1,10 @@
 'use client';
 
 import { useCallback, useMemo } from 'react';
-import { useReadContract, useReadContracts } from 'wagmi';
-import { BullsAbi, MarketplaceAbi } from '@/lib/abi';
+import { useReadContracts } from 'wagmi';
+import { MarketplaceAbi } from '@/lib/abi';
 import { contractAddress } from '@/lib/env';
+import { useMintedBulls } from './useMintedBulls';
 
 const ZERO_ADDR = '0x0000000000000000000000000000000000000000';
 
@@ -58,45 +59,22 @@ interface RawListing {
  * the price, the seller and the timestamp in the same batch. The browse grid
  * cannot sort or filter on a price no component above the card has seen.
  *
- * ⚠ THE MINTED-ID WALK IS DUPLICATED FROM `useMyBulls`, ON PURPOSE. That hook
- * is shared and outside this task's paths, so it is copied rather than
- * refactored into a common `useMintedIds`. Worth collapsing later; both derive
- * ids the same way, from `nextTokenId` and `kingMinted`.
+ * ⚠ THE MINTED-ID WALK USED TO BE DUPLICATED FROM `useMyBulls` AND IS NOW
+ * SHARED. The old note here said "worth collapsing later; both derive ids the
+ * same way, from `nextTokenId` and `kingMinted`" — and `BullPen` is what made
+ * "later" arrive. The pen holds several hundred MINTED, UNSOLD bulls, so
+ * `nextTokenId` on its own now over-counts by exactly the pen's holdings, and
+ * three separate copies of that walk meant three places to get it wrong. They
+ * all read `useMintedBulls` now, which subtracts `poolIds()`.
+ *
+ * That also removes 469 dead entries from this multicall: nothing the pen holds
+ * can be listed, because a listing needs an owner who approved the marketplace,
+ * and the pen never does either.
  */
 export function useActiveListings() {
   const marketAddress = contractAddress('marketplace');
-  const bullsAddress = contractAddress('bullsNft');
-
-  const {
-    data: nextTokenId,
-    isLoading: loadingNext,
-    error: nextError,
-    refetch: refetchNext,
-  } = useReadContract({
-    address: bullsAddress ?? undefined,
-    abi: BullsAbi,
-    functionName: 'nextTokenId',
-    query: { enabled: !!bullsAddress },
-  });
-  const {
-    data: kingMinted,
-    isLoading: loadingKing,
-    refetch: refetchKing,
-  } = useReadContract({
-    address: bullsAddress ?? undefined,
-    abi: BullsAbi,
-    functionName: 'kingMinted',
-    query: { enabled: !!bullsAddress },
-  });
-
-  // Minted ids run 1..nextTokenId-1 (nextTokenId starts at 1, pre-incremented
-  // on mint), plus #501 the king iff it has been minted.
-  const mintedIds = useMemo(() => {
-    const upTo = nextTokenId !== undefined ? Number(nextTokenId) - 1 : 0;
-    const out = Array.from({ length: Math.max(0, upTo) }, (_, i) => i + 1);
-    if (kingMinted) out.push(501);
-    return out;
-  }, [nextTokenId, kingMinted]);
+  const minted = useMintedBulls();
+  const mintedIds = minted.ids;
 
   const {
     data: listingData,
@@ -150,23 +128,32 @@ export function useActiveListings() {
     listingData.length > 0 &&
     listingData.every((r) => r?.status === 'failure');
 
+  // ⚠ The roster read failing is the same class of problem as the listings read
+  // failing, so it lands in the same place. `useMintedBulls.unavailable` covers
+  // `nextTokenId`, `kingMinted` AND the pen's `poolIds()` — and an unread pen
+  // matters here for a reason of its own: it would put several hundred unsold
+  // bulls back into the `listingOf` batch, which is slow rather than wrong, but
+  // an empty market rendered off a half-read roster is neither.
+  const rosterError = minted.unavailable
+    ? new Error('the herd could not be read off the chain, so the market has nothing to check')
+    : null;
+
   const error =
-    (nextError as Error | null) ??
+    rosterError ??
     (listingsError as Error | null) ??
     (allReadsFailed ? new Error('the listings read came back empty-handed on every token') : null);
 
+  const mintedRefetch = minted.refetch;
   const refetch = useCallback(() => {
-    void refetchNext();
-    void refetchKing();
+    mintedRefetch();
     void refetchListings();
-  }, [refetchNext, refetchKing, refetchListings]);
+  }, [mintedRefetch, refetchListings]);
 
   return {
     listings,
     listedIds,
     isLoading:
-      !!marketAddress &&
-      (loadingNext || loadingKing || (mintedIds.length > 0 && loadingListings)),
+      !!marketAddress && (minted.isLoading || (mintedIds.length > 0 && loadingListings)),
     error,
     refetch,
     deployed: !!marketAddress,

@@ -193,6 +193,15 @@ const CONTRACT_ADDRESSES: Record<string, string | undefined> = {
   // fought on EITHER the staked or the zero-stake path, so the UI has to be
   // able to read and write this or a player's bulls are silently unmatchable.
   yards: process.env.NEXT_PUBLIC_YARDS,
+  // The pen that holds the unsold bulls and deals them at random
+  // (`contracts/BullPen.sol`). ⚠ UNSET IS NOT "BROKEN" — it is today's
+  // behaviour. Every pen-aware surface falls back to the legacy sequential
+  // path when this is null OR when `MintDrop.penContract()` reads zero, so a
+  // build that predates the migration is byte-for-byte unchanged. Once it IS
+  // set, "the token exists" stops meaning "somebody bought it": the pen holds
+  // several hundred minted-but-unsold bulls, so every count that walks
+  // `nextTokenId` has to subtract what the pen is sitting on.
+  bullPen: process.env.NEXT_PUBLIC_BULLPEN,
 };
 
 export type ContractName =
@@ -204,7 +213,8 @@ export type ContractName =
   | 'jackpotBnbull'
   | 'jackpotBnb'
   | 'marketplace'
-  | 'yards';
+  | 'yards'
+  | 'bullPen';
 
 /** A 0x-prefixed address, or null when the env var is unset/empty/malformed.
  *  Deliberately returns null rather than throwing — the whole app has to

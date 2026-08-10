@@ -16,10 +16,18 @@ import { WrongNetworkNotice } from '@/components/shared/WrongNetwork';
 import { BullCard, BullCardLink, type BullFacts } from '@/components/bulls/BullCard';
 import { isValidBullId } from '@/lib/art/collection';
 import { withCushion, QUOTE_REFRESH_MS, MINT_GAS_HEADROOM_WEI } from '@/lib/constants';
-import { CURRENCY, PIT } from '@/lib/brand';
+import { CURRENCY, PEN, PIT } from '@/lib/brand';
 import { usePreflight } from '@/lib/hooks/usePreflight';
 import { RevertNotice } from '@/components/shared/RevertNotice';
 import { decodeRevert, type DecodedRevert } from '@/lib/revertDecode';
+import { KING_ID, SUPPLY } from '@/lib/art/bull';
+import { useMintedBulls } from '@/lib/hooks/useMintedBulls';
+import { usePen, usePenWrites, useReservation, type ReservationView } from '@/lib/hooks/usePen';
+import {
+  PendingReservations,
+  RefundedDialogue,
+  ReservationRow,
+} from '@/components/mint/PendingReservations';
 
 const STATIC_LADDER = [
   { upToSold: 100, usd: 10 },
@@ -38,8 +46,35 @@ const STATIC_LADDER = [
  */
 type PayAsset = 'bnb' | 'bnbull';
 
-/** The mint's own progress, one step at a time. See `mintPhase` below. */
-type MintPhase = 'idle' | 'signing' | 'mining' | 'reverted' | 'revealing' | 'success';
+/**
+ * The mint's own progress, one step at a time. See `mintPhase` below.
+ *
+ * ⚠ `drawing` EXISTS ONLY ON THE PEN PATH, AND IT IS A REAL PHASE RATHER THAN A
+ * LONGER "mining". Under `BullPen` the buyer's transaction pays and reserves;
+ * it does not mint anything and it does not know which bulls they get. The ids
+ * are drawn in a SECOND transaction, from a seed that did not exist when they
+ * paid — which is the entire anti-snipe design (see `PEN` in `brand.ts`).
+ * Folding that into "mining" would tell a buyer their transaction had not
+ * landed when it had, and hide the one screen where they might have a button to
+ * press.
+ */
+type MintPhase =
+  | 'idle'
+  | 'signing'
+  | 'mining'
+  | 'reverted'
+  | 'drawing'
+  /**
+   * ⚠ A TERMINAL OUTCOME, AND NOT THE SAME THING AS `reverted`. A reverted mint
+   * never happened: nothing was charged beyond gas and the buyer can simply try
+   * again. A refunded one DID happen, took real money, held it for hours, and
+   * gave it back because the draw never landed. Collapsing the two would tell
+   * somebody whose payment sat in escrow all afternoon that their transaction
+   * "failed", which is both wrong and the single most alarming way to be wrong.
+   */
+  | 'refunded'
+  | 'revealing'
+  | 'success';
 
 /** `Bulls.getBull` — only the fields the reveal shows. */
 interface ChainBull {
@@ -171,16 +206,71 @@ export function MintPanel() {
     (totalSold === undefined || maxMint === undefined || isPaused === undefined);
   const dropStateKnown = !dropStateLoading && !dropStateUnavailable;
 
+  /**
+   * ⚠ `totalSold` IS THE TIER LADDER'S NUMBER AND NOTHING ELSE. DO NOT REUSE IT
+   * FOR THE HEADLINE COUNT.
+   *
+   * `MintDrop.totalSold` counts what THIS drop contract has sold. That is
+   * exactly right for pricing — the ladder is defined against it and steps on
+   * it, so `tierStatus` below must keep reading it — and it is wrong for
+   * "N / 500 minted" the moment a SECOND drop is deployed, which is what the
+   * pen migration does. The new drop restarts at 0 while several dozen bulls
+   * are already out in the world, so a headline off `totalSold` would tell a
+   * visitor the collection had barely started when it had not.
+   */
   const sold = totalSold !== undefined ? Number(totalSold) : 0;
   const supply = maxMint !== undefined ? Number(maxMint) : 0;
-  const remaining = Math.max(0, supply - sold);
-  const soldOut = dropStateKnown && remaining === 0;
-  const maxCount = Math.max(1, Math.min(20, remaining || 1));
+
+  const pen = usePen();
+  const herd = useMintedBulls();
+
+  /**
+   * HOW MANY OF THE 500 ARE IN CIRCULATION — the honest headline number.
+   *
+   * ⚠ THE KING IS EXCLUDED, AND HE ALWAYS HAS BEEN. #501 sits outside
+   * `MAX_SUPPLY` and is minted by his own function, never sold through the drop,
+   * so `totalSold` never counted him and neither does this. Counting him would
+   * make a completed drop read "501 / 500".
+   */
+  const circulating = useMemo(
+    () => herd.ids.filter((id) => id !== KING_ID).length,
+    [herd.ids],
+  );
+
+  /**
+   * THE THREE NUMBERS ON THE HEADER, DEFINED ONCE.
+   *
+   * ⚠ `headlineLeft` IS `poolSize()` UNDER THE PEN — what is physically in
+   * there — while `buyable` is `sellable()`, which is that minus the bulls
+   * already promised to reservations nobody has settled yet. They differ only
+   * for the few blocks a reservation is in flight, and the difference is not
+   * cosmetic: `reserve()` reverts `PoolTooSmall(count, free)` against
+   * `sellable`, so clamping the count input on anything else offers a mint that
+   * cannot go through.
+   */
+  const headlineSold = pen.isPen ? circulating : sold;
+  const headlineSupply = pen.isPen ? SUPPLY : supply;
+  const headlineLeft = pen.isPen ? pen.poolSize : Math.max(0, supply - sold);
+  const buyable = pen.isPen ? pen.sellable : Math.max(0, supply - sold);
+
+  const countsLoading = pen.isPen ? dropStateLoading || herd.isLoading : dropStateLoading;
+  /** Every number above is real, from a read that actually landed. */
+  const countsKnown = pen.isPen
+    ? dropStateKnown && !herd.isLoading && !herd.unavailable && buyable !== null
+    : dropStateKnown;
+  const countsUnavailable = pen.isPen
+    ? dropStateUnavailable || (!herd.isLoading && (herd.unavailable || pen.unavailable))
+    : dropStateUnavailable;
+
+  const soldOut = countsKnown && buyable === 0;
+  const maxCount = Math.max(1, Math.min(20, buyable || 1));
 
   function retryDropState() {
     refetchSold();
     refetchMax();
     refetchPaused();
+    herd.refetch();
+    pen.refetch();
   }
 
   // Short TTL, shown — the BNB leg converts through Chainlink at PAY time
@@ -350,7 +440,7 @@ export function MintPanel() {
    * always mints `to = account`, so anything else did not come from this
    * click and the reveal's "yours" would not be true of it.
    */
-  const mintedIds = useMemo(() => {
+  const legacyMintedIds = useMemo(() => {
     if (!mintReceipt || mintReceipt.status !== 'success' || !bullsAddress || !account) return [];
     const bulls = bullsAddress.toLowerCase();
     const to = account.toLowerCase();
@@ -365,6 +455,71 @@ export function MintPanel() {
       .filter(isValidBullId);
     return [...new Set(ids)].sort((a, b) => a - b);
   }, [mintReceipt, bullsAddress, account]);
+
+  /**
+   * THE RESERVATION, read out of the receipt — the pen path's answer to
+   * `BullMinted`.
+   *
+   * ⚠ UNDER THE PEN, `BullMinted` IS ABSENT FROM EVERY SUCCESSFUL MINT, AND
+   * WITHOUT THIS THE PANEL FALLS INTO ITS DEGRADED FALLBACK EVERY SINGLE TIME.
+   *
+   * `MintDrop._mintAndEmit` branches on whether a pen is wired. Wired, it calls
+   * `BullPen.reserve` and emits `BullsReserved` INSTEAD of `BullSold`, and no
+   * bull is minted in the buyer's transaction at all — so `Bulls` emits nothing,
+   * the `BullMinted` parse above returns an empty array, and the panel would
+   * render "no BullMinted event was in the receipt this page could read" to a
+   * buyer whose mint went perfectly. That message is the one thing on this page
+   * that reads as "your money went somewhere and we do not know where".
+   *
+   * ⚠ AND THE RETURN VALUE IS STILL UNREACHABLE, FOR THE SAME REASON AS EVER: a
+   * return value only exists inside the EVM, a broadcast transaction hands the
+   * client a receipt, and a receipt carries logs. `mintWithBNB` returns an EMPTY
+   * array on this path anyway, deliberately — there is genuinely nothing to
+   * return, because nothing has been drawn yet.
+   *
+   * Filtered on the `MintDrop` address for the same reason the legacy parse
+   * filters on `Bulls`: nothing else in the transaction can produce this
+   * signature from that address.
+   */
+  const reservationId = useMemo<bigint | null>(() => {
+    if (!pen.isPen || !mintReceipt || mintReceipt.status !== 'success' || !mintDropAddress) {
+      return null;
+    }
+    const drop = mintDropAddress.toLowerCase();
+    const hit = parseEventLogs({
+      abi: MintDropAbi,
+      eventName: 'BullsReserved',
+      logs: mintReceipt.logs,
+    }).find((log) => log.address.toLowerCase() === drop);
+    return hit ? (hit.args.reservationId as bigint) : null;
+  }, [pen.isPen, mintReceipt, mintDropAddress]);
+
+  const reservation = useReservation(reservationId);
+
+  /**
+   * The permissionless rescue writes, shared with the row this panel renders
+   * while the draw is out. ⚠ `reservation.refetch` on confirm rather than a
+   * blanket invalidation: the settle case is handled by the effect below, and
+   * `armFallback` / `pinFallbackSeed` change nothing anywhere else on the site,
+   * so invalidating every read on the page for them would be a full refetch
+   * storm for a state change only this one row cares about.
+   */
+  const penWrites = usePenWrites(() => reservation.refetch());
+
+  /**
+   * ⚠ THE IDS COME FROM `drawnIds(reservationId)`, NOT FROM THE `Settled` EVENT.
+   * The event is in a transaction the buyer very likely did not send (settling
+   * is permissionless, and a keeper or the person behind them in the queue may
+   * well have pressed it first), so there is no receipt here to parse. The
+   * mapping read answers regardless of who paid the gas, and it answers after a
+   * reload too.
+   */
+  const penMintedIds = useMemo(() => {
+    if (!reservation.settled) return [];
+    return [...new Set(reservation.tokenIds.filter(isValidBullId))].sort((a, b) => a - b);
+  }, [reservation.settled, reservation.tokenIds]);
+
+  const mintedIds = pen.isPen ? penMintedIds : legacyMintedIds;
 
   /**
    * THE REVEAL'S NUMBERS, batch-loaded off chain — one multicall for the whole
@@ -415,12 +570,13 @@ export function MintPanel() {
   );
 
   /**
-   * sign → mine → reveal → success, the state machine off fefers' mint page,
-   * ported in the same order with the same gates:
+   * sign → mine → [draw] → reveal → success, the state machine off fefers' mint
+   * page, ported in the same order with the same gates:
    *
    *   isSigning                         → signing
    *   receipt.status !== 'success'      → reverted
    *   txHash && isMining                → mining
+   *   pen wired, reservation unsettled  → drawing        ← pen only
    *   ids decoded, batch still loading  → revealing
    *   every bull resolved               → success
    *
@@ -431,24 +587,59 @@ export function MintPanel() {
    *
    * Before this the page rendered one line of text on a confirmed mint and the
    * buyer never saw what they bought.
+   *
+   * ⚠ `drawing` SITS BETWEEN A CONFIRMED TRANSACTION AND KNOWN IDS, WHICH IS A
+   * STATE THAT COULD NOT EXIST BEFORE THE PEN. On the legacy path a confirmed
+   * mint carries its ids in the receipt, so `mintConfirmed && !mintedIds.length`
+   * meant something had genuinely gone wrong and the degraded "no BullMinted
+   * event" line was the right answer. Under the pen that combination is the
+   * NORMAL, EXPECTED state for a minute or so, and rendering the old fallback
+   * there would tell every single buyer that their receipt looked broken.
    */
   const mintReverted = !!mintReceipt && mintReceipt.status !== 'success';
   const revealFailed = !!revealError && mintedIds.length > 0;
   const revealReady =
     mintedIds.length > 0 && !loadingMintedRows && minted.every((m) => m.bull !== undefined);
+  /**
+   * Paid for, reserved, not yet drawn and handed over.
+   *
+   * ⚠ `!reservation.refunded` IS LOAD-BEARING. A refunded reservation is never
+   * settled, so without it the panel would sit on "your bulls are being drawn"
+   * forever over money that came back hours ago — the exact screen this whole
+   * refund flow exists to prevent.
+   */
+  /**
+   * ⚠ THE CONFIRMED RECEIPT IS READ ALONGSIDE THE POLLED STATE. `rescueState`
+   * is on an 8 second clock, so between the refund confirming and the next poll
+   * this panel would still be narrating "your bulls are being drawn" over money
+   * that is already back in the wallet. Matched on the key because one
+   * `usePenWrites` serves every reservation on the page.
+   */
+  const justRefunded =
+    reservationId !== null &&
+    penWrites.lastDone?.what === 'refund' &&
+    penWrites.lastDone.key === reservationId.toString();
+  const wasRefunded = reservation.refunded || justRefunded;
+
+  const awaitingDraw =
+    pen.isPen && reservationId !== null && !reservation.settled && !wasRefunded;
   const mintPhase: MintPhase = mintReverted
     ? 'reverted'
     : isMinting
       ? 'signing'
       : mintHash && isConfirmingMint
         ? 'mining'
-        : mintConfirmed && mintedIds.length > 0
-          ? revealReady || revealFailed
-            ? 'success'
-            : 'revealing'
-          : mintConfirmed
-            ? 'success'
-            : 'idle';
+        : wasRefunded
+          ? 'refunded'
+          : awaitingDraw
+            ? 'drawing'
+            : mintConfirmed && mintedIds.length > 0
+              ? revealReady || revealFailed
+                ? 'success'
+                : 'revealing'
+              : mintConfirmed
+                ? 'success'
+                : 'idle';
 
   /**
    * A confirmed mint changes `totalSold`, the tier that is live, and which
@@ -465,6 +656,23 @@ export function MintPanel() {
     queryClient.invalidateQueries({ queryKey: ['readContract'] });
     queryClient.invalidateQueries({ queryKey: ['readContracts'] });
   }, [mintConfirmed, mintHash, queryClient]);
+
+  /**
+   * ⚠ AND AGAIN WHEN THE DRAW LANDS, WHICH IS A SECOND, LATER MOMENT.
+   *
+   * On the pen path the buyer's own transaction changes almost nothing a player
+   * can see: no bull moves, no balance of theirs changes, the pool does not
+   * shrink. All of that happens in `settle`, which is a DIFFERENT transaction
+   * and very often somebody else's. So the invalidation above fires too early
+   * and there is nothing to fire it again — a delivered bull would sit invisible
+   * until a reload, which is exactly the anxiety this whole flow exists to
+   * remove. Keyed on `reservation.settled` so it runs once, whoever settled it.
+   */
+  useEffect(() => {
+    if (!reservation.settled) return;
+    queryClient.invalidateQueries({ queryKey: ['readContract'] });
+    queryClient.invalidateQueries({ queryKey: ['readContracts'] });
+  }, [reservation.settled, queryClient]);
 
   /**
    * ⚠ `chainId: CHAIN_ID` IS LOAD-BEARING ON THE BNB LEG. Omitted, wagmi hands
@@ -608,30 +816,52 @@ export function MintPanel() {
 
   return (
     <div>
+      {/* ⚠ THE HEADLINE COUNTS ARE NOT `totalSold`. See the derivation above:
+          under the pen this contract's own sales counter restarts at zero while
+          the collection is already part-sold, so the numbers here come off the
+          circulating set and the pen's own pool instead. The LADDER below still
+          reads `totalSold`, because the ladder really is defined against this
+          drop's sales and that has not changed. */}
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <p className="font-mono text-sm text-bull-text-dim">
-          {dropStateLoading ? (
+          {countsLoading ? (
             'loading…'
-          ) : dropStateUnavailable ? (
+          ) : countsUnavailable ? (
             '— / — minted'
           ) : (
             <>
-              <span className="text-bull-gold">{sold}</span> / {supply} minted
+              <span className="text-bull-gold">{headlineSold}</span> / {headlineSupply} minted
             </>
           )}
         </p>
         <p className="font-mono text-sm text-bull-text-faint">
-          {dropStateKnown ? `${remaining} left` : ''}
+          {countsKnown && headlineLeft !== null ? `${headlineLeft} left` : ''}
         </p>
       </div>
       <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-bull-panel">
         <div
           className="h-full bg-bull-gold transition-all"
           style={{
-            width: !dropStateKnown || !supply ? '0%' : `${Math.min(100, (sold / supply) * 100)}%`,
+            width:
+              !countsKnown || !headlineSupply
+                ? '0%'
+                : `${Math.min(100, (headlineSold / headlineSupply) * 100)}%`,
           }}
         />
       </div>
+
+      {/* ⚠ MOUNTED ABOVE THE MINT BUTTON AND OUTSIDE EVERY BRANCH BELOW. A
+          buyer who comes back to this page with bulls still being drawn has to
+          see it before they consider paying again — and it must not vanish
+          because the drop sold out, because minting got paused, or because a
+          read failed. It renders nothing at all on the legacy path.
+          ⚠ `excludeIds` HANDS THE RESERVATION THIS PANEL JUST CREATED BACK TO
+          THE OUTCOME BLOCK UNDER THE MINT BUTTON, so one mint is narrated in one
+          place. Everything the buyer did NOT just create still shows here. */}
+      <PendingReservations
+        className="mt-6"
+        excludeIds={reservationId !== null ? [reservationId] : undefined}
+      />
 
       <div className="mt-8 overflow-x-auto">
         <table className="w-full min-w-[520px] border-collapse text-sm">
@@ -664,11 +894,16 @@ export function MintPanel() {
         </table>
       </div>
 
-      {dropStateLoading ? (
+      {/* ⚠ These three gates use the SAME counts as the header, so the page can
+          never offer a mint off numbers it just admitted it could not read. On
+          the legacy path `countsLoading` / `countsUnavailable` are literally
+          `dropStateLoading` / `dropStateUnavailable`, so nothing here changes
+          until a pen is wired. */}
+      {countsLoading ? (
         <p className="mt-8 rounded border border-bull-border bg-bull-panel px-4 py-3 text-sm text-bull-text-dim">
           loading the live drop state…
         </p>
-      ) : dropStateUnavailable ? (
+      ) : countsUnavailable ? (
         <div className="mt-8 rounded border border-bull-border bg-bull-panel px-4 py-3 text-sm text-bull-text-dim">
           <p>
             couldn&apos;t read the drop off the chain just now. that is this page failing to
@@ -843,18 +1078,33 @@ export function MintPanel() {
         txHash={mintHash}
         revealFailed={revealFailed}
         onMintAnother={resetMint}
+        isPen={pen.isPen}
+        reservationId={reservationId}
+        reservation={reservation}
+        penWrites={penWrites}
       />
     </div>
   );
 }
 
-/** sign · mine · reveal · done. Ported from fefers' `PhaseIndicator`: four
- *  words that tell a buyer which of the four different ways this can be slow
- *  is currently happening. */
-function MintSteps({ phase }: { phase: MintPhase }) {
-  const steps = ['sign', 'mine', 'reveal', 'done'] as const;
-  const activeIdx =
-    phase === 'signing' ? 0 : phase === 'mining' ? 1 : phase === 'revealing' ? 2 : phase === 'success' ? 3 : -1;
+/**
+ * sign · mine · reveal · done, or sign · mine · draw · reveal · done under the
+ * pen. Ported from fefers' `PhaseIndicator`: a handful of words that tell a
+ * buyer which of the several different ways this can be slow is currently
+ * happening.
+ *
+ * ⚠ THE FIFTH STEP IS ONLY THERE WHEN THE PEN IS. Showing "draw" on the legacy
+ * path would promise a stage that never arrives and leave the strip stuck one
+ * short of done forever.
+ */
+function MintSteps({ phase, isPen }: { phase: MintPhase; isPen: boolean }) {
+  const steps = isPen
+    ? (['sign', 'mine', PEN.drawStep, 'reveal', 'done'] as const)
+    : (['sign', 'mine', 'reveal', 'done'] as const);
+  const order: MintPhase[] = isPen
+    ? ['signing', 'mining', 'drawing', 'revealing', 'success']
+    : ['signing', 'mining', 'revealing', 'success'];
+  const activeIdx = order.indexOf(phase);
   if (activeIdx < 0) return null;
   return (
     <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] uppercase tracking-wide">
@@ -888,12 +1138,20 @@ function MintOutcome({
   txHash,
   revealFailed,
   onMintAnother,
+  isPen,
+  reservationId,
+  reservation,
+  penWrites,
 }: {
   phase: MintPhase;
   minted: readonly MintedBull[];
   txHash: `0x${string}` | undefined;
   revealFailed: boolean;
   onMintAnother: () => void;
+  isPen: boolean;
+  reservationId: bigint | null;
+  reservation: ReservationView;
+  penWrites: ReturnType<typeof usePenWrites>;
 }) {
   if (phase === 'idle') return null;
 
@@ -929,6 +1187,63 @@ function MintOutcome({
     );
   }
 
+  /**
+   * THE REFUND DIALOGUE, RIGHT WHERE THE BUYER IS ALREADY LOOKING.
+   *
+   * ⚠ IT SITS DIRECTLY UNDER THE MINT BUTTON, NOT IN A TOAST AND NOT ONLY IN
+   * THE BANNER AT THE TOP. Owner's ask, verbatim: "as long as a dialogue shows
+   * on screen what the error was and that their funds are safu and been
+   * returned straight away and they should mint again". The same dialogue is
+   * rendered by `PendingReservations` off the connected address alone, so it
+   * also survives a reload and reaches a second device; this placement is what
+   * makes it the first thing seen rather than something to go and find.
+   *
+   * ⚠ "mint again" IS A RESET, NOT A LINK. They are already on the mint page,
+   * so a link to it would look like a dead button. `onMintAnother` clears the
+   * outcome and puts the live form back with the ladder and the quote on it.
+   */
+  if (phase === 'refunded') {
+    return (
+      <div className="mt-6">
+        <RefundedDialogue res={reservation} onMintAgain={onMintAnother} />
+        <RevertNotice error={penWrites.error} className="mt-3" />
+        {txLink && <p className="mt-3">{txLink}</p>}
+      </div>
+    );
+  }
+
+  /**
+   * THE DRAW. The money is gone, the sale is final, and nobody — including us —
+   * knows which bulls yet.
+   *
+   * ⚠ THE ROW BELOW IS NOT DECORATION. It reports what the reservation is
+   * actually waiting on and, in the three states that have one, offers the
+   * permissionless button that unsticks it. The pen holds no money and has no
+   * refund path, so a reservation that never settles is the single failure here
+   * that costs somebody real money — and the escape was built so that the buyer
+   * themselves can always take it.
+   *
+   * ⚠ AND THE SAME THING IS RENDERED BY `PendingReservations` ABOVE, OFF THE
+   * CONNECTED ADDRESS ALONE. This block is the convenience; that one is the
+   * guarantee. If this tab closes, the banner still finds it.
+   */
+  if (phase === 'drawing') {
+    return (
+      <div className="mt-6 rounded border border-bull-gold/40 bg-bull-panel p-4">
+        <MintSteps phase={phase} isPen={isPen} />
+        <p className="bull-header mt-2 text-bull-gold">paid. your bulls are being drawn.</p>
+        <p className="mt-2 text-sm text-bull-text-dim">{PEN.why}</p>
+        {reservationId !== null && (
+          <div className="mt-3">
+            <ReservationRow reservationId={reservationId} writes={penWrites} compact />
+          </div>
+        )}
+        <RevertNotice error={penWrites.error} className="mt-3" />
+        {txLink && <p className="mt-3">{txLink}</p>}
+      </div>
+    );
+  }
+
   if (phase === 'signing' || phase === 'mining' || phase === 'revealing') {
     const body =
       phase === 'signing'
@@ -940,7 +1255,7 @@ function MintOutcome({
             : `checking all ${minted.length} sets of papers, one sec.`;
     return (
       <div className="mt-6 rounded border border-bull-border bg-bull-panel p-4">
-        <MintSteps phase={phase} />
+        <MintSteps phase={phase} isPen={isPen} />
         <p className="mt-2 text-sm text-bull-text-dim">{body}</p>
         {txLink && <p className="mt-3">{txLink}</p>}
       </div>
@@ -948,9 +1263,30 @@ function MintOutcome({
   }
 
   if (minted.length === 0) {
-    // The transaction succeeded. Say only that, and do not draw a bull we
-    // cannot name an id for.
-    return (
+    /**
+     * The transaction succeeded and we cannot name an id. Say only that, and do
+     * not draw a bull we cannot name.
+     *
+     * ⚠ THE TWO PATHS FAIL FOR COMPLETELY DIFFERENT REASONS AND MUST NOT SHARE
+     * A SENTENCE. On the legacy path the ids ride in the receipt, so getting
+     * here means the receipt genuinely lacked a `BullMinted` — worth naming the
+     * event, because that is a real anomaly somebody may need to report. On the
+     * pen path the receipt NEVER carries ids and is not supposed to; getting
+     * here means the reservation could not be read back, which is an rpc
+     * problem, and naming `BullMinted` would send a reader hunting for an event
+     * that was never going to be there.
+     */
+    return isPen ? (
+      <p className="mt-6 text-sm text-bull-gold">
+        minted. this page could not read your reservation back off the chain just now, which is
+        an rpc having a moment rather than anything wrong with the mint. it will show up in the
+        banner at the top of this page on its own, or{' '}
+        <Link href="/bulls?filter=mine" className="underline hover:text-bull-gold-hover">
+          browse your herd
+        </Link>
+        .
+      </p>
+    ) : (
       <p className="mt-6 text-sm text-bull-gold">
         minted. no <span className="font-mono">BullMinted</span> event was in the receipt this
         page could read, so check your wallet or{' '}
@@ -968,6 +1304,7 @@ function MintOutcome({
       txLink={txLink}
       revealFailed={revealFailed}
       onMintAnother={onMintAnother}
+      isPen={isPen}
     />
   );
 }
@@ -988,19 +1325,32 @@ function MintedReveal({
   txLink,
   revealFailed,
   onMintAnother,
+  isPen,
 }: {
   minted: readonly MintedBull[];
   txLink: React.ReactNode;
   revealFailed: boolean;
   onMintAnother: () => void;
+  isPen: boolean;
 }) {
   const single = minted.length === 1 ? minted[0]! : null;
 
   return (
     <div className="mt-6 rounded border border-bull-gold/40 bg-bull-panel p-4">
-      <MintSteps phase="success" />
+      <MintSteps phase="success" isPen={isPen} />
+      {/* ⚠ "DEALT" UNDER THE PEN, "MINTED" WITHOUT IT, AND THE WORD IS THE
+          PAYOFF. The whole reason the buyer waited an extra transaction is that
+          nobody could choose which bull this would be — so the sentence that
+          lands should be the one about the draw, not the one about a mint they
+          already know happened a minute ago. */}
       <p className="bull-header mt-2 text-bull-gold">
-        {single ? `bull #${single.id} minted. he is yours.` : `${minted.length} minted. all yours.`}
+        {single
+          ? isPen
+            ? `you drew bull #${single.id}. he is yours.`
+            : `bull #${single.id} minted. he is yours.`
+          : isPen
+            ? `you drew ${minted.length}. all yours.`
+            : `${minted.length} minted. all yours.`}
       </p>
 
       {single ? (

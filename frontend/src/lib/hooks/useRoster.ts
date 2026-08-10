@@ -122,6 +122,27 @@ export function useRoster(enabled = true): Roster {
     () => mineIncludingDead.filter((b) => !b.isDead),
     [mineIncludingDead],
   );
+  /**
+   * ⚠ THE PEN CAN NEVER APPEAR IN HERE, AND IT IS WORTH SAYING WHY OUT LOUD.
+   *
+   * `others` is "everything alive that is not yours", derived by EXCLUDING the
+   * connected wallet — so any holder this hook does not recognise lands in the
+   * opponent pool by default. That is exactly the shape that would offer
+   * `BullPen` as an opponent: after the pre-mint it is the registered `ownerOf`
+   * several hundred living bulls, none of which anybody has bought.
+   *
+   * It cannot happen because the exclusion is made one level up, not here:
+   * `useMintedBulls` subtracts `poolIds()` before this hook ever asks, so a
+   * pen-held id is never fetched, never in `all`, and so never in `others`. The
+   * fix belongs there rather than as an owner-address filter here — an address
+   * check would have to be repeated on every surface that walks the roster, and
+   * would go stale the day the pen's address changes.
+   *
+   * The safety margin if that ever regressed is real but not free: `Duel`
+   * reverts `BullNotInYards` for a bull nobody entered, and the pen obviously
+   * never enters anything, so a fight against one would fail rather than settle
+   * wrongly. It would still be a picker full of bulls that cannot be fought.
+   */
   const others = useMemo(
     () => all.filter((b) => !b.isDead && (!lower || b.owner.toLowerCase() !== lower)),
     [all, lower],

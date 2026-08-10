@@ -10,4 +10,5 @@ export { JackpotAbi } from './Jackpot';
 export { JackpotNativeAbi } from './JackpotNative';
 export { MarketplaceAbi } from './Marketplace';
 export { YardsAbi } from './Yards';
+export { BullPenAbi } from './BullPen';
 export { Erc20Abi } from './Erc20';

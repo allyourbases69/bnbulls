@@ -171,7 +171,7 @@ contract BullPenSnipeTest is BnbullsBase {
 
     function setUp() public override {
         super.setUp();
-        pen = new BullPen(address(bulls), owner, address(coord));
+        pen = new BullPen(address(bulls), address(bnbull), owner, address(coord));
         pen.setVrfConfig(KEY_HASH, 1, 3, 200_000, true);
         pen.bootstrapSeller(address(drop));
         bot = new SnipeBot(bulls, drop, pen);
@@ -185,7 +185,7 @@ contract BullPenSnipeTest is BnbullsBase {
         for (uint256 i = 0; i < stock; i++) {
             bulls.mint(address(pen));
         }
-        drop.bootstrapPen(address(pen));
+        drop.bootstrapWire(MintDrop.Wire.Pen, address(pen));
     }
 
     /// @dev The lowest legendary id at or after `from`, per the chain's own
@@ -617,10 +617,10 @@ contract BullPenSnipeTest is BnbullsBase {
         _enablePen(STOCK);
         vm.expectRevert(BullPen.NotSeller.selector);
         vm.prank(alice);
-        pen.reserve(alice, 1);
+        pen.reserve(alice, 1, alice, 0);
 
         vm.expectRevert(BullPen.NotSeller.selector);
-        pen.reserve(owner, 1); // not even the owner
+        pen.reserve(owner, 1, owner, 0); // not even the owner
     }
 
     /// @notice Open reservations are counted, so the pen cannot promise the

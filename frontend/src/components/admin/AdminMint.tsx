@@ -18,7 +18,7 @@
 import { useState } from 'react';
 import { useReadContracts } from 'wagmi';
 import { formatUnits, parseUnits } from 'viem';
-import { MintDropAbi } from '@/lib/abi';
+import { BullPenAbi, MintDropAbi } from '@/lib/abi';
 import { contractAddress } from '@/lib/env';
 import {
   AdminCard,
@@ -50,12 +50,27 @@ import {
 
 const BNBULL_DECIMALS = 18;
 
+/**
+ * ⚠ SLOT NUMBERS ARE THE `MintDrop.Wire` ENUM AND THEY ARE POSITIONAL. Slot 4
+ * (`SwapIntermediate`) is the dormant one and is expected to stay zero forever;
+ * slot 5 is the pen.
+ *
+ * ⚠ SLOT 5 IS DELIBERATELY NOT IN THIS LIST. It gets its own card
+ * (`PenCard`) because wiring it is the one entry here that changes what a MINT
+ * DOES rather than where money goes, and it needs the pen's own readiness
+ * checks next to the button. The `WireRow` it renders is the same component
+ * with the same slot number, so there is no second code path.
+ */
 const WIRE_SLOTS = [
   { slot: 0, label: 'price feed (chainlink)' },
   { slot: 1, label: 'router (dex)' },
   { slot: 2, label: 'jackpot · $BNBULL pot' },
   { slot: 3, label: 'jackpot · BNB pot' },
+  { slot: 4, label: 'swap intermediate (dormant, expected zero)' },
 ] as const;
+
+/** `MintDrop.Wire.Pen`. */
+const PEN_WIRE_SLOT = 5;
 
 interface TierRow {
   upToSold: string;
@@ -99,6 +114,15 @@ export function AdminMint() {
           { abi: MintDropAbi, address, functionName: 'wireOf', args: [1] }, // 26
           { abi: MintDropAbi, address, functionName: 'wireOf', args: [2] }, // 27
           { abi: MintDropAbi, address, functionName: 'wireOf', args: [3] }, // 28
+          // ⚠ THE PEN IS NOW AN ORDINARY `Wire` SLOT (5), AND ITS FOUR BESPOKE
+          // ADMIN CALLS ARE GONE. `bootstrapPen` / `proposePen` / `commitPen` /
+          // `cancelPen` / `penWire()` were folded into the shared wire flow to
+          // buy back EIP-170 headroom, so the whole thing goes through
+          // `wireOf(5)` and `proposeWire(5, …)` like every other slot.
+          // `penContract()` survives as the one-call read of the live address.
+          { abi: MintDropAbi, address, functionName: 'wireOf', args: [4] }, // 29
+          { abi: MintDropAbi, address, functionName: 'wireOf', args: [PEN_WIRE_SLOT] }, // 30
+          { abi: MintDropAbi, address, functionName: 'penContract' }, // 31
         ]
       : [],
     query: { enabled: !!address, refetchInterval: 12_000 },
@@ -129,7 +153,15 @@ export function AdminMint() {
   const website = asString(data?.[22]);
   const twitter = asString(data?.[23]);
   const telegram = asString(data?.[24]);
-  const wires = [asWire(data?.[25]), asWire(data?.[26]), asWire(data?.[27]), asWire(data?.[28])];
+  const wires = [
+    asWire(data?.[25]),
+    asWire(data?.[26]),
+    asWire(data?.[27]),
+    asWire(data?.[28]),
+    asWire(data?.[29]),
+    asWire(data?.[30]),
+  ];
+  const penContract = asAddr(data?.[31]);
 
   // Bnbull discount lives per-asset; read it for the bnbull token specifically.
   const { data: discData } = useReadContracts({
@@ -351,6 +383,13 @@ export function AdminMint() {
         </AdminCard>
       </div>
 
+      <PenCard
+        address={address}
+        penContract={penContract}
+        wire={wires[PEN_WIRE_SLOT]}
+        onDone={doRefetch}
+      />
+
       <TierEditor address={address} tiers={tiers} maxMint={maxMint} onDone={doRefetch} />
 
       <MoneyTools address={address} lpUndelivered={lpUndelivered} onDone={doRefetch} />
@@ -383,6 +422,187 @@ export function AdminMint() {
         <RescueControl abi={MintDropAbi} address={address} onDone={doRefetch} />
       </div>
     </AdminSection>
+  );
+}
+
+const ZERO_ADDR = '0x0000000000000000000000000000000000000000';
+
+/**
+ * THE PEN — `contracts/BullPen.sol`, and the switch that turns the whole mint
+ * from one transaction into two.
+ *
+ * ═══════════════════════════════════════════════════════════════════════════
+ * ⚠ WIRING THIS IS THE MOST CONSEQUENTIAL BUTTON ON THIS PAGE, SO IT SHOWS THE
+ *   THINGS THAT DECIDE WHETHER IT WILL WORK, NOT JUST THE ADDRESS.
+ * ═══════════════════════════════════════════════════════════════════════════
+ * Once `penContract()` is non-zero, `mintWithBNB` stops minting and starts
+ * RESERVING: it calls `BullPen.reserve`, emits `BullsReserved` instead of
+ * `BullSold`, and returns no ids. Three things have to be true on the other
+ * side or every mint from that moment reverts and the drop is dead until the
+ * timelock lets it be undone:
+ *
+ *   `seller()`   must already be this MintDrop. `reserve` is seller-only and
+ *                reverts `NotSeller` otherwise, so wiring the drop to the pen
+ *                without wiring the pen to the drop breaks minting one-way.
+ *   `poolSize()` must be > 0. `reserve` reverts `PoolTooSmall` against an empty
+ *                pen, so wiring before the pre-mint lands is the same failure.
+ *   VRF         must be configured — `reserve` reverts `VrfNotConfigured` on a
+ *                zero keyHash or subscription id.
+ *
+ * All three are read below rather than assumed, because every one of them fails
+ * as "the mint is broken" with nothing on the buyer's screen to explain it.
+ *
+ * ⚠ AND THE FRONTEND NEEDS `NEXT_PUBLIC_BULLPEN` SET IN THE SAME BREATH. The
+ * site refuses to sniff the pen off chain (the live MintDrop has no
+ * `penContract()` at all, so the call FAILS rather than returning zero, and a
+ * failed read must never be read as "wired"). Wiring on chain without the env
+ * var leaves the site counting the unsold bulls as sold and offering no way to
+ * settle a reservation.
+ */
+function PenCard({
+  address,
+  penContract,
+  wire,
+  onDone,
+}: {
+  address: `0x${string}`;
+  penContract: `0x${string}` | undefined;
+  wire: { current?: `0x${string}`; pending?: `0x${string}`; eta?: bigint } | undefined;
+  onDone: () => void;
+}) {
+  const live = penContract && penContract !== ZERO_ADDR ? penContract : undefined;
+
+  const { data: penData } = useReadContracts({
+    allowFailure: true,
+    contracts: live
+      ? [
+          { abi: BullPenAbi, address: live, functionName: 'poolSize' }, // 0
+          { abi: BullPenAbi, address: live, functionName: 'sellable' }, // 1
+          { abi: BullPenAbi, address: live, functionName: 'seller' }, // 2
+          { abi: BullPenAbi, address: live, functionName: 'nextReservationId' }, // 3
+          { abi: BullPenAbi, address: live, functionName: 'nextToSettle' }, // 4
+          { abi: BullPenAbi, address: live, functionName: 'keyHash' }, // 5
+          { abi: BullPenAbi, address: live, functionName: 'subscriptionId' }, // 6
+          { abi: BullPenAbi, address: live, functionName: 'refundAfterBlocks' }, // 7
+          { abi: BullPenAbi, address: live, functionName: 'vrfTimeoutBlocks' }, // 8
+        ]
+      : [],
+    query: { enabled: !!live, refetchInterval: 12_000 },
+  });
+
+  const poolSize = asBig(penData?.[0]);
+  const sellable = asBig(penData?.[1]);
+  const seller = asAddr(penData?.[2]);
+  const nextReservationId = asBig(penData?.[3]);
+  const nextToSettle = asBig(penData?.[4]);
+  const keyHash = asString(penData?.[5]);
+  const subscriptionId = asBig(penData?.[6]);
+  const refundAfterBlocks = asBig(penData?.[7]);
+  const vrfTimeoutBlocks = asBig(penData?.[8]);
+
+  const sellerOk = !!seller && !!address && seller.toLowerCase() === address.toLowerCase();
+  const vrfOk = !!keyHash && !/^0x0{64}$/i.test(keyHash) && !!subscriptionId && subscriptionId > 0n;
+  // Reservations issued minus reservations settled: how many buyers are
+  // currently holding a receipt and no bull.
+  const openCount =
+    nextReservationId !== undefined && nextToSettle !== undefined
+      ? Number(nextReservationId - nextToSettle)
+      : undefined;
+
+  return (
+    <AdminCard title="the pen (random delivery)">
+      <p className="text-[11px] text-bull-text-faint">
+        wired, a mint reserves instead of minting, the payment is escrowed in the pen and the ids
+        are drawn in a second transaction. unwired (zero), the drop mints sequentially exactly as
+        it always has.
+      </p>
+
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <BigStat
+          label="state"
+          value={live ? 'WIRED' : 'legacy'}
+          tone={live ? 'gold' : 'plain'}
+          sub={live ? 'mints reserve' : 'mints deliver inline'}
+        />
+        <BigStat label="pool size" value={poolSize?.toLocaleString('en-AU') ?? '—'} sub="bulls held" />
+        <BigStat
+          label="sellable"
+          value={sellable?.toLocaleString('en-AU') ?? '—'}
+          sub="pool minus open reservations"
+        />
+        {/* ⚠ THE ONE NUMBER ON THIS PAGE THAT COUNTS PEOPLE RATHER THAN TOKENS.
+            Every unit of it is a buyer who has paid and is holding nothing, with
+            their money escrowed in the pen. If it stops going back to zero, the
+            keeper is down and real players are on the refund path. */}
+        <BigStat
+          label="open reservations"
+          value={openCount === undefined ? '—' : String(openCount)}
+          tone={openCount && openCount > 0 ? 'gold' : 'plain'}
+          sub={openCount && openCount > 0 ? 'paid, not delivered' : 'all delivered'}
+        />
+      </div>
+
+      <div className="grid gap-x-6 gap-y-1 border-t border-bull-border/60 pt-1 md:grid-cols-2">
+        <KV k="pen" v={<Addr addr={live} />} />
+        <KV
+          k="pen's seller"
+          v={
+            <span className={live && !sellerOk ? 'text-bull-red' : undefined}>
+              <Addr addr={seller} />
+              {live ? (sellerOk ? ' ✓ this drop' : ' ✗ NOT this drop') : ''}
+            </span>
+          }
+        />
+        <KV
+          k="pen vrf"
+          v={live ? (vrfOk ? 'configured' : '✗ not configured — reserve will revert') : '—'}
+        />
+        {/* ⚠ THE REFUND WINDOW OPENS BEFORE THE FALLBACK DRAW DOES, ON PURPOSE:
+            the buyer gets the choice to leave before the system starts forcing
+            an outcome onto them. If these two ever invert, a buyer's money is
+            committed to a draw they never got the chance to walk away from. */}
+        <KV
+          k="refund window opens"
+          v={refundAfterBlocks !== undefined ? `${refundAfterBlocks.toLocaleString('en-AU')} blocks` : '—'}
+        />
+        <KV
+          k="backup draw armable"
+          v={
+            vrfTimeoutBlocks !== undefined ? (
+              <span
+                className={
+                  refundAfterBlocks !== undefined && vrfTimeoutBlocks <= refundAfterBlocks
+                    ? 'text-bull-red'
+                    : undefined
+                }
+              >
+                {vrfTimeoutBlocks.toLocaleString('en-AU')} blocks
+                {refundAfterBlocks !== undefined && vrfTimeoutBlocks <= refundAfterBlocks
+                  ? ' ✗ opens before the refund does'
+                  : ''}
+              </span>
+            ) : (
+              '—'
+            )
+          }
+        />
+        <KV k="next reservation id" v={nextReservationId?.toString() ?? '—'} />
+        <KV k="next to settle" v={nextToSettle?.toString() ?? '—'} />
+      </div>
+
+      {/* ⚠ THE SAME `WireRow` EVERY OTHER SLOT USES, POINTED AT SLOT 5. The pen
+          used to carry four bespoke admin calls and its own wire slot; they were
+          folded into the shared `Wire` enum to buy back EIP-170 headroom, so
+          there is no pen-specific wiring code left to keep in sync. */}
+      <WireRow
+        abi={MintDropAbi}
+        address={address}
+        slot={PEN_WIRE_SLOT}
+        slotLabel="the pen"
+        wire={wire}
+        onDone={onDone}
+      />
+    </AdminCard>
   );
 }
 

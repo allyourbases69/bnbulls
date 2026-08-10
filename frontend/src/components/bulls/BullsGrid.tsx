@@ -51,13 +51,21 @@ function sortBulls(list: readonly RosterBull[], key: SortKey): RosterBull[] {
  * two filter groups (owner, then life), the same six sort keys in the same
  * order, and `OutlawCard`'s data on every card via `BullCard`.
  *
- * ⚠ MINTED ONLY. This grid used to roll all 501 tokens off the art engine and
+ * ⚠ BOUGHT ONLY. This grid used to roll all 501 tokens off the art engine and
  * render every one of them, so the entire drop — including every bull nobody
  * had bought yet — was browsable on day one. Owner call: that should not be on
- * the page. The pool is now the roster the chain reports (`nextTokenId`, plus
- * #501 once `kingMinted`). Fefers' own copy for this page is "Every fefer
- * minted to the stomping ground" — a record of what has been bought, not a
- * catalogue of the drop.
+ * the page. The pool is now the roster the chain reports. Fefers' own copy for
+ * this page is "Every fefer minted to the stomping ground" — a record of what
+ * has been bought, not a catalogue of the drop.
+ *
+ * ⚠ "BOUGHT", NOT "MINTED", AND THE TWO CAME APART WHEN `BullPen` LANDED. The
+ * pen is stocked by minting the whole remaining supply straight to it, so after
+ * the pre-mint several hundred bulls are minted, have real stats and have a
+ * real `ownerOf` — and nobody has bought a single one of them. A grid keyed on
+ * `nextTokenId` would therefore put the entire unsold drop back on the page,
+ * which is precisely the thing the owner asked to have removed. `useRoster` →
+ * `useMintedBulls` subtracts the pen's `poolIds()` for exactly this reason, and
+ * every count on this page inherits it.
  *
  * ⚠ SAY WHAT IS TRUE ABOUT IT, AND NOTHING MORE. This is a UI change, not a
  * cryptographic one, and no copy on this page claims otherwise. The rarity
@@ -222,6 +230,11 @@ export function BullsGrid() {
             ...ACCESSORY_KEYS.map((a) => ({ value: a, label: ACC_LABEL[a] ?? a })),
           ]}
         />
+        {/* ⚠ `aliveCount` AND `deadCount` ARE COUNTED OVER `roster.all`, WHICH
+            IS THE BOUGHT HERD. Under the pen that matters: the several hundred
+            unsold bulls sitting in it are all technically alive, and folding
+            them in here would print a "still standing" number several times the
+            size of anything actually on the page. */}
         <span className="ml-auto font-mono text-xs text-bull-text-faint">
           {filtered.length} shown · {aliveCount} {DEATH.standing}
           {deadCount > 0 ? ` · ${deadCount} ${DEATH.listHeading}` : ''}
@@ -252,7 +265,7 @@ export function BullsGrid() {
         </div>
       ) : roster.all.length === 0 ? (
         <p className="mt-6 text-sm text-bull-text-dim">
-          nothing has been minted yet, so there is no herd to look at.{' '}
+          nobody has bought one yet, so there is no herd to look at.{' '}
           <Link href="/mint" className="text-bull-gold hover:underline">
             bring the first one into the world
           </Link>

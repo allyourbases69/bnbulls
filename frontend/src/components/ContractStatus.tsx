@@ -4,6 +4,9 @@ const CONTRACTS: Array<{ name: ContractName; label: string }> = [
   { name: 'bnbullToken', label: '$BNBULL token' },
   { name: 'bullsNft', label: 'bulls (nft)' },
   { name: 'mintDrop', label: 'mint drop' },
+  // The pen holds every bull nobody has bought yet, so it is the one address a
+  // sceptic wants when they go looking for "where did the unsold ones go".
+  { name: 'bullPen', label: 'the pen (unsold bulls)' },
   { name: 'duel', label: 'duel' },
   { name: 'graveyard', label: 'graveyard' },
   { name: 'jackpotBnbull', label: 'jackpot · $BNBULL' },

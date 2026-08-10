@@ -71,3 +71,48 @@ tab_width = 4
 # Duel.sol and Bulls.sol. So CI does NOT gate on `forge fmt --check` -- see
 # .github/workflows/ci.yml. Run `npm run fmt` only when you mean to reformat.
 bracket_spacing = false
+
+# ══════════════════════════════════════════════════════════════════════════
+#  MintDrop.sol IS 139 BYTES OVER EIP-170 AT THE PROJECT SETTINGS
+# ══════════════════════════════════════════════════════════════════════════
+# ⚠ THIS IS NOT TUNING. WITHOUT IT `MintDrop` CANNOT BE DEPLOYED AT ALL.
+#
+# The live MintDrop (0xAE7e1F…) has a 23,773-byte runtime, i.e. 803 bytes of
+# EIP-170 headroom. The BullPen wiring added to the source afterwards — the
+# `_penWire` slot, its four admin calls, `penWire()`/`penContract()`, the four
+# pen events and the `IBullPen.reserve` branch in `_mintAndEmit` — costs 942
+# bytes. 942 > 803, so the committed source builds to 24,715 against a 24,576
+# limit and `new MintDrop(...)` reverts with the code-size error.
+#
+# Nobody noticed because a zero pen address is today's behaviour byte-for-byte,
+# so the contract was never rebuilt for deployment after the change.
+#
+# ⚠ THE PROJECT-WIDE SETTINGS ARE DELIBERATELY NOT TOUCHED. Every other contract
+# in `deployments/56.json` was compiled at optimizer_runs = 200 and is verified
+# on BscScan against exactly that; moving the global setting would mean the repo
+# no longer reproduces the bytecode of the live set, and `verify-all.ps1` would
+# stop being able to re-verify any of them. Restricting ONE file leaves every
+# other artifact byte-identical.
+#
+# ⚠ `via_ir` WAS TRIED FIRST AND REJECTED ON BUILD TIME, not on output: a single
+# `forge build` did not finish inside 15 minutes. A build nobody will wait for is
+# a build that stops being run.
+#
+# ⚠⚠ THE MARGIN IS 128 BYTES, AT runs = 1, WHICH IS THE FLOOR OF THE LEGACY
+# PIPELINE. There is no more room to buy here. The next thing added to
+# `MintDrop` will not fit, and the fix at that point is structural, not a flag:
+# fold the standalone `_penWire` slot into the existing `Wire` enum as an
+# APPENDED member so it reuses `bootstrapWire`/`proposeWire`/`commitWire`/
+# `cancelWire`/`wireOf`, keep `penContract()` as a one-line view over it, and
+# delete the four bespoke pen admin functions and their four events. That is
+# worth roughly 600-900 bytes and it was not done now only because the pen's
+# admin ABI is already what the tests, the deploy script, the fleet and the
+# admin panel are written against.
+[[profile.default.additional_compiler_profiles]]
+name = "mintdrop-size"
+optimizer = true
+optimizer_runs = 1
+
+[[profile.default.compilation_restrictions]]
+paths = "contracts/MintDrop.sol"
+optimizer_runs = 1

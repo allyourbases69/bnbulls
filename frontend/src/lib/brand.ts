@@ -384,6 +384,237 @@ export const POTS = {
   empty: 'no wins yet. the pots are still fattening.',
 } as const;
 
+// ─── the pen (contracts/BullPen.sol) ─────────────────────────────────
+//
+// ⚠ WHAT THE PEN IS, IN ONE PARAGRAPH, BECAUSE EVERY STRING BELOW DEPENDS ON
+// IT. The rarity table is public and permanent by design — it is derived from a
+// public `masterSeed`, committed on chain as `initialRarityHash`, and the same
+// shuffle ships in this site's own bundle. That is fine. What was NOT fine was
+// that ids came out in order, so anybody could work out which id was legendary
+// and watch the counter. The pen holds every unsold bull and deals one at
+// random, so WHEN you buy no longer decides WHICH bull you get.
+//
+// ⚠ AND THAT IS WHY IT TAKES TWO TRANSACTIONS. If the bull were drawn inside
+// the buyer's own transaction, a contract caller could look at the result and
+// revert if it was not a legendary — a revert costs gas and nothing else, so
+// they would just retry until one landed. You cannot have same-transaction
+// delivery, unpredictability, and no free abort. So the money moves first, and
+// the draw settles after, once a seed exists that nobody could have seen.
+//
+// ⚠ THE COPY MUST NEVER PROMISE A PARTICULAR BULL, AND MUST NEVER APOLOGISE
+// FOR THE WAIT. The wait is the feature. "your bull is being rolled" is the
+// honest and the exciting sentence at the same time, and it is the one to use.
+//
+// ══════════════════════════════════════════════════════════════════════════
+// ⚠⚠ THE REFUND STRINGS BELOW: THE ONE RULE THAT GOVERNS ALL OF THEM
+// ══════════════════════════════════════════════════════════════════════════
+// **NOTHING HERE MAY PROMISE AN INSTANT REFUND, EVER, IN ANY WORDING.**
+//
+// A refund is only safe once the draw definitively cannot still land. The
+// contract enforces that with `refundAfterBlocks`, and the reason is not
+// caution: `refund` sets `refunded` BEFORE anything else so a VRF word arriving
+// later is inert, and refunding earlier would mean racing that word — a buyer
+// who got their money back and then got the bull as well, paid for by everybody
+// else in the pen. So the wait is mandatory, it is measured in blocks, and it
+// cannot be shortened by wanting it to be.
+//
+// The temptation is to paper over that with softer words. Do not. The way out
+// is to tell the player EARLY and keep telling them the truth the whole way
+// through, which is what these strings do:
+//
+//   from the second they pay   the pen is holding the money, not us
+//   while they wait            here is the block it becomes yours to take back
+//   once the window opens      here is the button, and the keeper usually beats
+//                              you to it
+//   after it lands             what happened, how much came back, mint again
+//
+// Every one of those sentences is true at the moment it is shown, and none of
+// them stops being true later. That is the whole test to apply to any edit.
+
+export const PEN = {
+  /** What the pen is called anywhere a player reads it. */
+  label: 'the pen',
+  /** The one-liner that explains the two-step, wherever a buyer first meets it. */
+  why:
+    'the pen deals you a bull at random. it is drawn after you pay, off a seed that does not ' +
+    'exist yet when you hit the button, so nobody can wait for the good ones.',
+  /** The banner headline when bulls are on their way to the connected wallet. */
+  onTheWay: 'you have bulls on the way.',
+
+  // ── the two sides of a gift ────────────────────────────────────────
+  //
+  // ⚠ THE PAYER AND THE RECIPIENT NEED OPPOSITE SENTENCES, AND SWAPPING THEM
+  // IS WORSE THAN SAYING NOTHING. `BullPen` indexes both roles, so one wallet's
+  // banner can carry a gift going out and a gift coming in at the same time.
+  // The bull lands with the RECIPIENT; the refund goes back to the PAYER. Tell
+  // a gifter "you have bulls on the way" and they will go looking in a wallet
+  // the bull is never arriving in.
+
+  /** Headline: they paid, somebody else gets the bull. */
+  giftOutHeading: 'the bull you bought is on its way to them.',
+  giftOut:
+    'you paid for this one and it is going to another wallet, so the bull lands there rather ' +
+    'than here. if the draw does not come off, the money comes back to you, because you are the ' +
+    'one who paid.',
+  /** Headline: somebody else paid, they get the bull. */
+  giftInHeading: 'someone has bought you a bull.',
+  giftIn: 'another wallet paid for this one and the bull is coming to you.',
+  /** The reveal step's word in the mint's step strip. */
+  drawStep: 'draw',
+
+  /**
+   * ⚠ THE SENTENCE THAT DOES THE MOST WORK ON THIS WHOLE SCREEN, AND IT IS
+   * TRUE IN BOTH BRANCHES. Payment is escrowed in the pen at reserve and only
+   * moves when the draw settles or when the money comes back. So "your funds
+   * are safe" is not reassurance here, it is a description of where the money
+   * physically is, and the amount next to it is read off the contract. Shown
+   * from the first block of the wait, not held back until something looks
+   * wrong: a promise made only once there is trouble reads as an excuse.
+   */
+  moneySafe:
+    'the pen contract is holding your money the whole time this takes. it only moves when the ' +
+    'draw lands and your bull comes across, or when it comes back to the wallet that paid.',
+  /** ⚠ SAME FACT, NO "your money". The recipient of a gift did not pay, so the
+   *  possessive would be claiming a balance that is not theirs on a screen
+   *  whose whole job is to be exact about where money is. */
+  moneySafeGiftIn:
+    'the pen contract is holding the payment the whole time this takes. it only moves when the ' +
+    'draw lands and your bull comes across, or when it goes back to the wallet that paid.',
+
+  // ── the rescue states, one sentence each ───────────────────────────
+  //
+  // ⚠ THESE ARE NOT ERROR MESSAGES AND MUST NOT READ LIKE THEM. Every one of
+  // them describes a paid-for bull that is still coming, or money that is on
+  // its way back. Three of them name a button ANYONE may press, the buyer
+  // included, so that delivery is something nobody can be locked out of. The
+  // fourth, the refund, is the payer's alone.
+
+  /** WaitingForVrf, early. The ordinary case, and it is quick. */
+  waitingForVrf: 'the draw is being rolled. this usually takes about a minute.',
+  /**
+   * WaitingForVrf, but well past typical.
+   *
+   * ⚠ "LONGER THAN USUAL", NEVER "SOMETHING WENT WRONG". There is no on-chain
+   * flag for a broken draw, and the measured first live fulfilment took
+   * thousands of blocks, so a claim of fault would be this site inventing a
+   * diagnosis. Longer than usual is observable and is all we know.
+   */
+  stalled:
+    'the chain has not answered for your bull yet. this one is taking longer than most do, ' +
+    'which is the dice roller being slow rather than your money going anywhere.',
+  /** The words around the countdown. ⚠ NEVER HARDCODE THE BLOCKS: the number is
+   *  `refundAfterBlocks`, it is owner-settable, and it is read. */
+  refundPromise: 'if the draw has not landed by then, you can take your money straight back.',
+
+  /** Refundable, and every later un-seeded state, because `refund` stays live
+   *  through all of them. */
+  refundable:
+    'the draw did not land in time, so your money is yours to take back whenever you want it.',
+  /** ⚠ SAY THE KEEPER NORMALLY DOES IT. Otherwise the button reads as a chore
+   *  the player has been left with, when it is actually the guarantee behind a
+   *  keeper that is expected to get there first. */
+  refundKeeper:
+    'the keeper normally sends it back for you within a few minutes. this button is here so you ' +
+    'never have to wait on us to do it.',
+  refundCta: 'take my money back',
+  /** The payer and the recipient can differ on a gifted mint, and only the
+   *  payer may refund. Say whose it is rather than showing a dead button. */
+  refundNotYours:
+    'another wallet paid for this one, so the refund belongs to them rather than to you. the ' +
+    'bull still comes here if the draw lands.',
+
+  // ── the dialogue the owner asked for, in four parts ────────────────
+  //
+  // "as long as a dialogue shows on screen what the error was and that their
+  // funds are safu and been returned straight away and they should mint again"
+  //
+  // ⚠ ON SCREEN, NOT IN A TOAST, AND IT SURVIVES A RELOAD. It is rendered off
+  // `openReservationsOf(you)` and `rescueState`, so it is a fact about the
+  // chain rather than something this tab happens to remember. Close the tab,
+  // come back on a phone, it is still there.
+
+  /** 1 · what happened. Plain language, no error code, no blame on the buyer. */
+  refundedWhat:
+    'the chain never answered with a number for your draw, so no bull was dealt. that is the ' +
+    'random number service having an outage, and it is nothing you did.',
+  /** 2 + 3 · safe, and returned. */
+  refundedHeading: 'your money has been returned.',
+  refundedBody:
+    'the pen was holding it the whole time and it has gone back to the wallet that paid. the ' +
+    'only thing this cost you is the gas.',
+  /** Same moment, but they were buying it for somebody else. ⚠ SAY THAT NO BULL
+   *  WENT ACROSS. A gifter's first question is not "where is my money", it is
+   *  "did they get it or not", and leaving that unanswered is how somebody
+   *  double-buys a present. */
+  refundedGiftBody:
+    'no bull went across to the wallet you were sending it to, and the money has come back to ' +
+    'you, since you are the one who paid. the only thing this cost you is the gas.',
+  /**
+   * ⚠ THE RECIPIENT OF A GIFT NEVER PAID, SO "your money has been returned" IS
+   * FLATLY FALSE FOR THEM AND WOULD HAVE THEM LOOKING FOR A CREDIT THAT IS NOT
+   * COMING. They are owed the OUTCOME, not the money: the bull is not arriving,
+   * and nobody is out of pocket.
+   */
+  refundedToYouHeading: 'that one is not coming after all.',
+  refundedToYouBody:
+    'the draw never landed, so no bull was dealt and the money went straight back to the wallet ' +
+    'that paid for it. nobody is out of pocket, it just did not come off.',
+  /** 4 · mint again. */
+  refundedAgain:
+    'nothing is wrong with the mint itself, and the pen is still full of bulls. have another go ' +
+    'whenever you feel like it.',
+  refundedCta: 'mint again',
+  /** When the session never saw the escrow, so we can state the fact but not
+   *  the figure. ⚠ NEVER SUBSTITUTE A GUESS HERE. */
+  refundedAmountUnknown:
+    'check the wallet that paid for the exact amount. this page will not print a figure it did ' +
+    'not read off the chain itself.',
+
+  /** ArmFallback. Chainlink went quiet; the backup is permissionless. */
+  armFallback:
+    'the dice roller has gone quiet, so the backup draw is available. anyone can start it, ' +
+    'including you, and it costs nothing but gas.',
+  armCta: 'start the backup draw',
+  /** WaitFallback. Armed, waiting for the block it named. */
+  waitFallback:
+    'the backup draw is started and is waiting on a block that has not been mined yet. that gap ' +
+    'is the point: whoever started it could not see what they were starting.',
+  /** PinFallback. The window is open and it closes. */
+  pinFallback:
+    'the backup draw is ready to be locked in. do it soon, a block hash is only readable for ' +
+    'about 256 blocks and then it has to start over.',
+  pinCta: 'lock the draw in',
+  /** Settle. The seed is fixed. Nothing left to decide. */
+  settle:
+    'your bulls have been drawn. one more transaction hands them over, and anyone can send it, ' +
+    'so the result is already fixed either way.',
+  settleCta: 'hand them over',
+  /** QueuedBehind. FIFO is a security control, not a queue for fun. */
+  queuedBehind:
+    'the reservation in front of yours has to finish first. that order is deliberate: if buyers ' +
+    'could choose who settles first they could shuffle the pen and shop for a better draw. ' +
+    'unstick the one in front and yours goes straight after.',
+  queuedCta: 'unstick the one in front',
+  /** Settled. */
+  settled: 'delivered.',
+  /** Unknown. Should not happen; say something true rather than nothing. */
+  unknown:
+    'the pen does not know this reservation. that usually means this build is pointed at a ' +
+    'different pen than the one you bought from.',
+
+  /** A refund whose push back bounced. Parked, named, and collectable. */
+  refundDeferred:
+    'your refund was worked out but the transfer back bounced, so the pen is holding it under ' +
+    'your name until you collect it. it is already yours, this only moves it.',
+  claimRefundCta: 'collect my refund',
+
+  /** A drawn bull whose delivery transfer bounced. Rare, and recoverable. */
+  unclaimed:
+    'one of your bulls was drawn but the handover bounced, so it is parked and waiting for you ' +
+    'to collect it. it is already yours, this only moves it.',
+  claimCta: 'collect it',
+} as const;
+
 // ─── currency (DECISIONS.md §26 + §29) ───────────────────────────────
 //
 // ⚠ TWO CURRENCIES. BNB and BNBULL. There is no stablecoin anywhere in this

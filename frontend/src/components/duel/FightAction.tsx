@@ -17,8 +17,10 @@ import { RevertNotice } from '@/components/shared/RevertNotice';
 import { DuelReplayInline } from '@/components/duel/DuelReplay';
 import { DuelAnimation, type DuelChainStatus } from '@/components/duel/DuelAnimation';
 import { VICTORY } from '@/components/duel/duelCopy';
+import { CURRENCY } from '@/lib/brand';
+import { needsErc20Approval } from '@/lib/duelPayRoute';
 import type { CombatEvent } from '@/core/types';
-import { explorerBaseUrl, CHAIN_ID } from '@/lib/env';
+import { explorerBaseUrl, CHAIN_ID, NATIVE_DUEL } from '@/lib/env';
 import { decodeRevert, type DecodedRevert } from '@/lib/revertDecode';
 
 /**
@@ -254,17 +256,45 @@ export function FightAction({
   }, [quote, myTokenId]);
 
   const nativeValue = quote?.nativeValue ? BigInt(quote.nativeValue) : 0n;
-  const needsErc20 = mySide !== null && nativeValue === 0n && mySide.asset !== ZERO;
 
   /**
-   * ⚠ THE BNB LEG'S ERC-20 IS **WBNB**, and the approve button has to say so.
+   * IS THIS SIDE THE NATIVE BNB LEG?
    *
-   * `stakes.oracleA/B` is exactly "is this the bnb leg" (the API says as much
-   * where it sets it), so an approval on that side is a WBNB approval. It is
-   * reachable: pick bnb, be short of raw bnb, and the signer falls through to
-   * the wbnb allowance route rather than refusing. A button reading "approve
-   * BNB" would then send somebody looking for a token that is not the one their
-   * wallet is about to approve.
+   * `stakes.oracleA/B` is set as `asset.kind === 'bnb'` in `/api/run-duel`, so
+   * it is exactly "this side is the bnb leg" and nothing else. The ASSET
+   * ADDRESS cannot answer the same question, because the BNB leg's asset key is
+   * still the WBNB address — that is how `fighterCost(WBNB)` prices a BNB fight
+   * — and an address that looks like an ERC-20 is what the bug below turned
+   * into an ERC-20 payment.
+   */
+  const nativeLeg = mySide !== null && mySide.oracle;
+
+  /**
+   * ⚠ THE PREDICATE LIVES IN `lib/duelPayRoute.ts` AND IS PROVED THERE.
+   *
+   * It used to be an inline expression here, and as an inline expression it
+   * quietly conflated "no `msg.value` riding along" with "this side is paid in
+   * an ERC-20" — two questions that stopped having the same answer at the
+   * native migration. The result reached mainnet as **"approve wbnb to fight"**
+   * on the fight gate for every player who had topped up their fight balance,
+   * pointing at an allowance `DuelNative` never reads. Read that file for the
+   * full trace; `npm run verify:pay-route` walks the matrix that keeps it dead.
+   */
+  const needsErc20 = needsErc20Approval({
+    hasSide: mySide !== null,
+    nativeValue,
+    asset: mySide?.asset ?? ZERO,
+    isBnbLeg: nativeLeg,
+    nativeDuel: NATIVE_DUEL,
+  });
+
+  /**
+   * ⚠ THE LEGACY BNB LEG'S ERC-20 IS **WBNB**, and the approve button has to
+   * say so — but only where such an approve can still exist, which after the
+   * native migration is the BNBULL leg and the pre-cutover contract. On
+   * `DuelNative`'s bnb leg `needsErc20` is now false, so this label is
+   * unreachable there; a button reading "approve BNB" would otherwise have sent
+   * somebody looking for a token that is not the one their wallet signs for.
    */
   const approveSymbol = mySide === null ? '' : mySide.oracle ? 'wbnb' : mySide.symbol.toLowerCase();
 
@@ -753,11 +783,16 @@ export function FightAction({
         <summary className="cursor-pointer font-mono text-[11px] uppercase tracking-wide text-bull-text-faint hover:text-bull-gold">
           what your pick does and does not cover
         </summary>
+        {/* ⚠ CONTRACT-AWARE, BECAUSE THE OLD SENTENCE WAS FALSE AFTER THE
+            MIGRATION. On `DuelNative` a passive side comes out of the custodied
+            fight balance, not an allowance, so the legacy wording described a
+            mechanism that no longer exists on the very screen a player reads
+            just before they sign. The pre-cutover string is kept for the
+            pre-cutover contract and nothing else. */}
         <p className="mt-2 text-[11px] text-bull-text-faint">
-          this covers your own side of a fight you start. somebody else picking one of your
-          bulls draws on the allowance you gave the duel contract in step 2, in whichever
-          currency you approved, because only the wallet sending the transaction can put raw
-          bnb in with it.
+          {NATIVE_DUEL
+            ? CURRENCY.pickCoversNative
+            : 'this covers your own side of a fight you start. somebody else picking one of your bulls draws on the allowance you gave the duel contract in step 2, in whichever currency you approved, because only the wallet sending the transaction can put raw bnb in with it.'}
         </p>
       </details>
 

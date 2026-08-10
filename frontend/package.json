@@ -16,7 +16,8 @@
     "verify:typed-data": "node scripts/verify-typed-data.ts",
     "verify:reverts": "node scripts/verify-revert-decode.ts",
     "verify:pin": "node scripts/verify-fight-pin.ts",
-    "verify": "npm run verify:art && npm run verify:rarity && npm run verify:combat && npm run verify:typed-data && npm run verify:reverts && npm run verify:pin",
+    "verify:pay-route": "node scripts/verify-pay-route.ts",
+    "verify": "npm run verify:art && npm run verify:rarity && npm run verify:combat && npm run verify:typed-data && npm run verify:reverts && npm run verify:pin && npm run verify:pay-route",
     "gen:abi": "node scripts/generate-abi.ts",
     "gen:brand": "node scripts/gen-brand-assets.ts",
     "gen:brand:proof": "node scripts/gen-brand-assets.ts --proof"

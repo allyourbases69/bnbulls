@@ -1,8 +1,14 @@
 'use client';
 
 import { useReadContract } from 'wagmi';
-import { JackpotAbi } from '@/lib/abi';
-import { contractAddress, explorerBaseUrl } from '@/lib/env';
+import { JackpotAbi, JackpotNativeAbi } from '@/lib/abi';
+import {
+  contractAddress,
+  explorerBaseUrl,
+  isNativePot,
+  NATIVE_POT_DECIMALS,
+  NATIVE_POT_SYMBOL,
+} from '@/lib/env';
 import { formatToken, shortAddr } from '@/lib/format';
 import { tickerToPrint, useTokenDecimals, useTokenSymbol } from '@/lib/hooks/useTokenDecimals';
 import { useJackpotAwards } from '@/lib/hooks/useJackpotAwards';
@@ -33,45 +39,58 @@ export function PotCard({
 }) {
   const address = contractAddress(name);
   const explorer = explorerBaseUrl();
+  // ⚠ Only the BNB pot ever goes native; $BNBULL genuinely IS an ERC-20 and
+  // keeps its `prizeToken()`. Branching on the flag alone would point this card
+  // at an ABI whose `prizeToken` does not exist for a pot that never changed.
+  const native = isNativePot(name);
+  const abi = native ? JackpotNativeAbi : JackpotAbi;
 
   const { data: pool } = useReadContract({
     address: address ?? undefined,
-    abi: JackpotAbi,
+    abi,
     functionName: 'pool',
     query: { enabled: !!address, refetchInterval: QUOTE_REFRESH_MS },
   });
   const { data: oddsOneIn } = useReadContract({
     address: address ?? undefined,
-    abi: JackpotAbi,
+    abi,
     functionName: 'oddsOneIn',
     query: { enabled: !!address },
   });
   const { data: totalAwarded } = useReadContract({
     address: address ?? undefined,
-    abi: JackpotAbi,
+    abi,
     functionName: 'totalAwarded',
     query: { enabled: !!address },
   });
   const { data: awardCount } = useReadContract({
     address: address ?? undefined,
-    abi: JackpotAbi,
+    abi,
     functionName: 'awardCount',
     query: { enabled: !!address },
   });
+  // ⚠ NOT ASKED ON A NATIVE POT — the view is gone, and a failed read here used
+  // to leave `symbol` on the `WBNB` fallback while the figure beside it read
+  // `—`: the exact "right amount, wrong ticker" bug the fallback's own comment
+  // warns about, on the one card this migration exists to correct.
   const { data: prizeToken, isError: prizeTokenError } = useReadContract({
     address: address ?? undefined,
     abi: JackpotAbi,
     functionName: 'prizeToken',
-    query: { enabled: !!address },
+    query: { enabled: !!address && !native },
   });
   // Both of the prize token's own facts come off the prize token: the decimals
   // decide the number, the symbol decides what it is called. Reading one live
   // and hardcoding the other renders the right amount with the wrong ticker.
-  const { decimals } = useTokenDecimals(prizeToken as `0x${string}` | undefined);
-  const { symbol: liveSymbol, isError: symbolError } = useTokenSymbol(
-    prizeToken as `0x${string}` | undefined,
-  );
-  const symbol = tickerToPrint(liveSymbol, !prizeTokenError && !symbolError, symbolFallback);
+  // A native pot has no token to ask, so both are asserted — there is no
+  // contract that could disagree with them.
+  const tokenAddr = native ? undefined : (prizeToken as `0x${string}` | undefined);
+  const { decimals: tokenDecimals } = useTokenDecimals(tokenAddr);
+  const { symbol: liveSymbol, isError: symbolError } = useTokenSymbol(tokenAddr);
+  const decimals = native ? NATIVE_POT_DECIMALS : tokenDecimals;
+  const symbol = native
+    ? NATIVE_POT_SYMBOL
+    : tickerToPrint(liveSymbol, !prizeTokenError && !symbolError, symbolFallback);
   /** Pre-spaced, so a still-loading ticker leaves no orphan gap after the
    *  number. Empty is the correct render while we are still asking. */
   const unit = symbol ? ` ${symbol}` : '';

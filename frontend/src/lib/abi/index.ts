@@ -7,6 +7,7 @@ export { DuelAbi } from './Duel';
 export { DuelNativeAbi } from './DuelNative';
 export { GraveyardAbi } from './Graveyard';
 export { JackpotAbi } from './Jackpot';
+export { JackpotNativeAbi } from './JackpotNative';
 export { MarketplaceAbi } from './Marketplace';
 export { YardsAbi } from './Yards';
 export { Erc20Abi } from './Erc20';

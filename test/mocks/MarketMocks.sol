@@ -139,7 +139,12 @@ contract MarketReentrantBuyer is IERC721Receiver {
 
     function buy(uint256 tokenId, uint256 value) external {
         (bool ok,) = market.call{value: value}(
-            abi.encodeWithSignature("buyWithBNB(uint256)", tokenId)
+            abi.encodeWithSignature(
+                "buyWithBNB(uint256,uint256,uint256)",
+                tokenId,
+                type(uint256).max,
+                type(uint256).max
+            )
         );
         require(ok, "MarketReentrantBuyer: outer buy failed");
     }
@@ -152,7 +157,12 @@ contract MarketReentrantBuyer is IERC721Receiver {
             armed = false;
             innerAttempts += 1;
             (bool ok,) = market.call{value: address(this).balance}(
-                abi.encodeWithSignature("buyWithBNB(uint256)", tokenId)
+                abi.encodeWithSignature(
+                "buyWithBNB(uint256,uint256,uint256)",
+                tokenId,
+                type(uint256).max,
+                type(uint256).max
+            )
             );
             innerSucceeded = ok;
         }

@@ -861,6 +861,25 @@ export const DuelNativeAbi = [
   },
   {
     "type": "function",
+    "name": "passiveAllowance",
+    "inputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "pause",
     "inputs": [],
     "outputs": [],
@@ -1133,6 +1152,19 @@ export const DuelNativeAbi = [
       },
       {
         "name": "minStake",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "setPassiveAllowance",
+    "inputs": [
+      {
+        "name": "allowance",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -2062,6 +2094,50 @@ export const DuelNativeAbi = [
   },
   {
     "type": "event",
+    "name": "PassiveAllowanceConsumed",
+    "inputs": [
+      {
+        "name": "wallet",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "spent",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      },
+      {
+        "name": "remaining",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "PassiveAllowanceSet",
+    "inputs": [
+      {
+        "name": "wallet",
+        "type": "address",
+        "indexed": true,
+        "internalType": "address"
+      },
+      {
+        "name": "allowance",
+        "type": "uint256",
+        "indexed": false,
+        "internalType": "uint256"
+      }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
     "name": "Paused",
     "inputs": [
       {
@@ -2659,6 +2735,27 @@ export const DuelNativeAbi = [
   },
   {
     "type": "error",
+    "name": "PassiveAllowanceExceeded",
+    "inputs": [
+      {
+        "name": "wallet",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "needed",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "allowed",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
     "name": "ReentrancyGuardReentrantCall",
     "inputs": []
   },
@@ -2865,6 +2962,17 @@ export const DuelNativeAbi = [
         "name": "received",
         "type": "uint256",
         "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "YardsNotWired",
+    "inputs": [
+      {
+        "name": "slot",
+        "type": "address",
+        "internalType": "address"
       }
     ]
   },

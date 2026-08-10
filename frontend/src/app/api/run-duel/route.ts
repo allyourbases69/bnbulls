@@ -63,7 +63,8 @@ import {
 } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { randomBytes } from 'node:crypto';
-import { BullsAbi, DuelAbi, Erc20Abi, MarketplaceAbi, YardsAbi } from '@/lib/abi';
+import { BullsAbi, DuelAbi, DuelNativeAbi, Erc20Abi, MarketplaceAbi, YardsAbi } from '@/lib/abi';
+import { NATIVE_DUEL } from '@/lib/env';
 import { validateServerDuelEnv, serverChain, duelExpirySeconds } from '@/lib/serverEnv';
 import { checkSessionTerms, SESSION_ERROR } from '@/lib/duelSession';
 import {
@@ -452,6 +453,67 @@ async function erc20Ready(
     }) as Promise<bigint>,
   ]);
   return { ok: balance >= cost && allowance >= cost, balance, allowance };
+}
+
+/**
+ * The native replacement for `erc20Ready` on the BNB leg.
+ *
+ * ⚠ WITHOUT THIS, EVERY FIGHT 400s AFTER THE MIGRATION. `DuelNative._takeSide`
+ * charges a passive opponent by debiting `bnbCredit[owner]` — there is no ERC-20
+ * allowance to read, because native BNB does not have one. The old check asked
+ * WBNB for a balance and an allowance and got 0 and 0 for every wallet on
+ * earth, so every opponent looked broke and the route refused to sign, while
+ * telling the player to go and approve something that would not have helped.
+ *
+ * ⚠⚠ THERE ARE **TWO** GATES ON THIS PATH, NOT ONE, AND CHECKING ONLY THE
+ * BALANCE IS THE SAME BUG IN A NEW COAT. `passiveAllowance` — the per-wallet
+ * ceiling that replaced the WBNB approval — DEFAULTS TO ZERO, so a wallet that
+ * has only ever deposited reverts `PassiveAllowanceExceeded` on chain while
+ * looking perfectly funded to a balance-only check. That is the majority state
+ * right after the migration, not an edge case: everyone starts there. Reading
+ * only `bnbCredit` would sign a doomed duel and burn the signer's gas, or 400
+ * with "top up" at a wallet whose money is already sitting there.
+ *
+ * ⚠ AND IT BINDS THE SUBMITTER TOO, WHICH THE CONTRACT'S OWN COMMENT DOES NOT
+ * SAY. The allowance branch is reached whenever `msg.value` did not cover the
+ * stake — `owner_ == msg.sender` only escapes it on the value path
+ * (`DuelNative.sol:1292`). So a player fighting with their topped-up balance
+ * and no value attached is checked against their own ceiling as well. This is
+ * therefore NOT gated on `isSubmitter`; it is gated on taking the credit route,
+ * which is exactly when the route calls it.
+ *
+ * `cost === 0n` short-circuits for the same reason it does in `erc20Ready`: a
+ * free leg needs nothing behind it.
+ */
+type CreditCheck = {
+  ok: boolean;
+  credit: bigint;
+  allowance: bigint;
+  /** Which gate closed. Callers MUST branch on it: the two have different
+   *  causes, different fixes, and telling somebody to add money they already
+   *  have is how you lose them. `null` when nothing is short. */
+  short: 'credit' | 'allowance' | null;
+};
+
+async function creditReady(
+  client: PublicClient,
+  duel: Address,
+  owner: Address,
+  cost: bigint,
+): Promise<CreditCheck> {
+  if (cost === 0n) return { ok: true, credit: 0n, allowance: 0n, short: null };
+  const [credit, allowance] = await Promise.all([
+    client.readContract({
+      address: duel, abi: DuelNativeAbi, functionName: 'bnbCredit', args: [owner],
+    }) as Promise<bigint>,
+    client.readContract({
+      address: duel, abi: DuelNativeAbi, functionName: 'passiveAllowance', args: [owner],
+    }) as Promise<bigint>,
+  ]);
+  // Allowance first when BOTH are short: it is the one that is zero by default,
+  // so it is the likelier real cause and the cheaper thing to fix.
+  const short = allowance < cost ? 'allowance' : credit < cost ? 'credit' : null;
+  return { ok: short === null, credit, allowance, short };
 }
 
 function bad(error: string, status: number, code?: string) {
@@ -1043,6 +1105,69 @@ export async function POST(request: Request) {
           }
         }
 
+        // ── THE NATIVE BNB LEG ──────────────────────────────────────
+        // On `DuelNative` the bnb leg has no allowance at all: a side that is
+        // not covered by `msg.value` is debited from the custodied balance
+        // (`_takeSide` → `_debitBnb`). That is the ONLY route for a passive
+        // opponent, and it is also the submitter's fallback when they did not
+        // send enough value — the contract spends `msg.value` first, then the
+        // balance, in that order.
+        //
+        // The bnbull leg is untouched: $BNBULL is a real ERC-20 and still
+        // settles by allowance on both contracts.
+        if (NATIVE_DUEL && info.kind === 'bnb') {
+          const credit = await creditReady(client, env.duelAddress, owner, info.cost);
+          if (credit.ok) return { asset: info, nativeValue: 0n };
+          const held = formatToken(credit.credit, info.decimals);
+          const budget = formatToken(credit.allowance, info.decimals);
+
+          // ⚠ THE AWAY BUDGET IS NOT A MONEY PROBLEM AND MUST NOT READ AS ONE.
+          // A wallet blocked here usually has the bnb sitting right there; what
+          // it has not done is state a ceiling on what fights it did not start
+          // may spend. "top up" would be a lie that costs somebody a deposit.
+          //
+          // Zero is deliberately worded to cover both ways of getting there —
+          // never set, and spent all the way down — because on chain they are
+          // the same read and guessing wrong makes the sentence wrong.
+          // ⚠ THE SUBMITTER CAN LAND HERE TOO, AND "WHILE YOU ARE AWAY" WOULD
+          // BE NONSENSE TO SOMEBODY STARING AT THE SCREEN. They only reach it
+          // by being short in the WALLET, so the fight falls back to the
+          // balance — and the contract gates that fallback on the away budget
+          // as well (`DuelNative.sol:1292`, where `owner_ == msg.sender` only
+          // escapes on the value path). So their sentence names the real
+          // sequence: wallet short → balance → budget, and gives them both
+          // exits rather than the one that happens to be nearer.
+          const why =
+            credit.short === 'allowance'
+              ? isSubmitter
+                ? `one fight needs ${need} bnb and your wallet has ` +
+                  `${formatToken(nativeHeld ?? 0n, info.decimals)}, so this would come out of ` +
+                  `your fight balance instead — and that is capped by your away budget, ` +
+                  `now at ${budget}. put more bnb in your wallet, or raise the budget on the ` +
+                  'fight balance panel.'
+                : credit.allowance === 0n
+                  ? 'that wallet has not set how much its bulls can play for while it is away, ' +
+                    'or has used up what it set. only its owner can change that.'
+                  : `one fight needs ${need} bnb and that wallet's away budget is down to ` +
+                    `${budget}. it counts down as offline fights happen, and only its owner ` +
+                    'can raise it.'
+              : nativeHeld !== null
+                ? // Both of the submitter's routes failed, so name both. Saying
+                  // only "top up" to a wallet that is simply out of bnb sends
+                  // them in a circle.
+                  `one fight needs ${need} bnb. you have ${formatToken(nativeHeld, info.decimals)} ` +
+                  `bnb to send with the transaction and ${held} in your fight balance, so ` +
+                  'neither covers it.'
+                : `one fight needs ${need} bnb. that wallet has ${held} in its fight balance.`;
+
+          blockers.push({
+            symbol: info.symbol,
+            why,
+            code: credit.short === 'allowance' ? 'NO_AWAY_BUDGET' : 'INSUFFICIENT_CREDIT',
+          });
+          continue;
+        }
+
         const ready = await erc20Ready(client, info.address, owner, env.duelAddress, info.cost);
         if (ready.ok) return { asset: info, nativeValue: 0n };
 
@@ -1079,12 +1204,27 @@ export async function POST(request: Request) {
           code,
         };
       }
+      // ⚠ THE ADVICE AT THE END HAS TO MATCH THE CONTRACT, OR IT SENDS PEOPLE
+      // ROUND IN CIRCLES. On the native duel there is nothing to approve for
+      // the bnb leg — the owner tops up a balance the contract custodies. The
+      // old sentence told them to approve, which would not have helped and
+      // would have looked like the game was broken when it did not.
+      // ⚠ THE CLOSING ADVICE HAS TO NAME THE RIGHT FIX. On the native duel a
+      // passive side needs BOTH a balance and an away budget, and the budget is
+      // the half that is zero by default — so "ask that owner to top up" is
+      // wrong advice for the commonest blocker there is.
+      const askFor = code === 'NO_AWAY_BUDGET' ? 'set an away budget' : 'top up';
       return {
-        error:
-          `bull #${tokenId} cannot be drawn into this fight. a bull you did not send in ` +
-          'yourself always pays out of an allowance its owner gave the duel contract, ' +
-          'because only the wallet sending the transaction can post bnb with it. ' +
-          `${detail} pick another opponent, or ask that owner to approve one of the two.`,
+        error: NATIVE_DUEL
+          ? `bull #${tokenId} cannot be drawn into this fight. a bull you did not send in ` +
+            'yourself pays out of the fight balance its owner topped up, up to a budget they ' +
+            'set for fights they are not around for — only the wallet sending the transaction ' +
+            'can put bnb in with it. ' +
+            `${detail} pick another opponent, or ask that owner to ${askFor}.`
+          : `bull #${tokenId} cannot be drawn into this fight. a bull you did not send in ` +
+            'yourself always pays out of an allowance its owner gave the duel contract, ' +
+            'because only the wallet sending the transaction can post bnb with it. ' +
+            `${detail} pick another opponent, or ask that owner to approve one of the two.`,
         code,
       };
     };

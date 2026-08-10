@@ -198,7 +198,7 @@ contract MarketplaceDecimalsTest is MarketplaceHarness {
         bull9.mint(bob, gross);
         vm.startPrank(bob);
         bull9.approve(address(m), gross);
-        m.buyWithBNBULL(1);
+        m.buyWithBNBULL(1, LIST_USD, type(uint256).max);
         vm.stopPrank();
 
         assertEq(bulls.ownerOf(1), bob);
@@ -287,7 +287,7 @@ contract MarketplaceDecimalsTest is MarketplaceHarness {
         b6.mint(bob, gross);
         vm.startPrank(bob);
         b6.approve(address(m), gross);
-        m.buyWithBNBULL(1);
+        m.buyWithBNBULL(1, LIST_USD, type(uint256).max);
         vm.stopPrank();
 
         assertEq(fee, 6_000_000, "7.5% of $80 is $6.00, in 6dp units");
@@ -300,7 +300,7 @@ contract MarketplaceDecimalsTest is MarketplaceHarness {
         uint256 bnbGross = _bnbGross(LIST_USD);
         vm.deal(bob, bnbGross);
         vm.prank(bob);
-        market.buyWithBNB{value: bnbGross}(2);
+        market.buyWithBNB{value: bnbGross}(2, LIST_USD, type(uint256).max);
         assertEq(treasury.balance, (bnbGross * FEE_BPS) / 10_000 - _potOf(bnbGross));
     }
 

@@ -76,6 +76,8 @@ registerHooks({
 const { decodeRevert, GENERIC_REVERT_MESSAGE } = await import('../src/lib/revertDecode.ts');
 const { rankOpponents } = await import('../src/lib/matchmaking.ts');
 const { DuelAbi } = await import('../src/lib/abi/Duel.ts');
+const { DuelNativeAbi } = await import('../src/lib/abi/DuelNative.ts');
+const { MarketplaceAbi } = await import('../src/lib/abi/Marketplace.ts');
 
 let failures = 0;
 let checks = 0;
@@ -221,6 +223,73 @@ function undecodedByViem(data: `0x${string}`): unknown {
   });
   const r = decodeRevert(undecodedByViem(data));
   check('BullIsListed(7) names the bull and the fix', /#7/.test(r.message) && /delist/.test(r.message), r.message);
+}
+
+{
+  // ⚠ THE ONE ERROR THAT MUST NOT SAY "TOP UP". `PassiveAllowanceExceeded` is
+  // the away-budget ceiling — the wallet's money is almost always sitting right
+  // there and untouched, and the budget defaults to ZERO, so this is the error
+  // every player meets first after the migration. The obvious wording sends
+  // them to deposit bnb they already have, which fixes nothing and costs gas.
+  // It is a `DuelNative`-only error, so this also proves the merged ABI picked
+  // up the new contract at all.
+  const data = encodeErrorResult({
+    abi: DuelNativeAbi as unknown as Abi,
+    errorName: 'PassiveAllowanceExceeded',
+    args: ['0x000000000000000000000000000000000000dEaD', 10n ** 16n, 0n],
+  });
+  const r = decodeRevert(undecodedByViem(data));
+  check('PassiveAllowanceExceeded is named off the DuelNative abi', r.errorName === 'PassiveAllowanceExceeded', r.errorName ?? 'null');
+  check('…and says it is the away budget', /away/.test(r.message), r.message);
+  check('…and never tells them to top up money they have', !/top (it |them )?up/.test(r.message), r.message);
+  console.log(`       > ${r.message}`);
+}
+
+{
+  // ⚠ TWO ERRORS, TWO DIFFERENT CULPRITS, AND THEY MUST NOT SHARE COPY.
+  //
+  // `ListingRepriced` is the seller-front-run guard: the seller moved their own
+  // dollar sticker between quote and settlement. Before the guard existed the
+  // price was read at SETTLEMENT and the surplus refunded, so a seller could
+  // watch the mempool, `updatePrice` up by the frontend's cushion, and eat the
+  // whole `msg.value` with a zero refund.
+  //
+  // The buyer did nothing wrong and nothing was charged, so this must NOT share
+  // the "the amount sent no longer covers the price" wording used for
+  // `InsufficientBNB`/`PaymentShortfall` — that reads as the buyer's fault and
+  // invites them to throw more money at it.
+  const repriced = encodeErrorResult({
+    abi: MarketplaceAbi as unknown as Abi,
+    errorName: 'ListingRepriced',
+    args: [10n ** 20n, 8n * 10n ** 19n],
+  });
+  const r = decodeRevert(undecodedByViem(repriced));
+  check('ListingRepriced is named off the Marketplace abi', r.errorName === 'ListingRepriced', r.errorName ?? 'null');
+  check('…and blames the seller, not the buyer', /seller raised the price/.test(r.message), r.message);
+  check('…and says nothing was sent', /nothing was sent/.test(r.message), r.message);
+  check(
+    '…and never reuses the you-underpaid wording',
+    !/no longer covers the price/.test(r.message),
+    r.message,
+  );
+  console.log(`       > ${r.message}`);
+
+  // `PriceAboveMax` is the ceiling on the TOTAL, which the bnb oracle or the
+  // bnbull peg can trip on a perfectly honest listing. Same refusal, same
+  // "nothing was sent" — but it must NOT accuse anybody, because an unlucky
+  // oracle tick is not a seller cheating. Sharing one sentence between the two
+  // would either libel an honest seller or let a cheating one hide.
+  const above = encodeErrorResult({
+    abi: MarketplaceAbi as unknown as Abi,
+    errorName: 'PriceAboveMax',
+    args: [10n ** 17n, 9n * 10n ** 16n],
+  });
+  const p2 = decodeRevert(undecodedByViem(above));
+  check('PriceAboveMax is named off the Marketplace abi', p2.errorName === 'PriceAboveMax', p2.errorName ?? 'null');
+  check('…and says nothing was sent', /nothing was sent/.test(p2.message), p2.message);
+  check('…and does NOT accuse the seller of anything', !/seller/.test(p2.message), p2.message);
+  check('…and the two do not share a sentence', r.message !== p2.message, p2.message);
+  console.log(`       > ${p2.message}`);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════

@@ -147,6 +147,7 @@ import { useBnbullLocked } from '@/lib/hooks/useBnbullLocked';
 import { useWrapBnb } from '@/lib/hooks/useWrapBnb';
 import { useFightBalance } from '@/lib/hooks/useFightBalance';
 import { FightBalanceRow, FightBalanceBanner } from '@/components/duel/FightBalanceRow';
+import { JackpotPrizeBanner } from '@/components/pots/JackpotPrizeBanner';
 import { useDismissOnOutside } from '@/lib/hooks/useDismissOnOutside';
 import { rankOpponents, pickOpponent, ratingGap } from '@/lib/matchmaking';
 import { usePitPool } from '@/lib/hooks/useYards';
@@ -651,15 +652,18 @@ export function DuelPicker() {
   /** Has this wallet opted into being challenged at all? Drives the disclosure's
    *  summary line, so it reads as a state rather than a chore.
    *
-   *  ⚠ POST-MIGRATION THE ANSWER COMES FROM THE BALANCE, NOT AN ALLOWANCE.
+   *  ⚠ POST-MIGRATION IT TAKES **BOTH** A BALANCE AND AN AWAY BUDGET.
    *  `DuelNative` debits a custodied balance for a passive side, so the WBNB
    *  allowance this used to read stops meaning anything the moment the new
    *  contract is live — a wallet with a stale approval and no balance would
-   *  otherwise still be told it is challengeable. `fightsCovered` is already
-   *  floored to 0 on an unread balance, so an unanswered read reads as "off"
-   *  rather than claiming a readiness we have not confirmed. */
+   *  otherwise still be told it is challengeable. But a balance alone is not
+   *  enough either: `passiveAllowance` defaults to ZERO, so a deposit-only
+   *  wallet reverts `PassiveAllowanceExceeded` and is not challengeable at all.
+   *  `fightBalance.challengeable` is the only thing that checks both halves,
+   *  and it is false on reads that have not landed — so an unanswered read says
+   *  "off" rather than claiming a readiness we have not confirmed. */
   const challengeable = NATIVE_DUEL
-    ? fightBalance.fightsCovered > 0
+    ? fightBalance.challengeable
     : !primaryIsBnbull && primaryAllowance.fightsAllowed > 0;
   /** ⚠ THERE IS DELIBERATELY NO `wantsTopUp` GATE HERE, and no wrap gate either.
    *  The only signature step 2 will ever hold itself open for is one that blocks
@@ -1140,8 +1144,15 @@ export function DuelPicker() {
                           but when it matters it must never be something a player
                           has to unfold to find. */}
                       {NATIVE_DUEL && (
-                        <div className="mb-2">
+                        <div className="mb-2 space-y-2">
                           <FightBalanceBanner balance={fightBalance} decimals={wbnbDecimals} />
+                          {/* An unclaimed JACKPOT is the same trap one size
+                              larger: the telegram card shouts that they took
+                              the whole pot, and the money is sitting in the pot
+                              contract until they pull it. Shown here as well as
+                              on /pots because this is the page a winner is
+                              already on. Silent when nothing is owed. */}
+                          <JackpotPrizeBanner />
                         </div>
                       )}
                       <details>

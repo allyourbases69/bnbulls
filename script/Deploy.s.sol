@@ -8,6 +8,8 @@ import {BNBull} from "../contracts/BNBull.sol";
 import {Bulls} from "../contracts/Bulls.sol";
 import {MintDrop} from "../contracts/MintDrop.sol";
 import {Duel} from "../contracts/Duel.sol";
+import {DuelNative} from "../contracts/DuelNative.sol";
+import {JackpotNative} from "../contracts/JackpotNative.sol";
 import {Graveyard} from "../contracts/Graveyard.sol";
 import {Jackpot} from "../contracts/Jackpot.sol";
 import {Marketplace} from "../contracts/Marketplace.sol";
@@ -57,6 +59,11 @@ import {ReviveBuySplitter} from "../contracts/ReviveBuySplitter.sol";
  *      inert only because the share is zero.
  */
 abstract contract DeployCore is BnbullsConfig {
+    /// @dev Raised when a fresh mainnet deploy would build the legacy ERC-20
+    ///      WBNB jackpot, silently reverting the native migration. Override
+    ///      with `DEPLOY_LEGACY_WBNB_POT=true` only if you mean it.
+    error LegacyWbnbPotOnMainnet();
+
     /**
      * @notice Deploy in dependency order. MUST be called inside a broadcast.
      * @dev Order is `DEPLOY-SAFETY-PREFLIGHT.md §5.5`:
@@ -157,19 +164,43 @@ abstract contract DeployCore is BnbullsConfig {
         // "Stable WarriorsDuel" sweep scars because that was not done.
         d.duel = _resume(prev.duel, "Duel");
         if (d.duel == address(0)) {
-            d.duel = address(
-                new Duel(
-                    Duel.DeployParams({
-                        initialOwner: c.roles.deployer,
-                        bulls: d.bulls,
-                        bnbull: d.bnbull,
-                        wbnb: c.ext.wbnb,
-                        trustedSigner: c.roles.trustedSigner,
-                        devTreasury: c.roles.devTreasury,
-                        defaultDevShareBps: c.params.duelDefaultDevBps
-                    })
-                )
-            );
+            // ⚠ NATIVE_CONTRACTS SWAPS THE MONEY LAYER. `DuelNative` settles in
+            // native BNB through a credit ledger; `Duel` settles in WBNB. Both
+            // take the SAME `DeployParams` shape and expose the same wiring
+            // ABI, which is why `Wire.s.sol` can drive either — but they are
+            // NOT interchangeable after the fact, so this is chosen once, at
+            // deploy, and never flipped on a live set.
+            if (vm.envOr("NATIVE_CONTRACTS", false)) {
+                d.duel = address(
+                    new DuelNative(
+                        DuelNative.DeployParams({
+                            initialOwner: c.roles.deployer,
+                            bulls: d.bulls,
+                            bnbull: d.bnbull,
+                            wbnb: c.ext.wbnb,
+                            trustedSigner: c.roles.trustedSigner,
+                            devTreasury: c.roles.devTreasury,
+                            defaultDevShareBps: c.params.duelDefaultDevBps
+                        })
+                    )
+                );
+                console2.log("  Duel flavour: NATIVE (DuelNative)", d.duel);
+            } else {
+                d.duel = address(
+                    new Duel(
+                        Duel.DeployParams({
+                            initialOwner: c.roles.deployer,
+                            bulls: d.bulls,
+                            bnbull: d.bnbull,
+                            wbnb: c.ext.wbnb,
+                            trustedSigner: c.roles.trustedSigner,
+                            devTreasury: c.roles.devTreasury,
+                            defaultDevShareBps: c.params.duelDefaultDevBps
+                        })
+                    )
+                );
+                console2.log("  Duel flavour: WBNB (legacy Duel)", d.duel);
+            }
         }
 
         // ── 3b. Yards ───────────────────────────────────────────────────
@@ -209,7 +240,39 @@ abstract contract DeployCore is BnbullsConfig {
         }
         d.jackpotBnb = _resume(prev.jackpotBnb, "Jackpot BNB");
         if (d.jackpotBnb == address(0)) {
-            d.jackpotBnb = address(new Jackpot(c.ext.wbnb, address(0), c.ext.vrfCoordinator, 75));
+            // ⚠⚠ THIS BUILDS THE **ERC-20 WBNB** POT, WHICH PAYS WINNERS IN
+            //    WBNB TOKENS. Mainnet has since migrated to `JackpotNative`
+            //    (see script/MigrateNative.s.sol) precisely to stop that, so a
+            //    fresh mainnet deploy through this path SILENTLY UNDOES THE
+            //    MIGRATION: the record would point at a WBNB pot again and
+            //    every jackpot winner would go back to receiving WBNB.
+            //
+            //    `_resume` normally saves you — an existing record reuses the
+            //    live pot — so this only bites on a fresh or wiped record. That
+            //    is exactly when nobody is watching for it.
+            //
+            //    Testnet and local are unaffected: the gate is chain-56 only.
+            // NATIVE_CONTRACTS is the SUPPORTED answer to the refusal below:
+            // build the native pot here rather than sending the operator off to
+            // a migration script. Same constructor shape; winners receive BNB.
+            if (vm.envOr("NATIVE_CONTRACTS", false)) {
+                d.jackpotBnb =
+                    address(new JackpotNative(c.ext.wbnb, address(0), c.ext.vrfCoordinator, 75));
+                console2.log("  BNB pot flavour: NATIVE (JackpotNative)", d.jackpotBnb);
+            } else if (block.chainid == 56 && !vm.envOr("DEPLOY_LEGACY_WBNB_POT", false)) {
+                console2.log("");
+                console2.log("  /!\\ REFUSING TO BUILD THE LEGACY WBNB JACKPOT ON MAINNET.");
+                console2.log("      Mainnet runs JackpotNative (native BNB payouts). Deploying");
+                console2.log("      the ERC-20 pot here would silently undo the migration and");
+                console2.log("      put WBNB back in winners' wallets.");
+                console2.log("      Set NATIVE_CONTRACTS=true to build JackpotNative here,");
+                console2.log("      which is what docs/FRESH-REDEPLOY-RUNBOOK.md does.");
+                console2.log("      To override deliberately: DEPLOY_LEGACY_WBNB_POT=true");
+                revert LegacyWbnbPotOnMainnet();
+            } else {
+                d.jackpotBnb =
+                    address(new Jackpot(c.ext.wbnb, address(0), c.ext.vrfCoordinator, 75));
+            }
         }
 
         // ── 6. Marketplace ──────────────────────────────────────────────

@@ -29,8 +29,14 @@
  * bar: filled part is the payout, hatched part rides on to the next hit.
  */
 import { useReadContracts } from 'wagmi';
-import { JackpotAbi } from '@/lib/abi';
-import { contractAddress, type ContractName } from '@/lib/env';
+import { JackpotAbi, JackpotNativeAbi } from '@/lib/abi';
+import {
+  contractAddress,
+  isNativePot,
+  NATIVE_POT_DECIMALS,
+  NATIVE_POT_SYMBOL,
+  type ContractName,
+} from '@/lib/env';
 import { formatToken } from '@/lib/format';
 import { tickerToPrint, useTokenDecimals, useTokenSymbol } from '@/lib/hooks/useTokenDecimals';
 
@@ -67,6 +73,17 @@ export interface JackpotRead {
   };
 }
 
+/**
+ * The six views EVERY pot has. `prizeToken` is deliberately NOT in here.
+ *
+ * ⚠ IT USED TO BE, AT INDEX 6, AND ON A NATIVE POT THAT ONE MISSING VIEW BLANKS
+ * THE WHOLE SITE. `useReadContracts` runs with `allowFailure: true`, and the
+ * failure handling below promotes the FIRST failed entry to `readError` — which
+ * `potFigure` then turns into `?` for pool, pendingPayout AND totalAwarded, on
+ * every surface this hook backs (`PotTicker` sits under the nav on every page).
+ * A view that does not exist on the new contract is a permanent failure, so the
+ * pot would have advertised `?` forever while the chain answered fine.
+ */
 const VIEWS = [
   'pool',
   'pendingPayout',
@@ -74,7 +91,6 @@ const VIEWS = [
   'totalAwarded',
   'awardCount',
   'oddsOneIn',
-  'prizeToken',
 ] as const;
 
 export function useJackpot(
@@ -83,14 +99,22 @@ export function useJackpot(
 ): JackpotRead {
   const address = contractAddress(name);
   const configured = address !== null;
+  const native = isNativePot(name);
 
   const { data, isLoading, error } = useReadContracts({
     allowFailure: true,
-    contracts: VIEWS.map((functionName) => ({
-      address: address ?? undefined,
-      abi: JackpotAbi,
-      functionName,
-    })),
+    contracts: [
+      ...VIEWS.map((functionName) => ({
+        address: address ?? undefined,
+        abi: native ? JackpotNativeAbi : JackpotAbi,
+        functionName,
+      })),
+      // Only the ERC-20 flavour is asked, and only when it exists. Appending it
+      // last keeps the shared indices above stable in both modes.
+      ...(native
+        ? []
+        : [{ address: address ?? undefined, abi: JackpotAbi, functionName: 'prizeToken' as const }]),
+    ],
     query: { enabled: configured, refetchInterval: refreshMs },
   });
 
@@ -103,14 +127,21 @@ export function useJackpot(
   const totalAwarded = at<bigint>(3);
   const awardCount = at<bigint>(4);
   const oddsOneIn = at<bigint>(5);
-  const prizeToken = at<`0x${string}`>(6);
+  // Undefined on a native pot, and correctly so: there is no prize TOKEN.
+  const prizeToken = native ? undefined : at<`0x${string}`>(VIEWS.length);
 
   // ⚠ BOTH of the prize token's own facts, read off the prize token. The
   // decimals decide the number; the symbol decides what it is called. Reading
   // one live and hardcoding the other is how a pot renders the right amount
   // with the wrong ticker.
-  const { decimals } = useTokenDecimals(prizeToken);
-  const { symbol, isError: symbolError } = useTokenSymbol(prizeToken);
+  //
+  // A native pot has no token to ask, so these two reads are switched off and
+  // the answers are asserted instead. That is not the hardcoding the paragraph
+  // above warns about: there is no contract that could disagree.
+  const { decimals: tokenDecimals } = useTokenDecimals(prizeToken);
+  const { symbol: tokenSymbol, isError: symbolError } = useTokenSymbol(prizeToken);
+  const decimals = native ? NATIVE_POT_DECIMALS : tokenDecimals;
+  const symbol = native ? NATIVE_POT_SYMBOL : tokenSymbol;
 
   // A read that came back but FAILED is not the same as one still in flight.
   // Only the second may render as a dash.

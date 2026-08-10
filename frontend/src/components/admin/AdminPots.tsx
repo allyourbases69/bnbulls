@@ -26,8 +26,14 @@
 import { useState } from 'react';
 import { useAccount, useBalance, useReadContract, useReadContracts } from 'wagmi';
 import { formatUnits, parseUnits } from 'viem';
-import { JackpotAbi, Erc20Abi } from '@/lib/abi';
-import { CHAIN_ID, contractAddress } from '@/lib/env';
+import { JackpotAbi, JackpotNativeAbi, Erc20Abi } from '@/lib/abi';
+import {
+  CHAIN_ID,
+  contractAddress,
+  isNativePot,
+  NATIVE_POT_DECIMALS,
+  NATIVE_POT_SYMBOL,
+} from '@/lib/env';
 import { useErc20Approval } from '@/lib/hooks/useErc20Approval';
 import { useTokenDecimals, useTokenSymbol } from '@/lib/hooks/useTokenDecimals';
 import { RevertNotice } from '@/components/shared/RevertNotice';
@@ -59,17 +65,20 @@ const WbnbAbi = [
 ] as const;
 
 interface PotEntry {
+  /** Which pot, so `isNativePot` can decide the ABI and the funding door. */
+  name: 'jackpotBnbull' | 'jackpotBnb';
   label: string;
   address: `0x${string}` | null;
   fallbackSym: string;
-  /** The BNB pot is WBNB-backed, so it can offer a native-BNB auto-wrap fill. */
+  /** The BNB pot is WBNB-backed, so it can offer a native-BNB auto-wrap fill.
+   *  Meaningless once that pot settles natively — see `isNativePot`. */
   isWbnb: boolean;
 }
 
 export function AdminPots() {
   const candidates: PotEntry[] = [
-    { label: POTS.bnbull.label, address: contractAddress('jackpotBnbull'), fallbackSym: POTS.bnbull.symbolFallback, isWbnb: false },
-    { label: POTS.bnb.label, address: contractAddress('jackpotBnb'), fallbackSym: POTS.bnb.symbolFallback, isWbnb: true },
+    { name: 'jackpotBnbull' as const, label: POTS.bnbull.label, address: contractAddress('jackpotBnbull'), fallbackSym: POTS.bnbull.symbolFallback, isWbnb: false },
+    { name: 'jackpotBnb' as const, label: POTS.bnb.label, address: contractAddress('jackpotBnb'), fallbackSym: POTS.bnb.symbolFallback, isWbnb: true },
   ];
   const pots = candidates.filter(
     (p): p is PotEntry & { address: `0x${string}` } => p.address !== null,
@@ -96,7 +105,7 @@ export function AdminPots() {
       <p className="text-xs text-bull-text-dim">{POTS.grow}</p>
       <div className="grid gap-4 lg:grid-cols-2">
         {pots.map((p) => (
-          <PotPanel key={p.address} label={p.label} address={p.address} fallbackSym={p.fallbackSym} isWbnb={p.isWbnb} />
+          <PotPanel key={p.address} name={p.name} label={p.label} address={p.address} fallbackSym={p.fallbackSym} isWbnb={p.isWbnb} />
         ))}
       </div>
     </AdminSection>
@@ -104,17 +113,21 @@ export function AdminPots() {
 }
 
 function PotPanel({
+  name,
   label,
   address,
   fallbackSym,
   isWbnb,
 }: {
+  name: 'jackpotBnbull' | 'jackpotBnb';
   label: string;
   address: `0x${string}`;
   fallbackSym: string;
   isWbnb: boolean;
 }) {
-  const c = { abi: JackpotAbi, address } as const;
+  // ⚠ Only the BNB pot flips. $BNBULL keeps its `prizeToken()` forever.
+  const native = isNativePot(name);
+  const c = { abi: native ? JackpotNativeAbi : JackpotAbi, address } as const;
   const { data, refetch } = useReadContracts({
     allowFailure: true,
     contracts: [
@@ -127,13 +140,12 @@ function PotPanel({
       { ...c, functionName: 'awardCount' }, // 6
       { ...c, functionName: 'totalFunded' }, // 7
       { ...c, functionName: 'owner' }, // 8
-      { ...c, functionName: 'prizeToken' }, // 9
-      { ...c, functionName: 'payoutParamsBootstrapped' }, // 10
-      { ...c, functionName: 'proposedOdds' }, // 11
-      { ...c, functionName: 'proposedPayoutBps' }, // 12
-      { ...c, functionName: 'proposedMinPool' }, // 13
-      { ...c, functionName: 'payoutParamsEta' }, // 14
-      { ...c, functionName: 'wiringDelay' }, // 15
+      { ...c, functionName: 'payoutParamsBootstrapped' }, // 9
+      { ...c, functionName: 'proposedOdds' }, // 10
+      { ...c, functionName: 'proposedPayoutBps' }, // 11
+      { ...c, functionName: 'proposedMinPool' }, // 12
+      { ...c, functionName: 'payoutParamsEta' }, // 13
+      { ...c, functionName: 'wiringDelay' }, // 14
     ],
     query: { refetchInterval: 12_000 },
   });
@@ -147,17 +159,33 @@ function PotPanel({
   const awardCount = asBig(data?.[6]);
   const totalFunded = asBig(data?.[7]);
   const owner = asAddr(data?.[8]);
-  const prizeToken = asAddr(data?.[9]);
-  const bootstrapped = asBool(data?.[10]);
-  const proposedOdds = asBig(data?.[11]);
-  const proposedPayoutBps = asBig(data?.[12]);
-  const proposedMinPool = asBig(data?.[13]);
-  const eta = asBig(data?.[14]);
-  const wiringDelay = asBig(data?.[15]);
+  const bootstrapped = asBool(data?.[9]);
+  const proposedOdds = asBig(data?.[10]);
+  const proposedPayoutBps = asBig(data?.[11]);
+  const proposedMinPool = asBig(data?.[12]);
+  const eta = asBig(data?.[13]);
+  const wiringDelay = asBig(data?.[14]);
 
+  // ⚠ ITS OWN READ, AND ONLY ON THE ERC-20 FLAVOUR. A native pot has no
+  // `prizeToken()` at all, and asking anyway was quietly fatal here: the call
+  // failed, so the wallet's token BALANCE could never be read, so `needWrap`
+  // stayed pinned true and `readyToFund` could never become true in EITHER
+  // mode — the owner simply could not seed the new pot from this panel.
+  // Kept out of the multicall above so the flavour cannot shift any index.
+  const { data: prizeTokenRaw } = useReadContract({
+    address,
+    abi: JackpotAbi,
+    functionName: 'prizeToken',
+    query: { enabled: !native },
+  });
+  const prizeToken = native ? undefined : (prizeTokenRaw as `0x${string}` | undefined);
+
+  // Asserted on a native pot: there is no token contract to ask, so nothing
+  // could disagree. Read live everywhere else, as before.
   const { symbol: liveSym } = useTokenSymbol(prizeToken);
-  const { decimals } = useTokenDecimals(prizeToken);
-  const sym = liveSym ?? fallbackSym;
+  const { decimals: tokenDecimals } = useTokenDecimals(prizeToken);
+  const decimals = native ? NATIVE_POT_DECIMALS : tokenDecimals;
+  const sym = native ? NATIVE_POT_SYMBOL : (liveSym ?? fallbackSym);
 
   const doRefetch = () => void refetch();
 
@@ -180,7 +208,10 @@ function PotPanel({
         <KV k="min pool to fire" v={`${fmtAmount(minPoolToFire, decimals ?? 18)} ${sym}`} />
         <KV k="all-time funded" v={`${fmtAmount(totalFunded, decimals ?? 18)} ${sym}`} />
         <KV k="all-time awarded" v={`${fmtAmount(totalAwarded, decimals ?? 18)} ${sym}`} />
-        <KV k="prize token" v={<Addr addr={prizeToken} />} />
+        <KV
+          k="prize"
+          v={native ? <span className="font-mono">native BNB</span> : <Addr addr={prizeToken} />}
+        />
         <KV k="owner" v={<Addr addr={owner} />} />
         <KV k="contract" v={<Addr addr={address} />} />
       </div>
@@ -191,7 +222,8 @@ function PotPanel({
         decimals={decimals}
         symbol={sym}
         owner={owner}
-        isWbnbPot={isWbnb}
+        isWbnbPot={isWbnb && !native}
+        nativePot={native}
         onDone={doRefetch}
       />
 
@@ -224,6 +256,7 @@ function FundControl({
   symbol,
   owner,
   isWbnbPot,
+  nativePot,
   onDone,
 }: {
   potAddress: `0x${string}`;
@@ -232,6 +265,10 @@ function FundControl({
   symbol: string;
   owner: `0x${string}` | undefined;
   isWbnbPot: boolean;
+  /** ⚠ The pot itself settles in native BNB: `topUp()` is PAYABLE and takes no
+   *  argument, so there is no token to hold, wrap or approve. The whole
+   *  three-step dance below collapses to one send. */
+  nativePot: boolean;
   onDone: () => void;
 }) {
   const { address: wallet } = useAccount();
@@ -245,7 +282,14 @@ function FundControl({
   // Is this wallet allowed to fund this pot, and by which door?
   const { data: gate } = useReadContracts({
     allowFailure: true,
-    contracts: [{ abi: JackpotAbi, address: potAddress, functionName: 'isFunder', args: [wallet ?? ZERO] }],
+    contracts: [
+      {
+        abi: nativePot ? JackpotNativeAbi : JackpotAbi,
+        address: potAddress,
+        functionName: 'isFunder',
+        args: [wallet ?? ZERO],
+      },
+    ],
     query: { enabled: !!wallet, refetchInterval: 15_000 },
   });
   const isFunder = asBool(gate?.[0]) === true;
@@ -263,11 +307,12 @@ function FundControl({
   });
   const balance = typeof balanceRaw === 'bigint' ? balanceRaw : undefined;
 
-  // Native BNB balance — the source for the wrap step (native mode only).
+  // Native BNB balance — the source for the wrap step (native mode only), and
+  // the ONLY balance that matters on a natively-settled pot.
   const { data: nativeBal, refetch: refetchNative } = useBalance({
     address: wallet,
     chainId: CHAIN_ID,
-    query: { enabled: mode === 'native' && !!wallet, refetchInterval: 15_000 },
+    query: { enabled: (nativePot || mode === 'native') && !!wallet, refetchInterval: 15_000 },
   });
   const nativeValue = nativeBal?.value;
 
@@ -309,24 +354,38 @@ function FundControl({
 
   // In native mode the wrap step is "done" once the wallet holds enough WBNB to
   // cover the amount (from this wrap, or WBNB it already had).
+  //
+  // ⚠ A NATIVELY-SETTLED POT SKIPS BOTH GATES ENTIRELY. There is no token to
+  // hold, so `balance` is permanently undefined, so `haveWbnbForAmount` is
+  // permanently false — which pinned `needWrap` true and made `readyToFund`
+  // unreachable in both modes. The owner could not seed the pot at all.
   const haveWbnbForAmount = amount !== null && balance !== undefined && balance >= amount;
-  const needWrap = mode === 'native' && !haveWbnbForAmount;
+  const needWrap = !nativePot && mode === 'native' && !haveWbnbForAmount;
 
   // Affordability: native BNB gates the wrap; WBNB gates a direct WBNB send.
-  const overWbnb = mode === 'wbnb' && amount !== null && balance !== undefined && amount > balance;
+  // On a native pot the send itself is `msg.value`, so native BNB gates it.
+  const overWbnb =
+    !nativePot && mode === 'wbnb' && amount !== null && balance !== undefined && amount > balance;
   const overNative =
-    mode === 'native' && needWrap && amount !== null && nativeValue !== undefined && amount > nativeValue;
+    (nativePot || (mode === 'native' && needWrap)) &&
+    amount !== null &&
+    nativeValue !== undefined &&
+    amount > nativeValue;
   const overBalance = overWbnb || overNative;
   // Post-wrap the send draws on WBNB (already held), so native balance no longer
   // gates it — only the WBNB-direct path is balance-gated at send time.
-  const readyToFund = amount !== null && !needWrap && !needsApproval && route !== null && !overWbnb;
+  const readyToFund = nativePot
+    ? amount !== null && route !== null && !overNative
+    : amount !== null && !needWrap && !needsApproval && route !== null && !overWbnb;
 
   return (
     <div className="space-y-2 border-t border-bull-border/60 pt-3">
       <div className="flex items-baseline justify-between gap-3">
         <div className="bull-header text-sm text-bull-gold">fill the pool</div>
         <div className="font-mono text-xs text-bull-text-faint">
-          {prizeToken ? (
+          {nativePot ? (
+            <>{symbol} · native</>
+          ) : prizeToken ? (
             <>
               {symbol} · <Addr addr={prizeToken} />
             </>
@@ -391,14 +450,16 @@ function FundControl({
                 <span className="font-mono text-bull-text">fund()</span>.
               </>
             )}{' '}
-            {mode === 'native'
-              ? 'three transactions: wrap your BNB to WBNB, approve the pot, then send it in.'
-              : 'two transactions: the pot pulls the WBNB off you, so you approve it first, then send.'}
+            {nativePot
+              ? 'one transaction. this pot holds native bnb, so there is nothing to wrap and nothing to approve.'
+              : mode === 'native'
+                ? 'three transactions: wrap your BNB to WBNB, approve the pot, then send it in.'
+                : 'two transactions: the pot pulls the WBNB off you, so you approve it first, then send.'}
           </p>
 
           {(() => {
-            const unit = mode === 'native' ? 'BNB' : symbol;
-            const held = mode === 'native' ? nativeValue : balance;
+            const unit = nativePot || mode === 'native' ? 'BNB' : symbol;
+            const held = nativePot || mode === 'native' ? nativeValue : balance;
             return (
               <div className="flex flex-wrap items-center gap-2">
                 <span className="w-28 shrink-0 text-xs text-bull-text-faint">amount · {unit}</span>
@@ -440,11 +501,11 @@ function FundControl({
           )}
           {overBalance && (
             <p className="font-mono text-xs text-bull-red">
-              ✗ that is more {mode === 'native' ? 'BNB' : symbol} than this wallet holds.
+              ✗ that is more {nativePot || mode === 'native' ? 'BNB' : symbol} than this wallet holds.
             </p>
           )}
 
-          {mode === 'native' && (
+          {!nativePot && mode === 'native' && (
             <div className="flex flex-wrap items-center gap-2">
               <span className={`w-28 shrink-0 text-xs ${needWrap ? 'text-bull-gold' : 'text-bull-text-faint'}`}>
                 1 · wrap
@@ -468,8 +529,9 @@ function FundControl({
               </span>
             </div>
           )}
-          {mode === 'native' && <TxStatus tx={wrapTx} />}
+          {!nativePot && mode === 'native' && <TxStatus tx={wrapTx} />}
 
+          {!nativePot && (
           <div className="flex flex-wrap items-center gap-2">
             <span className={`w-28 shrink-0 text-xs ${needsApproval && !needWrap ? 'text-bull-gold' : 'text-bull-text-faint'}`}>
               {mode === 'native' ? '2 · approve' : '1 · approve'}
@@ -498,11 +560,12 @@ function FundControl({
                   : `approved: ${fmtAmount(allowance, decimals ?? 18)} ${symbol}`}
             </span>
           </div>
-          <RevertNotice error={approveErr} />
+          )}
+          {!nativePot && <RevertNotice error={approveErr} />}
 
           <div className="flex flex-wrap items-center gap-2">
             <span className={`w-28 shrink-0 text-xs ${readyToFund ? 'text-bull-gold' : 'text-bull-text-faint'}`}>
-              {mode === 'native' ? '3 · send it in' : '2 · send it in'}
+              {nativePot ? 'send it in' : mode === 'native' ? '3 · send it in' : '2 · send it in'}
             </span>
             <WriteButton
               tx={fundTx}
@@ -510,6 +573,29 @@ function FundControl({
               disabled={!readyToFund}
               onClick={() => {
                 if (!readyToFund || amount === null) return;
+                // ⚠ THE NATIVE POT'S DOORS TAKE `msg.value`, NOT AN ARGUMENT.
+                // `topUp()` is payable with no args and `fundNative(string)`
+                // takes only the source label — sending the old
+                // `topUp(uint256)` shape would not even match a selector.
+                if (nativePot) {
+                  if (route === 'topUp') {
+                    void fundTx.run({
+                      address: potAddress,
+                      abi: JackpotNativeAbi,
+                      functionName: 'topUp',
+                      value: amount,
+                    });
+                  } else {
+                    void fundTx.run({
+                      address: potAddress,
+                      abi: JackpotNativeAbi,
+                      functionName: 'fundNative',
+                      args: ['admin-fund'],
+                      value: amount,
+                    });
+                  }
+                  return;
+                }
                 if (route === 'topUp') {
                   void fundTx.run({ address: potAddress, abi: JackpotAbi, functionName: 'topUp', args: [amount] });
                 } else {
@@ -527,11 +613,13 @@ function FundControl({
             <span className="text-xs text-bull-text-faint">
               {amount === null
                 ? 'put an amount in first.'
-                : needWrap
-                  ? 'wrap to WBNB first.'
-                  : needsApproval
-                    ? 'approve first, this pulls the WBNB off you.'
-                    : 'no take-backs after this one lands.'}
+                : nativePot
+                  ? 'one transaction. the bnb rides along with it.'
+                  : needWrap
+                    ? 'wrap to WBNB first.'
+                    : needsApproval
+                      ? 'approve first, this pulls the WBNB off you.'
+                      : 'no take-backs after this one lands.'}
             </span>
           </div>
           <TxStatus tx={fundTx} />

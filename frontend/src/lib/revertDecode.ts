@@ -2,7 +2,10 @@ import { decodeErrorResult, type Abi } from 'viem';
 import {
   BullsAbi,
   DuelAbi,
+  DuelNativeAbi,
   GraveyardAbi,
+  JackpotAbi,
+  JackpotNativeAbi,
   MarketplaceAbi,
   MintDropAbi,
   YardsAbi,
@@ -47,14 +50,28 @@ import { PIT } from '@/lib/brand';
 /** Every ABI we might be told about, merged once. Order is irrelevant: a
  *  4-byte selector collision across these would be a genuine coincidence, and
  *  `decodeErrorResult` takes the first match either way. */
-const ALL_ABIS: Abi = [
-  ...DuelAbi,
-  ...YardsAbi,
-  ...BullsAbi,
-  ...MarketplaceAbi,
-  ...GraveyardAbi,
-  ...MintDropAbi,
-] as unknown as Abi;
+// ⚠ EACH ABI IS WIDENED TO `Abi` BEFORE THE SPREAD, NOT AFTER. Spreading the
+// generated const-asserted tuples directly makes TS build one giant literal
+// union and fail with "expression produces a union type that is too complex"
+// (TS2590) once there are this many. Only the selectors matter here, so the
+// precise literal types buy nothing.
+// ⚠ BOTH DUEL FLAVOURS AND BOTH POTS. An error selector this list does not
+// carry decodes to nothing, and the player is shown a raw hex fallback at the
+// exact moment their money did not move. `DuelNative` and `JackpotNative` add
+// credit/prize errors (`InsufficientCredit`, `NothingOwed`) that exist on
+// neither original. Duplicate selectors across the two flavours are harmless —
+// viem matches on the selector and takes the first hit.
+const ALL_ABIS: Abi = ([] as Abi).concat(
+  DuelAbi as unknown as Abi,
+  DuelNativeAbi as unknown as Abi,
+  JackpotAbi as unknown as Abi,
+  JackpotNativeAbi as unknown as Abi,
+  YardsAbi as unknown as Abi,
+  BullsAbi as unknown as Abi,
+  MarketplaceAbi as unknown as Abi,
+  GraveyardAbi as unknown as Abi,
+  MintDropAbi as unknown as Abi,
+);
 
 export type RevertKind =
   /** A real contract revert, decoded or not. Do not send the transaction. */
@@ -238,6 +255,22 @@ function sentenceFor(name: string, args: readonly unknown[] | undefined): string
     case 'StakeWithoutAsset':
       return 'the signed result puts money up without naming a currency. re-quote.';
 
+    // ── the native credit ledger (DuelNative / JackpotNative) ─────
+    case 'InsufficientCredit':
+      return 'that wallet does not have enough in its fight balance to cover this. top it up and try again.';
+    // ⚠ NOT A MONEY ERROR, AND MUST NOT BE WRITTEN AS ONE. The bnb is almost
+    // always sitting right there; the away budget — which defaults to zero and
+    // counts DOWN as offline fights happen — is what ran out. Sending somebody
+    // to deposit here costs them a transaction that changes nothing.
+    case 'PassiveAllowanceExceeded':
+      return 'that wallet has not set how much its bulls can play for while it is away, or has used up what it set. the money is fine — the away budget is not.';
+    case 'NothingOwed':
+      return 'there is nothing waiting to be claimed on this one.';
+    case 'ZeroAmount':
+      return 'put an amount in first.';
+    case 'NativeSendFailed':
+      return 'your wallet would not accept the bnb. if it is a contract wallet, check it can receive.';
+
     // ── the marketplace ───────────────────────────────────────────
     case 'AlreadyListed':
       return 'that bull is already listed.';
@@ -252,6 +285,18 @@ function sentenceFor(name: string, args: readonly unknown[] | undefined): string
     case 'InsufficientBNB':
     case 'PaymentShortfall':
       return 'the amount sent no longer covers the price. the quote moved, so try again.';
+    // The seller moved their own sticker after this screen loaded. Deliberately
+    // NOT folded in with the two above: those mean "you sent too little", this
+    // means "they changed the price on you", and the refusal is the guard
+    // working. Nothing was charged.
+    case 'ListingRepriced':
+      return 'the seller raised the price above what you agreed to pay, so nothing was sent. reload for the new price.';
+    // The TOTAL landed above the ceiling. Unlike `ListingRepriced` this is not
+    // necessarily anyone's fault — the bnb oracle or the bnbull peg can move a
+    // perfectly honest listing past a tight ceiling — so it must NOT accuse the
+    // seller. Same outcome either way: nothing moved, reload for the real number.
+    case 'PriceAboveMax':
+      return 'the price moved past the most you agreed to pay, so nothing was sent. reload for the current price.';
     case 'BnbullNotAccepted':
       return 'the seller did not price this one in bnbull.';
     case 'BnbullNotWired':

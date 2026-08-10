@@ -5,6 +5,11 @@ import { formatUnits, parseUnits } from 'viem';
 import { CURRENCY } from '@/lib/brand';
 import type { FightBalance } from '@/lib/hooks/useFightBalance';
 
+/** The default we offer for the passive ceiling, in FIGHTS. Small on purpose:
+ *  it is the blast radius of a leaked signer key, and topping it up later is
+ *  one cheap transaction while getting it back is not possible at all. */
+const SUGGESTED_PASSIVE_FIGHTS = 5;
+
 /**
  * THE FIGHT BALANCE CONTROL — the native-BNB replacement for `AllowanceRow`.
  *
@@ -35,6 +40,7 @@ export function FightBalanceRow({
 }) {
   const [topUp, setTopUp] = useState('');
   const [takeOut, setTakeOut] = useState('');
+  const [cap, setCap] = useState('');
   const dp = decimals ?? 18;
 
   const fmt = (v: bigint | undefined) =>
@@ -55,6 +61,14 @@ export function FightBalanceRow({
 
   const topUpWei = parse(topUp);
   const takeOutWei = parse(takeOut);
+  const capWei = parse(cap);
+
+  /** A sensible default expressed the way a player thinks: a NUMBER OF FIGHTS,
+   *  priced off the live cost. Nobody should be asked to pick a raw wei figure
+   *  for a security control — the whole point is that they actually set it. */
+  const capFor = (n: number): bigint | undefined =>
+    balance.perFight === undefined ? undefined : balance.perFight * BigInt(n);
+  const suggestedCap = capFor(SUGGESTED_PASSIVE_FIGHTS);
   const overWithdraw =
     takeOutWei !== null && balance.credit !== undefined && takeOutWei > balance.credit;
 
@@ -131,6 +145,88 @@ export function FightBalanceRow({
           that is everything this wallet can spare and still keep gas back for the fights.
         </p>
       )}
+
+      {/* ── step 2: the ceiling ─────────────────────────────────────────
+          ⚠ THIS IS THE APPROVAL CUSTODY DELETED, AND IT DEFAULTS TO ZERO.
+          A wallet that has only topped up is STILL not challengeable, so this
+          sits directly under the top-up rather than in a separate fold — the
+          two are one job, and splitting them is how a player ends up with money
+          parked for a feature that never switched on.
+
+          ⚠⚠ IT SPENDS DOWN. `_takeSide` decrements it per passive fight, so the
+          copy says "budget", never "limit": somebody who reads it as a standing
+          per-fight cap will be quietly unchallengeable after five and think it
+          broke. */}
+      <div className="space-y-2 border-t border-bull-border pt-2">
+        <div className="flex flex-wrap items-baseline gap-x-2 text-bull-text-dim">
+          <span className="font-mono uppercase tracking-wide text-bull-text-faint">
+            away budget
+          </span>
+          <span className="font-mono text-bull-text">{fmt(balance.passiveAllowance)} bnb</span>
+          {balance.passiveAllowance !== undefined && (
+            <span className="text-bull-text-faint">
+              {balance.passiveFightsLeft} {balance.passiveFightsLeft === 1 ? 'fight' : 'fights'} left
+            </span>
+          )}
+        </div>
+
+        <p className="text-bull-text-faint">
+          the most fights you did not start can take out of your balance in total. it counts down
+          as they happen, so top it back up when it runs out. set it to zero any time to switch
+          offline fights off.
+        </p>
+
+        {balance.allowanceUnset && balance.hasCredit && (
+          <p className="text-bull-gold">
+            you have money in here but no away budget, so nobody can pick your bulls yet. set one
+            below and they are in.
+          </p>
+        )}
+
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            type="text"
+            inputMode="decimal"
+            value={cap}
+            onChange={(e) => setCap(e.target.value)}
+            placeholder={suggestedCap !== undefined ? fmt(suggestedCap) : '0.0'}
+            aria-label="the most bnb fights you did not start may take, in total"
+            className="w-28 rounded border border-bull-border bg-bull-bg px-2 py-1 font-mono text-[11px] text-bull-text"
+          />
+          <button
+            type="button"
+            onClick={() => capWei && void balance.setPassiveAllowance(capWei)}
+            disabled={!capWei || balance.isBusy}
+            className="rounded-full border border-bull-border px-3 py-1 text-[11px] text-bull-text hover:border-bull-gold hover:text-bull-gold disabled:opacity-40"
+          >
+            {balance.isBusy ? 'working…' : 'set budget'}
+          </button>
+          {suggestedCap !== undefined && (
+            <button
+              type="button"
+              onClick={() => setCap(formatUnits(suggestedCap, dp))}
+              className="text-bull-text-faint underline hover:text-bull-gold"
+            >
+              {SUGGESTED_PASSIVE_FIGHTS} fights
+            </button>
+          )}
+          {/* ⚠ ALWAYS REACHABLE, LIKE THE WITHDRAW. `setPassiveAllowance` is
+              unpausable and unguarded on the contract so a player can always
+              cut their exposure — gating this on anything would re-impose the
+              lock the contract deliberately refuses to have. */}
+          {balance.passiveAllowance !== undefined && balance.passiveAllowance > 0n && (
+            <button
+              type="button"
+              onClick={() => void balance.setPassiveAllowance(0n)}
+              disabled={balance.isBusy}
+              className="rounded-full border border-bull-border px-3 py-1 text-[11px] text-bull-text-dim hover:border-bull-red hover:text-bull-red disabled:opacity-40"
+            >
+              switch off
+            </button>
+          )}
+        </div>
+        <p className="text-bull-text-faint">{CURRENCY.awayBudgetWhy}</p>
+      </div>
 
       {/* ── take it out ────────────────────────────────────────────────
           ⚠ ALWAYS RENDERED WHEN THERE IS A BALANCE. Never behind a fight

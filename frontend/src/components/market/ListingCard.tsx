@@ -147,11 +147,32 @@ export function ListingCard({
     const value = asset === 'bnb' && bnbDue !== undefined ? withCushion(bnbDue) : undefined;
     const fn = asset === 'bnb' ? 'buyWithBNB' : 'buyWithBNBULL';
 
+    // ⚠ TWO BOUNDS, AND THE STICKER IS THE ONE THAT MATTERS. Do not collapse
+    // them, and do NOT put a cushion on `maxUsdPrice`.
+    //
+    // The cushion exists to absorb ORACLE DRIFT between quote and settlement,
+    // which is legitimate. A seller re-pricing mid-mempool is theft. Both
+    // arrive at the same `buyerPays`, so a ceiling on the total cannot tell
+    // them apart — and the first version of this guard proved it: it passed
+    // `withCushion(due)` as BOTH `msg.value` and the ceiling, so a seller who
+    // re-priced to exactly that figure hit equality and settled, banking the
+    // full 1.5% exactly as before. Invisibly, because `Sold` reports the price
+    // actually charged.
+    //
+    // `maxUsdPrice` is the seller's own sticker, upstream of the oracle, so
+    // the oracle roams inside the cushion while a re-price is refused at any
+    // size. It is the sticker THIS CARD SHOWED, not the live quote's: binding
+    // to a value that refreshed behind the user's back is the whole bug.
+    // Stale-low only ever refuses, which is the safe direction.
+    const due = dueForAsset[asset];
+    const maxPay = due !== undefined ? withCushion(due) : 0n;
+    const maxUsdPrice = listing.usdPrice;
+
     const pre = await preflight({
       address: marketAddress,
       abi: MarketplaceAbi,
       functionName: fn,
-      args: [id],
+      args: [id, maxUsdPrice, maxPay],
       value: asset === 'bnb' ? (value ?? 0n) : undefined,
     });
     if (!pre.ok) {
@@ -166,7 +187,7 @@ export function ListingCard({
           abi: MarketplaceAbi,
           chainId: CHAIN_ID,
           functionName: 'buyWithBNB',
-          args: [id],
+          args: [id, maxUsdPrice, maxPay],
           value: value ?? 0n,
         });
       } else {
@@ -175,7 +196,7 @@ export function ListingCard({
           abi: MarketplaceAbi,
           chainId: CHAIN_ID,
           functionName: 'buyWithBNBULL',
-          args: [id],
+          args: [id, maxUsdPrice, maxPay],
         });
       }
     } catch (e) {

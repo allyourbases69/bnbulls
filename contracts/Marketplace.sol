@@ -460,6 +460,15 @@ contract Marketplace is Ownable, Pausable, ReentrancyGuard, IERC721Receiver {
     error BnbullNotWired();
     error BnbullPegUnavailable(uint256 price1e18, uint64 updatedAt);
     error InsufficientBNB(uint256 required, uint256 sent);
+    /// @dev ⚠ THE SELLER-FRONT-RUN GUARD. The seller moved the dollar sticker
+    ///      between quote and settlement. Bounds the SELLER-CONTROLLED number
+    ///      rather than the total, which is the only way to tell a re-price
+    ///      apart from ordinary oracle drift — see `buyWithBNB`.
+    error ListingRepriced(uint256 usdPrice, uint256 maxUsdPrice);
+    /// @dev The total came out above the ceiling the buyer named. NOT
+    ///      necessarily theft: the peg or the oracle can move a legitimate
+    ///      listing past a tight ceiling. The seller bound is `ListingRepriced`.
+    error PriceAboveMax(uint256 buyerPays, uint256 maxPay);
     error PaymentShortfall(uint256 expected, uint256 received);
     error NothingToWithdraw();
     error CreditWithdrawFailed();
@@ -749,7 +758,8 @@ contract Marketplace is Ownable, Pausable, ReentrancyGuard, IERC721Receiver {
     // ══════════════════════════════════════════════════════════════════════
 
     /**
-     * @notice Buy `tokenId` with BNB.
+     * @notice Buy `tokenId` with BNB at a sticker no higher than `maxUsdPrice`,
+     *         paying no more than `maxPay` wei.
      *
      * @dev Send at least `quote(tokenId).bnbDue` — the surplus comes straight
      *      back. `>=` rather than `==` is `DECISIONS.md §1`, not sloppiness:
@@ -757,12 +767,47 @@ contract Marketplace is Ownable, Pausable, ReentrancyGuard, IERC721Receiver {
      *      exact wei due moves between the wallet quoting and the tx landing.
      *      Fefers could demand an exact `msg.value` only because on Stable the
      *      native token WAS the dollar and the price never moved.
+     *
+     * @dev ⚠ BOUND THE SELLER'S NUMBER, NOT THE TOTAL. `msg.value` is a FLOOR,
+     *      never a ceiling — the refund is what used to bound the buyer, and a
+     *      refund cannot bound anything the seller controls. `updatePrice` is
+     *      instant, unbounded and seller-callable, so a seller who watches the
+     *      mempool re-prices to exactly the cushioned `msg.value`, `buyerPays`
+     *      swells to meet it, the refund computes to zero, and they re-price
+     *      back down. Riskless, repeatable, and INVISIBLE: `Sold` reports the
+     *      price actually charged, so the books show an ordinary sale at an
+     *      ordinary number.
+     *
+     *      ⚠ A CEILING ON `buyerPays` ALONE DOES NOT CLOSE THIS, AND THE FIRST
+     *      ATTEMPT AT THIS FIX PROVED IT. Two different movements arrive at
+     *      `buyerPays` and are indistinguishable once they get there: oracle
+     *      drift, which is legitimate and is the entire reason the caller sends
+     *      a cushion, and a re-price, which is theft. Any ceiling loose enough
+     *      to admit the first is loose enough to admit the second — the
+     *      frontend passed the same cushioned figure for `msg.value` and for
+     *      the ceiling, so a seller re-pricing to exactly that figure landed on
+     *      equality and settled, for the identical amount as before the fix.
+     *
+     *      `maxUsdPrice` is checked against the SELLER's own sticker, upstream
+     *      of the oracle, so the two movements separate cleanly: the oracle
+     *      roams freely inside the cushion, and a re-price is refused outright
+     *      at any size. `maxPay` stays as the backstop on the total (it is the
+     *      exact bound on `Fixed` BNBULL, where there is no oracle in between).
+     *      The refund below still does its original job: an oracle that moved
+     *      DOWN between quote and settlement hands the surplus straight back.
      */
-    function buyWithBNB(uint256 tokenId) external payable whenNotPaused nonReentrant {
+    function buyWithBNB(uint256 tokenId, uint256 maxUsdPrice, uint256 maxPay)
+        external
+        payable
+        whenNotPaused
+        nonReentrant
+    {
         Listing memory l = _takeListingForSale(tokenId);
+        if (l.usdPrice > maxUsdPrice) revert ListingRepriced(l.usdPrice, maxUsdPrice);
 
         uint256 gross = _ceilDiv(uint256(l.usdPrice) * 1e18, bnbUsdPrice());
         (uint256 buyerPays, uint256 sellerProceeds, uint256 fee) = _split(gross, NATIVE);
+        if (buyerPays > maxPay) revert PriceAboveMax(buyerPays, maxPay);
         if (msg.value < buyerPays) revert InsufficientBNB(buyerPays, msg.value);
 
         collection.safeTransferFrom(l.seller, msg.sender, tokenId);
@@ -778,13 +823,32 @@ contract Marketplace is Ownable, Pausable, ReentrancyGuard, IERC721Receiver {
         _emitSold(tokenId, l.seller, PayKind.BNB, NATIVE, l.usdPrice, buyerPays, fee);
     }
 
-    /// @notice Buy `tokenId` with BNBULL. Only listings whose seller opted in
-    ///         (`Pegged` or `Fixed`) accept it. Approve
-    ///         `quote(tokenId).bnbullDue` first.
-    function buyWithBNBULL(uint256 tokenId) external whenNotPaused nonReentrant {
+    /// @notice Buy `tokenId` with BNBULL at a sticker no higher than
+    ///         `maxUsdPrice`, paying no more than `maxPay` tokens. Only
+    ///         listings whose seller opted in (`Pegged` or `Fixed`) accept it.
+    ///         Approve `quote(tokenId).bnbullDue` first.
+    ///
+    /// @dev ⚠ SAME TRAP AS THE BNB LEG, DIFFERENT LEVER. Here the buyer's
+    ///      generosity is the ALLOWANCE rather than `msg.value`: the pull takes
+    ///      whatever `buyerPays` comes to, so a seller front-running
+    ///      `updatePrice` drains up to the full approval. An infinite approval
+    ///      — the one wallets nudge people toward — makes the ceiling infinite.
+    ///
+    ///      Both bounds earn their place here, and neither replaces the other.
+    ///      `maxUsdPrice` catches the `Pegged` re-price at any size, upstream
+    ///      of the peg. `maxPay` is what bounds `Fixed`, where the seller's
+    ///      `bnbullPrice` IS the gross and the sticker is not consulted at all
+    ///      — including a seller who flips `Pegged -> Fixed` in the same
+    ///      front-run to step around the sticker check.
+    function buyWithBNBULL(uint256 tokenId, uint256 maxUsdPrice, uint256 maxPay)
+        external
+        whenNotPaused
+        nonReentrant
+    {
         address bull = _wire(Wire.Bnbull);
         if (bull == address(0)) revert BnbullNotWired();
         Listing memory l = _takeListingForSale(tokenId);
+        if (l.usdPrice > maxUsdPrice) revert ListingRepriced(l.usdPrice, maxUsdPrice);
 
         uint256 gross;
         if (l.bnbullMode == BnbullMode.Fixed) {
@@ -801,7 +865,7 @@ contract Marketplace is Ownable, Pausable, ReentrancyGuard, IERC721Receiver {
             revert BnbullNotAccepted(tokenId);
         }
 
-        _settleToken(tokenId, l, PayKind.Bnbull, IERC20(bull), gross);
+        _settleToken(tokenId, l, PayKind.Bnbull, IERC20(bull), gross, maxPay);
     }
 
     /**
@@ -829,9 +893,12 @@ contract Marketplace is Ownable, Pausable, ReentrancyGuard, IERC721Receiver {
         Listing memory l,
         PayKind kind,
         IERC20 token,
-        uint256 gross
+        uint256 gross,
+        uint256 maxPay
     ) private {
         (uint256 buyerPays, uint256 sellerProceeds, uint256 fee) = _split(gross, address(token));
+        // Checked BEFORE the pull, so a refused sale never moves a token.
+        if (buyerPays > maxPay) revert PriceAboveMax(buyerPays, maxPay);
 
         // MEASURED pull, scoped so the measurement locals die immediately. A
         // fee-on-transfer payment token would silently shortchange the seller,

@@ -450,6 +450,53 @@ abstract contract VerifyCore is BnbullsConfig {
         _warn(du.fightCostOf(d.bnbull) != 0, "Duel BNBULL fight cost is priced");
         _okUint(du.fightCostOf(c.ext.wbnb), 0, "Duel has NO stored WBNB peg (oracle-priced)");
 
+        // ⚠ THE JACKPOT-TICKET DUST FLOOR, ASSERTED NON-ZERO ON BOTH ASSETS.
+        // This shipped as 0 on mainnet because no deploy path ever called
+        // `setMinTicketStake` — the mapping was reachable only from the admin
+        // UI, so nothing failed and nothing said so. `_rollOnePool` refuses a
+        // stake of exactly 0, but ONE WEI mints the identical full-odds ticket
+        // and the dev cut truncates to nothing below 10 wei: a rake-free ticket
+        // against a pot that pays 100%. Verified by VALUE, not just non-zero,
+        // so a floor that drifted from config is caught too.
+        _ok(
+            du.minTicketStakeOf(c.ext.wbnb) != 0,
+            "Duel.minTicketStake(WBNB) != 0 - 0 lets a 1-wei stake mint a free ticket"
+        );
+        _ok(
+            du.minTicketStakeOf(d.bnbull) != 0,
+            "Duel.minTicketStake(BNBULL) != 0 - 0 lets a 1-wei stake mint a free ticket"
+        );
+        _okUint(
+            du.minTicketStakeOf(c.ext.wbnb), c.params.minTicketStakeWbnb,
+            "Duel.setMinTicketStake(WBNB)"
+        );
+        _okUint(
+            du.minTicketStakeOf(d.bnbull), c.params.minTicketStakeBnbull,
+            "Duel.setMinTicketStake(BNBULL)"
+        );
+
+        // ⚠ THE ASSERTION THAT WOULD ACTUALLY HAVE CAUGHT IT. Everything above
+        // this point passed on a BNBULL floor 125x the live stake, because
+        // `!= 0` and `== config` are both true of a number far too LARGE.
+        // A floor at or above the fight's own cost silently ends ticketing on
+        // that asset: `_rollOnePool` RETURNS rather than reverting, so the pot
+        // keeps filling and never issues another ticket, and because both legs
+        // are floored independently it vetoes mixed duels on BOTH pools.
+        //
+        // This also guards the WBNB leg against a future the config cannot see:
+        // its floor is a fixed 3e14 while the stake is a USD quote, so the same
+        // silent death arrives on its own if BNB ever passes roughly $6,700.
+        _ok(
+            du.minTicketStakeOf(c.ext.wbnb) < du.fighterCost(c.ext.wbnb),
+            "Duel.minTicketStake(WBNB) < fighterCost(WBNB) - a floor at or above the "
+            "stake ends WBNB ticketing silently"
+        );
+        _ok(
+            du.minTicketStakeOf(d.bnbull) < du.fighterCost(d.bnbull),
+            "Duel.minTicketStake(BNBULL) < fighterCost(BNBULL) - a floor at or above the "
+            "stake ends BNBULL ticketing silently, and vetoes mixed duels too"
+        );
+
         // The listing lockout. Zero means a listed bull can fight, die, and
         // leave the buyer holding a corpse.
         _okAddr(du.marketplace(), d.marketplace, "Duel.setMarketplace");
@@ -490,13 +537,19 @@ abstract contract VerifyCore is BnbullsConfig {
      * @notice `DECISIONS`-grade: a bull may only be fought while its CURRENT
      *         owner has put it in the yards.
      *
-     * @dev ⚠ THIS IS THE ONE SLOT IN THE WHOLE DEPLOY WHOSE MISS FAILS *OPEN*.
-     *      Everything else in this file fails toward "the money quietly went
-     *      somewhere else". `Duel._requireInYards` reads `Wire.Yards` and
-     *      RETURNS EARLY on a zero, so an unwired slot is not "the yards are
-     *      shut", it is **no membership check anywhere in the game** — every
-     *      bull fightable by anyone holding a signature, including down the
-     *      zero-stake path that reads no allowance and still kills a bull on
+     * @dev ⚠ ON `Duel` (WBNB) THIS SLOT'S MISS FAILS *OPEN* — the one in the
+     *      whole deploy that does. Everything else in this file fails toward
+     *      "the money quietly went somewhere else". `Duel._requireInYards`
+     *      reads `Wire.Yards` and RETURNS EARLY on a zero, so an unwired slot
+     *      is not "the yards are shut", it is **no membership check anywhere in
+     *      the game** — every bull fightable by anyone holding a signature,
+     *      including down the zero-stake path that reads no allowance and still
+     *      kills a bull on
+     *
+     *      ⚠ `DuelNative` IS THE OPPOSITE: it REVERTS `YardsNotWired`, failing
+     *      CLOSED, because it custodies player balances and an open gate there
+     *      is a drain rather than a loophole. Check which contract you are
+     *      verifying before drawing a conclusion from this slot.
      *      its `lossesToDie`-th consecutive loss.
      *      `test_anUnwiredYardsSlotLeavesEveryDuelUngated` is that state,
      *      executed.
@@ -630,7 +683,21 @@ abstract contract VerifyCore is BnbullsConfig {
         console2.log("");
         console2.log(string.concat("-- ", tag), "--");
 
-        _okAddr(address(p.prizeToken()), prize, string.concat(tag, ".prizeToken"));
+        // ⚠ PROBE, DO NOT CALL. `JackpotNative` (the BNB pot after the native
+        // migration) has NO `prizeToken()` and no `fallback()`, so a direct
+        // call REVERTS — and every check below this line is unreachable behind
+        // it. Verify would die before testing a single funder role, requester
+        // role or VRF setting on the new pot, i.e. the whole post-cutover
+        // checklist would be silently skipped by the tool meant to enforce it.
+        (bool hasPrizeToken, bytes memory ret) =
+            address(p).staticcall(abi.encodeWithSignature("prizeToken()"));
+        if (hasPrizeToken && ret.length == 32) {
+            _okAddr(abi.decode(ret, (address)), prize, string.concat(tag, ".prizeToken"));
+        } else {
+            // Native pot: the prize IS BNB. There is no token to compare, and
+            // its absence is the migration having landed, not a fault.
+            console2.log(string.concat("  ok   ", tag), ".prizeToken absent - native BNB pot");
+        }
         _okUint(p.oddsOneIn(), odds, string.concat(tag, ".oddsOneIn"));
 
         // Without this, `recordWin` reverts `NotDuel`, Duel's try/catch eats

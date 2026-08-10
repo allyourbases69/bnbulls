@@ -316,15 +316,21 @@ abstract contract WireCore is BnbullsConfig {
         // BNB fight quote reverts `OracleNotWired` — fail-closed, but the BNB
         // fight does not exist until it is set.
         _duelWire(du, Duel.Wire.MintDrop, d.mintDrop, "Duel.MintDrop (oracle)");
-        // ⚠⚠ THE CONSENT GATE, AND IT IS THE ONE WHOSE MISS IS SILENT IN THE
-        // MOST DANGEROUS DIRECTION. Every other slot in this file fails toward
-        // "the money went somewhere else"; this one fails toward "there is no
-        // check at all". `Duel._requireInYards` reads the slot and RETURNS
-        // EARLY when it is zero, so an unwired Yards does not close the arena,
-        // it opens it: every bull in the collection is fightable by anyone who
-        // can get a signature, including on the zero-stake path that touches no
-        // allowance and still kills a bull on its `lossesToDie`-th loss.
+        // ⚠⚠ THE CONSENT GATE.
+        //
+        // ⚠ THE TWO CONTRACTS BEHAVE OPPOSITELY HERE, SO READ WHICH ONE YOU ARE
+        // WIRING. `Duel._requireInYards` (the WBNB contract) RETURNS EARLY on a
+        // zero slot, so a miss there fails OPEN: no membership check anywhere in
+        // the game, every bull fightable by anyone holding a signature, including
+        // down the zero-stake path that touches no allowance and still kills a
+        // bull on its `lossesToDie`-th loss.
         // `test_anUnwiredYardsSlotLeavesEveryDuelUngated` runs exactly that.
+        //
+        // `DuelNative._requireInYards` REVERTS `YardsNotWired` instead — it had
+        // to, because that contract custodies player balances and an open gate
+        // there lets anyone push a bull at a depositor and spend their float.
+        // So on DuelNative a miss fails CLOSED: no fights at all until it is
+        // wired. Loud rather than silent, but still a dead game, so wire it.
         _duelWire(du, Duel.Wire.Yards, d.yards, "Duel.Yards (THE consent gate)");
 
         // ⚠ THE NATIVE FIGHT PATH. Miss this and `submitDuel` reverts
@@ -334,6 +340,16 @@ abstract contract WireCore is BnbullsConfig {
         _addAsset(
             du, d.bnbull, c.params.maxFightBnbull, c.params.fightBnbull, "Duel asset BNBULL"
         );
+
+        // ⚠ THE JACKPOT-TICKET DUST FLOOR. Miss this and it reads ZERO, which
+        // is what shipped: `_rollOnePool` refuses a stake of exactly 0, but ONE
+        // WEI mints the identical full-odds ticket and the 10% dev cut
+        // truncates to nothing below 10 wei. A rake-free ticket against a
+        // 100%-payout pot is `DECISIONS.md §25`'s hole with the numbers filed
+        // off, and the mapping was reachable only from the admin UI, so no
+        // deploy path ever set it.
+        _minTicket(du, c.ext.wbnb, c.params.minTicketStakeWbnb, "Duel min ticket WBNB");
+        _minTicket(du, d.bnbull, c.params.minTicketStakeBnbull, "Duel min ticket BNBULL");
 
         // ⚠ THE DOLLAR ANCHOR (`DECISIONS.md §26`). WBNB has NO stored peg —
         // `setFightCost` refuses it — so this one number is what prices every
@@ -360,6 +376,17 @@ abstract contract WireCore is BnbullsConfig {
         if (cur == target) return _note(label, false);
         if (cur != address(0)) return _conflict(label, target, cur);
         du.bootstrapWire(slot, target);
+        _note(label, true);
+    }
+
+    /// @dev Idempotent, like every other step here: re-running must not fight
+    ///      an operator who tuned the floor by hand afterwards, so this only
+    ///      writes while the slot is still at its zero default.
+    function _minTicket(Duel du, address asset, uint256 minStake, string memory label) private {
+        if (minStake == 0) return _note(string.concat(label, " (SKIPPED - zero)"), false);
+        if (du.minTicketStakeOf(asset) == minStake) return _note(label, false);
+        if (du.minTicketStakeOf(asset) != 0) return _note(string.concat(label, " (kept)"), false);
+        du.setMinTicketStake(asset, minStake);
         _note(label, true);
     }
 

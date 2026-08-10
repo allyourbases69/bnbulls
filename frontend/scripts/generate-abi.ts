@@ -52,6 +52,22 @@ const TARGETS: Target[] = [
   { exportName: 'DuelNativeAbi', file: 'DuelNative.ts', artifact: 'DuelNative.sol/DuelNative.json' },
   { exportName: 'GraveyardAbi', file: 'Graveyard.ts', artifact: 'Graveyard.sol/Graveyard.json' },
   { exportName: 'JackpotAbi', file: 'Jackpot.ts', artifact: 'Jackpot.sol/Jackpot.json' },
+  // The native-BNB pot, replacing ONLY the BNB jackpot. The $BNBULL pot stays
+  // on `Jackpot.sol` forever — $BNBULL genuinely IS an ERC-20, so there is
+  // nothing to make native there.
+  //
+  // ⚠ ITS SURFACE DIFFERS IN TWO WAYS THAT BREAK CALL SITES, NOT JUST ONE:
+  //   `prizeToken()` is GONE — the prize is native, and a view claiming
+  //     otherwise is the "print a misleading value" bug this repo keeps
+  //     catching. Anything reading it must branch on the pot, not fall back.
+  //   `topUp(uint256)` became payable `topUp()` — the amount is `msg.value`.
+  // It also adds `owed(address)` / `withdraw` / `withdrawAll`: a win CREDITS
+  // the winner rather than transferring, so the prize is claimed, not received.
+  {
+    exportName: 'JackpotNativeAbi',
+    file: 'JackpotNative.ts',
+    artifact: 'JackpotNative.sol/JackpotNative.json',
+  },
   {
     exportName: 'MarketplaceAbi',
     file: 'Marketplace.ts',

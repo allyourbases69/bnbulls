@@ -41,7 +41,28 @@ import { WRAP_GAS_RESERVE_WEI } from '@/lib/constants';
  * `DuelNative.withdraw` is deliberately outside `whenNotPaused`: "a pause is for
  * stopping fights, not for trapping player money". So nothing in here gates the
  * withdraw controls on fight-readiness, the pit, the picked count, or anything
- * else. If the money is yours you can always take it out.
+ * else. If the money is yours you can always take it out. `setPassiveAllowance`
+ * is unguarded for the same reason: LOWERING your exposure must always work.
+ *
+ * ──── THE PASSIVE ALLOWANCE IS THE APPROVAL THAT CUSTODY DELETED ────
+ *
+ * On the old contract your exposure to a fight you did not sign was the WBNB
+ * allowance you granted — a number you chose. The credit ledger removed the
+ * approval step and silently replaced that ceiling with YOUR WHOLE BALANCE: a
+ * leaked signer key could name your bull at max stake until the float was gone
+ * (81 of 90 BNB in a single transaction, in the review's proof of concept).
+ * `passiveAllowance` puts that ceiling back.
+ *
+ * ⚠⚠ IT IS A BUDGET THAT SPENDS DOWN, NOT A PER-FIGHT LIMIT, AND EVERY SURFACE
+ * MUST SAY SO. `_takeSide` DECREMENTS it on each passive fight
+ * (`passiveAllowance[owner_] = allowed - stake`) — deliberately, because
+ * `maxFightCostOf` already bounds ONE fight, and one fight is not what a leaked
+ * key does. So a wallet that sets five fights' worth gets exactly five offline
+ * fights and then goes quietly unchallengeable. A player who is not told that
+ * reads it as the feature having broken.
+ *
+ * ⚠ IT DEFAULTS TO ZERO, so a wallet that has only DEPOSITED is still not
+ * challengeable. Both are required, and a deposit on its own does nothing.
  */
 export interface FightBalance {
   /** True once the contract address is known and a fight has a price. */
@@ -64,9 +85,24 @@ export interface FightBalance {
   readonly suggested: bigint;
   /** `suggested` is everything the wallet can spare and still short. */
   readonly fallsShort: boolean;
+  /** The remaining budget fights you did not start may spend. SPENDS DOWN —
+   *  see the header. `undefined` = unread, and never treat that as zero. */
+  readonly passiveAllowance: bigint | undefined;
+  /** Offline fights the REMAINING allowance still covers. Floor. */
+  readonly passiveFightsLeft: number;
+  /** Your bulls can be challenged while you are away: the allowance covers at
+   *  least one fight AND the balance can actually pay for it. Both, because
+   *  either alone is a bull nobody can fight. Only ever off reads that landed. */
+  readonly challengeable: boolean;
+  /** Set the ceiling once and the allowance has never been set. This is the
+   *  state a deposit-only wallet is silently stuck in. */
+  readonly allowanceUnset: boolean;
   readonly deposit: (amount: bigint) => Promise<unknown>;
   readonly withdraw: (amount: bigint) => Promise<unknown>;
   readonly withdrawAll: () => Promise<unknown>;
+  /** Absolute, not incremental — you state a ceiling rather than topping one
+   *  up. Zero switches offline challenges off entirely. */
+  readonly setPassiveAllowance: (amount: bigint) => Promise<unknown>;
   readonly isBusy: boolean;
   readonly refetch: () => void;
 }
@@ -96,6 +132,15 @@ export function useFightBalance(
     query: { enabled: !!owner },
   });
 
+  const { data: allowanceRaw, refetch: refetchAllowance } = useReadContract({
+    address: duel,
+    abi: DuelNativeAbi,
+    functionName: 'passiveAllowance',
+    args: owner ? [owner] : undefined,
+    chainId: CHAIN_ID,
+    query: { enabled: !!duel && !!owner },
+  });
+
   const { writeContractAsync, isPending, data: hash } = useWriteContract();
   const { isLoading: isConfirming } = useWaitForTransactionReceipt({ hash });
 
@@ -121,6 +166,26 @@ export function useFightBalance(
       abi: DuelNativeAbi,
       chainId: CHAIN_ID,
       functionName: 'withdraw',
+      args: [amount],
+    });
+  }
+
+  /**
+   * State the ceiling on what fights you did not start may spend.
+   *
+   * ⚠ NOT GATED ON ANYTHING, ON PURPOSE. `setPassiveAllowance` is unpausable
+   * and unguarded on the contract precisely so a player can always REDUCE their
+   * exposure — including to zero, including mid-incident, including while
+   * fights are paused. Adding a readiness check here would re-impose the very
+   * lock the contract refuses to have.
+   */
+  async function setPassiveAllowance(amount: bigint) {
+    if (!duel) return;
+    return writeContractAsync({
+      address: duel,
+      abi: DuelNativeAbi,
+      chainId: CHAIN_ID,
+      functionName: 'setPassiveAllowance',
       args: [amount],
     });
   }
@@ -161,6 +226,20 @@ export function useFightBalance(
     runTotal !== undefined && credit !== undefined && runTotal > credit ? runTotal - credit : 0n;
   const suggested = want > spendable ? spendable : want;
 
+  const passiveAllowance = allowanceRaw as bigint | undefined;
+  const allowanceRead = priced && passiveAllowance !== undefined;
+  // Integer division, same as `fightsCovered`: a part-fight of budget buys no
+  // fights, and the contract decrements by the full stake or reverts.
+  const passiveFightsLeft = allowanceRead ? Number(passiveAllowance / perFight) : 0;
+
+  // ⚠ BOTH HALVES, AND OFF READS THAT LANDED. An allowance with no balance
+  // behind it is a bull that reverts `InsufficientCredit` when someone tries;
+  // a balance with no allowance reverts `PassiveAllowanceExceeded`. Either one
+  // alone is a bull nobody can actually fight, which is exactly the silent
+  // half-configured state a deposit-only wallet falls into.
+  const challengeable =
+    read && allowanceRead && passiveAllowance >= perFight && credit >= perFight;
+
   return {
     configured: !!duel && priced,
     credit,
@@ -172,13 +251,19 @@ export function useFightBalance(
     shortForRun: read && runTotal !== undefined && credit < runTotal,
     suggested,
     fallsShort: suggested > 0n && suggested < want,
+    passiveAllowance,
+    passiveFightsLeft,
+    challengeable,
+    allowanceUnset: allowanceRead && passiveAllowance === 0n,
     deposit,
     withdraw,
     withdrawAll,
+    setPassiveAllowance,
     isBusy: isPending || isConfirming,
     refetch: () => {
       void refetchCredit();
       void refetchNative();
+      void refetchAllowance();
     },
   };
 }

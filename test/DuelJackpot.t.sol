@@ -522,4 +522,89 @@ contract DuelJackpotTest is DuelGraveyardBase {
         if (potA != address(0)) d.bootstrapWire(Duel.Wire.JackpotBnbull, potA);
         if (potB != address(0)) d.bootstrapWire(Duel.Wire.JackpotBnb, potB);
     }
+
+    /**
+     * @notice §25's hole with the numbers filed off: ONE WEI buys a full-odds
+     *         ticket, and the rake on it rounds to nothing.
+     *
+     * @dev `_rollOnePool` refuses a stake of exactly 0 — that is §25, and it is
+     *      unconditional so a forgotten wiring tx fails SAFE. But the check
+     *      immediately below it, `stakeA < minTicketStakeOf[assetA]`, is
+     *      configuration, and NO DEPLOY, WIRE OR MIGRATION SCRIPT EVER CALLED
+     *      `setMinTicketStake`. The mapping was reachable only through the
+     *      admin UI, so it read ZERO on mainnet and nothing said so.
+     *
+     *      Zero means one wei clears it. And `devCut = stake * 1000 / 10000`
+     *      truncates to 0 for any stake under 10 wei, so the ticket is not
+     *      merely cheap — it is literally rake-free, against a pot that pays
+     *      100% and was funded by other people's mints.
+     *
+     *      The floor is a DUST GUARD and nothing more. It does not price a
+     *      ticket meaningfully and it is not the answer to the self-dealt duel
+     *      farm (two wallets, one owner, the stake circulating so only the rake
+     *      is a real cost) — that needs a product decision.
+     */
+    function test_FINDING_aOneWeiStakeMintsARakeFreeFullOddsTicket() public {
+        _fundForFight(bob, 0, 1 ether);
+        vm.deal(alice, 5 ether);
+
+        // Unset, exactly as it shipped.
+        assertEq(duelC.minTicketStakeOf(address(wbnb)), 0, "the floor ships unset");
+
+        Duel.DuelResult memory r = _newResult(aliceBull, bobBull, uint32(aliceBull));
+        r.assetA = address(wbnb);
+        r.assetB = address(wbnb);
+        r.stakeA = 1 wei;
+        r.stakeB = 1 wei;
+
+        _submitValue(alice, r, 1 ether);
+
+        // The attack, unmitigated: a ticket on BOTH pools for two wei total,
+        // and the dev cut truncated away so the pot got nothing for it.
+        assertEq(potBnb.ticketCount(), 1, "one wei bought a full-odds WBNB ticket");
+        assertEq(potBnbull.ticketCount(), 1, "and a full-odds BNBULL one");
+        assertEq((uint256(1) * DEV_BPS) / 10_000, 0, "the rake on it truncates to nothing");
+    }
+
+    /// @notice The floor `Wire.s.sol` now sets refuses that dust, and still
+    ///         lets an ordinary fight earn its ticket.
+    function test_theDustFloorRefusesAOneWeiStakeButNotARealOne() public {
+        _fundForFight(bob, 0, 1 ether);
+        vm.deal(alice, 5 ether);
+
+        // What `Wire.s.sol` wires: ~10% of the live $2 stake.
+        duelC.setMinTicketStake(address(wbnb), 3e14);
+        duelC.setMinTicketStake(address(bnbull), 25_000e18);
+
+        Duel.DuelResult memory dust = _newResult(aliceBull, bobBull, uint32(aliceBull));
+        dust.assetA = address(wbnb);
+        dust.assetB = address(wbnb);
+        dust.stakeA = 1 wei;
+        dust.stakeB = 1 wei;
+        _submitValue(alice, dust, 1 ether);
+
+        assertEq(potBnb.ticketCount(), 0, "dust must earn NO ticket");
+        assertEq(potBnbull.ticketCount(), 0, "on either pool");
+        assertTrue(bulls.isAlive(aliceBull), "but the fight itself still settled");
+        assertEq(duelC.fightSeq(alice), 1, "and still consumed its sequence");
+
+        // A real $2-sized stake is far above the floor and still earns one.
+        Duel.DuelResult memory real = _newResult(aliceBull, bobBull, uint32(bobBull));
+        real.assetA = address(wbnb);
+        real.assetB = address(wbnb);
+        real.stakeA = 0.00331 ether;
+        real.stakeB = 0.00331 ether;
+        _submitValue(alice, real, 1 ether);
+
+        assertEq(potBnb.ticketCount(), 1, "an ordinary fight still earns its ticket");
+    }
+
+    /// @dev The floor must never be settable above what anyone can afford —
+    ///      that would fill the pot and silently never issue a ticket again.
+    function test_theFloorCannotBeSetAboveTheAssetCeiling() public {
+        uint256 ceiling = duelC.maxFightCostOf(address(wbnb));
+        assertGt(ceiling, 0, "WBNB is a registered stake asset");
+        vm.expectRevert();
+        duelC.setMinTicketStake(address(wbnb), ceiling + 1);
+    }
 }

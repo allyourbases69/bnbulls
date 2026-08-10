@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { PotsPanel } from '@/components/pots/PotsPanel';
+import { JackpotPrizeBanner } from '@/components/pots/JackpotPrizeBanner';
 import { PreLaunchNotice } from '@/components/PreLaunchNotice';
 import { EMOJI, POTS } from '@/lib/brand';
 
@@ -22,6 +23,14 @@ export default function PotsPage() {
         the currency you pay in decides which pot fattens. {POTS.rule}
       </p>
       <PreLaunchNotice className="mt-8" />
+      {/* ⚠ ABOVE the pots, not inside one. On the native pot a win is credited
+          rather than sent, so the winner's wallet shows nothing until they
+          claim — the loudest possible moment to leave someone guessing. It
+          renders itself away when there is no prize, so it costs nothing until
+          it is the most important thing on the page. */}
+      <div className="mt-8">
+        <JackpotPrizeBanner />
+      </div>
       <div className="mt-10">
         <PotsPanel />
       </div>

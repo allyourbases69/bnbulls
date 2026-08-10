@@ -128,6 +128,37 @@ abstract contract MarketplaceHarness is SplitterBase {
         return _ceilDiv(usd1e18 * 1e18, BNB_USD_1E18);
     }
 
+    /**
+     * @dev The sticker the card is showing, which is exactly what
+     *      `ListingCard.tsx` passes as `maxUsdPrice`.
+     *
+     * ⚠ NEVER CALL THIS INSIDE AN ARGUMENT LIST. It reads off the marketplace,
+     *      so evaluating it as an argument to the call under test spends the
+     *      pending `vm.prank` / `vm.expectRevert` on `listingOf` — the same trap
+     *      `NATIVE_KEY` above exists to dodge, and it fails as
+     *      `ERC721InvalidReceiver(<the test contract>)` or "next call did not
+     *      revert as expected", neither of which points anywhere near the
+     *      cause. Bind it to a local BEFORE the cheatcode:
+     *
+     *          uint256 maxUsd = _sticker(1);
+     *          vm.prank(bob);
+     *          market.buyWithBNB{value: v}(1, maxUsd, maxPay);
+     *
+     *      The ordinary buys in this file pass the `LIST_USD` constant instead,
+     *      which is the same number with no call in it. That is deliberate and
+     *      NOT a permissive ceiling: an infinite one cannot catch the check
+     *      being compared against the wrong field, the wrong scale, or deleted
+     *      outright, so every honest path here settles against the TIGHT bound
+     *      and any of those mistakes breaks the file rather than nothing.
+     */
+    function _sticker(Marketplace mk, uint256 tokenId) internal view returns (uint256) {
+        return mk.listingOf(tokenId).usdPrice;
+    }
+
+    function _sticker(uint256 tokenId) internal view returns (uint256) {
+        return _sticker(market, tokenId);
+    }
+
     function _grossFee(uint256 gross, uint16 feeBps) internal pure returns (uint256) {
         return (gross * feeBps) / 10_000;
     }
@@ -175,7 +206,7 @@ contract MarketplaceTest is MarketplaceHarness {
         uint256 sellerBefore = alice.balance;
         vm.deal(bob, gross);
         vm.prank(bob);
-        market.buyWithBNB{value: gross}(1);
+        market.buyWithBNB{value: gross}(1, LIST_USD, type(uint256).max);
 
         assertEq(bulls.ownerOf(1), bob);
         assertEq(alice.balance - sellerBefore, gross - fee, "92.5% to the seller");
@@ -198,7 +229,7 @@ contract MarketplaceTest is MarketplaceHarness {
         bnbull.mint(bob, gross);
         vm.startPrank(bob);
         bnbull.approve(address(market), gross);
-        market.buyWithBNBULL(1);
+        market.buyWithBNBULL(1, LIST_USD, type(uint256).max);
         vm.stopPrank();
 
         assertEq(bnbull.balanceOf(alice), gross - fee);
@@ -244,7 +275,9 @@ contract MarketplaceTest is MarketplaceHarness {
         bnbull.mint(bob, buyerPays);
         vm.startPrank(bob);
         bnbull.approve(address(m), buyerPays);
-        m.buyWithBNBULL(1);
+        // The fuzzed sticker, not `LIST_USD` — this listing is priced by the
+        // fuzzer, so the tight bound has to follow it.
+        m.buyWithBNBULL(1, usdPrice, type(uint256).max);
         vm.stopPrank();
 
         uint256 sellerGot = bnbull.balanceOf(alice);
@@ -267,7 +300,7 @@ contract MarketplaceTest is MarketplaceHarness {
         bnbull.mint(bob, 1);
         vm.startPrank(bob);
         bnbull.approve(address(m), 1);
-        m.buyWithBNBULL(1);
+        m.buyWithBNBULL(1, LIST_USD, type(uint256).max);
         vm.stopPrank();
 
         assertEq(bnbull.balanceOf(alice), 1, "one wei, all of it to the seller");
@@ -329,7 +362,7 @@ contract MarketplaceTest is MarketplaceHarness {
 
         vm.deal(bob, gross);
         vm.prank(bob);
-        market.buyWithBNB{value: gross}(1);
+        market.buyWithBNB{value: gross}(1, LIST_USD, type(uint256).max);
 
         assertEq(treasury.balance, 0, "the dev leg went to zero, never negative");
         assertEq(potBnbull.pool(), _bnbullFromBnb(fee));
@@ -359,7 +392,7 @@ contract MarketplaceTest is MarketplaceHarness {
         bnbull.mint(bob, buyerPays);
         vm.startPrank(bob);
         bnbull.approve(address(market), buyerPays);
-        market.buyWithBNBULL(1);
+        market.buyWithBNBULL(1, LIST_USD, type(uint256).max);
         vm.stopPrank();
 
         assertEq(bnbull.balanceOf(alice), gross - grossFee, "seller: price - fee, untouched");
@@ -433,7 +466,7 @@ contract MarketplaceTest is MarketplaceHarness {
 
         vm.deal(bob, gross);
         vm.prank(bob);
-        market.buyWithBNB{value: gross}(1);
+        market.buyWithBNB{value: gross}(1, LIST_USD, type(uint256).max);
 
         assertEq(bulls.ownerOf(1), bob, "THE SALE SETTLED");
         assertEq(alice.balance, gross - fee, "and the seller was paid in full");
@@ -471,7 +504,7 @@ contract MarketplaceTest is MarketplaceHarness {
         vm.prank(bob);
         vm.expectEmit(true, false, false, true, address(m));
         emit Marketplace.PotFeeDeferred(NATIVE_KEY, potCut, potCut);
-        m.buyWithBNB{value: gross}(1);
+        m.buyWithBNB{value: gross}(1, LIST_USD, type(uint256).max);
 
         assertEq(bulls.ownerOf(1), bob);
         assertEq(m.potFeeUndelivered(), potCut);
@@ -492,7 +525,7 @@ contract MarketplaceTest is MarketplaceHarness {
 
         vm.deal(bob, gross);
         vm.prank(bob);
-        m.buyWithBNB{value: gross}(1);
+        m.buyWithBNB{value: gross}(1, LIST_USD, type(uint256).max);
         assertEq(m.potFeeUndelivered(), potCut);
 
         // ...and the same on the token leg.
@@ -504,7 +537,7 @@ contract MarketplaceTest is MarketplaceHarness {
         bnbull.mint(bob, 80e18);
         vm.startPrank(bob);
         bnbull.approve(address(m), 80e18);
-        m.buyWithBNBULL(2);
+        m.buyWithBNBULL(2, LIST_USD, type(uint256).max);
         vm.stopPrank();
 
         assertEq(bulls.ownerOf(2), bob);
@@ -532,7 +565,7 @@ contract MarketplaceTest is MarketplaceHarness {
         bnbull.approve(address(m), 80e18);
         vm.expectEmit(true, false, false, true, address(m));
         emit Marketplace.PotFeeDeferred(address(bnbull), potCut, potCut);
-        m.buyWithBNBULL(1);
+        m.buyWithBNBULL(1, LIST_USD, type(uint256).max);
         vm.stopPrank();
 
         assertEq(m.potFeeUndeliveredToken(address(bnbull)), potCut);
@@ -549,7 +582,7 @@ contract MarketplaceTest is MarketplaceHarness {
 
         vm.deal(bob, gross);
         vm.prank(bob);
-        m.buyWithBNB{value: gross}(1);
+        m.buyWithBNB{value: gross}(1, LIST_USD, type(uint256).max);
         assertEq(m.potFeeUndelivered(), potCut);
 
         // The sink appears later; `to == 0` retries it, so the backlog is
@@ -574,7 +607,7 @@ contract MarketplaceTest is MarketplaceHarness {
         bnbull.mint(bob, 80e18);
         vm.startPrank(bob);
         bnbull.approve(address(m), 80e18);
-        m.buyWithBNBULL(1);
+        m.buyWithBNBULL(1, LIST_USD, type(uint256).max);
         vm.stopPrank();
 
         m.sweepPotFee(address(bnbull), address(potSink));
@@ -602,7 +635,7 @@ contract MarketplaceTest is MarketplaceHarness {
         bnbull.mint(bob, 80e18);
         vm.startPrank(bob);
         bnbull.approve(address(m), 80e18);
-        m.buyWithBNBULL(1);
+        m.buyWithBNBULL(1, LIST_USD, type(uint256).max);
         vm.stopPrank();
 
         vm.expectRevert(
@@ -658,7 +691,7 @@ contract MarketplaceTest is MarketplaceHarness {
         uint256 gross = _bnbGross(LIST_USD);
         vm.deal(bob, gross);
         vm.prank(bob);
-        market.buyWithBNB{value: gross}(1);
+        market.buyWithBNB{value: gross}(1, LIST_USD, type(uint256).max);
         assertEq(bulls.ownerOf(1), bob, "and it moves straight from seller to buyer");
     }
 
@@ -774,7 +807,7 @@ contract MarketplaceTest is MarketplaceHarness {
         vm.deal(bob, gross);
         vm.prank(bob);
         vm.expectRevert(abi.encodeWithSelector(Marketplace.BullIsDead.selector, uint256(1)));
-        market.buyWithBNB{value: gross}(1);
+        market.buyWithBNB{value: gross}(1, LIST_USD, type(uint256).max);
 
         assertTrue(market.isStale(1));
         vm.prank(carol); // anyone may clear it
@@ -822,7 +855,7 @@ contract MarketplaceTest is MarketplaceHarness {
         vm.deal(bob, gross);
         vm.prank(bob);
         vm.expectRevert(Marketplace.NotApproved.selector);
-        market.buyWithBNB{value: gross}(1);
+        market.buyWithBNB{value: gross}(1, LIST_USD, type(uint256).max);
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -884,7 +917,7 @@ contract MarketplaceTest is MarketplaceHarness {
         (, uint256 bnbDue,,) = market.quote(1);
         vm.deal(bob, bnbDue);
         vm.prank(bob);
-        market.buyWithBNB{value: bnbDue}(1);
+        market.buyWithBNB{value: bnbDue}(1, LIST_USD, type(uint256).max);
         assertEq(bob.balance, 0, "the quote was the price, to the wei");
     }
 
@@ -915,7 +948,7 @@ contract MarketplaceTest is MarketplaceHarness {
                 market.bnbullUsdUpdatedAt()
             )
         );
-        market.buyWithBNBULL(1);
+        market.buyWithBNBULL(1, LIST_USD, type(uint256).max);
         vm.stopPrank();
 
         assertTrue(market.isListed(1), "and the listing survives to be bought another way");
@@ -935,7 +968,7 @@ contract MarketplaceTest is MarketplaceHarness {
         vm.startPrank(bob);
         bnbull.approve(address(market), type(uint256).max);
         vm.expectRevert();
-        market.buyWithBNBULL(1);
+        market.buyWithBNBULL(1, LIST_USD, type(uint256).max);
         vm.stopPrank();
     }
 
@@ -954,7 +987,7 @@ contract MarketplaceTest is MarketplaceHarness {
         bnbull.mint(bob, 9_000e18);
         vm.startPrank(bob);
         bnbull.approve(address(market), 9_000e18);
-        market.buyWithBNBULL(1);
+        market.buyWithBNBULL(1, LIST_USD, type(uint256).max);
         vm.stopPrank();
         assertEq(bulls.ownerOf(1), bob);
     }
@@ -965,7 +998,7 @@ contract MarketplaceTest is MarketplaceHarness {
         vm.startPrank(bob);
         bnbull.approve(address(market), type(uint256).max);
         vm.expectRevert(abi.encodeWithSelector(Marketplace.BnbullNotAccepted.selector, uint256(1)));
-        market.buyWithBNBULL(1);
+        market.buyWithBNBULL(1, LIST_USD, type(uint256).max);
         vm.stopPrank();
     }
 
@@ -1000,7 +1033,7 @@ contract MarketplaceTest is MarketplaceHarness {
         vm.prank(bob);
         vm.expectEmit(true, false, false, true, address(market));
         emit Marketplace.NativeCredited(address(seller), proceeds);
-        market.buyWithBNB{value: gross}(tokenId);
+        market.buyWithBNB{value: gross}(tokenId, LIST_USD, type(uint256).max);
 
         assertEq(bulls.ownerOf(tokenId), bob, "the sale still settled");
         assertEq(market.nativeCredit(address(seller)), proceeds);
@@ -1022,7 +1055,7 @@ contract MarketplaceTest is MarketplaceHarness {
 
         vm.deal(bob, gross);
         vm.prank(bob);
-        market.buyWithBNB{value: gross}(tokenId);
+        market.buyWithBNB{value: gross}(tokenId, LIST_USD, type(uint256).max);
         assertEq(market.nativeCredit(address(seller)), gross - _grossFee(gross, FEE_BPS));
     }
 
@@ -1040,7 +1073,7 @@ contract MarketplaceTest is MarketplaceHarness {
         vm.deal(bob, gross);
         uint256 g0 = gasleft();
         vm.prank(bob);
-        market.buyWithBNB{value: gross}(tokenId);
+        market.buyWithBNB{value: gross}(tokenId, LIST_USD, type(uint256).max);
         uint256 used = g0 - gasleft();
 
         assertEq(bulls.ownerOf(tokenId), bob);
@@ -1057,10 +1090,10 @@ contract MarketplaceTest is MarketplaceHarness {
         vm.expectRevert(
             abi.encodeWithSelector(Marketplace.InsufficientBNB.selector, gross, gross - 1)
         );
-        market.buyWithBNB{value: gross - 1}(1);
+        market.buyWithBNB{value: gross - 1}(1, LIST_USD, type(uint256).max);
 
         vm.prank(bob);
-        market.buyWithBNB{value: gross * 3}(1);
+        market.buyWithBNB{value: gross * 3}(1, LIST_USD, type(uint256).max);
         assertEq(bob.balance, gross * 2, "the surplus came straight back");
     }
 
@@ -1094,7 +1127,7 @@ contract MarketplaceTest is MarketplaceHarness {
                 Marketplace.PaymentShortfall.selector, uint256(80e18), uint256(792e17)
             )
         );
-        m.buyWithBNBULL(1);
+        m.buyWithBNBULL(1, LIST_USD, type(uint256).max);
         vm.stopPrank();
 
         assertEq(bulls.ownerOf(1), alice, "the bull never moved");
@@ -1129,7 +1162,7 @@ contract MarketplaceTest is MarketplaceHarness {
         feed.setRound(2, 0, block.timestamp, block.timestamp, 2);
         vm.prank(bob);
         vm.expectRevert(abi.encodeWithSelector(Marketplace.OracleBadAnswer.selector, int256(0)));
-        market.buyWithBNB{value: 1 ether}(1);
+        market.buyWithBNB{value: 1 ether}(1, LIST_USD, type(uint256).max);
 
         feed.setRound(5, BNB_USD_8, block.timestamp, block.timestamp, 4);
         vm.prank(bob);
@@ -1138,13 +1171,13 @@ contract MarketplaceTest is MarketplaceHarness {
                 Marketplace.OracleBadRound.selector, uint80(5), uint80(4), block.timestamp
             )
         );
-        market.buyWithBNB{value: 1 ether}(1);
+        market.buyWithBNB{value: 1 ether}(1, LIST_USD, type(uint256).max);
 
         feed.setAnswer(BNB_USD_8);
         vm.warp(block.timestamp + 2 hours);
         vm.prank(bob);
         vm.expectRevert();
-        market.buyWithBNB{value: 1 ether}(1);
+        market.buyWithBNB{value: 1 ether}(1, LIST_USD, type(uint256).max);
     }
 
     /// @dev The sanity band exists because a feed pinned at a circuit-breaker
@@ -1157,7 +1190,7 @@ contract MarketplaceTest is MarketplaceHarness {
         vm.deal(bob, 500 ether);
         vm.prank(bob);
         vm.expectRevert(abi.encodeWithSelector(Marketplace.OracleOutOfBand.selector, uint256(1e18)));
-        market.buyWithBNB{value: 500 ether}(1);
+        market.buyWithBNB{value: 500 ether}(1, LIST_USD, type(uint256).max);
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -1175,7 +1208,7 @@ contract MarketplaceTest is MarketplaceHarness {
         vm.deal(bob, 100 ether);
         vm.prank(bob);
         vm.expectRevert();
-        market.buyWithBNB{value: 1 ether}(1);
+        market.buyWithBNB{value: 1 ether}(1, LIST_USD, type(uint256).max);
 
         vm.prank(alice);
         market.cancel(1);
@@ -1191,7 +1224,7 @@ contract MarketplaceTest is MarketplaceHarness {
         bnbull.mint(buyer, amount);
         vm.startPrank(buyer);
         bnbull.approve(address(market), amount);
-        market.buyWithBNBULL(tokenId);
+        market.buyWithBNBULL(tokenId, LIST_USD, type(uint256).max);
         vm.stopPrank();
     }
 
@@ -1209,5 +1242,309 @@ contract MarketplaceTest is MarketplaceHarness {
                 "list(uint256,uint128,uint8,uint128)", tokenId, LIST_USD, uint8(0), uint128(0)
             )
         );
+    }
+}
+
+/**
+ * @title MarketplaceMaxPayTest
+ * @notice The seller-front-run guard on both buy legs, measured against the
+ *         numbers `ListingCard.tsx` ACTUALLY SENDS.
+ *
+ * @dev THE BUG. `msg.value` is a FLOOR, never a ceiling: the buy paths take
+ *      `>= buyerPays` and refund the surplus, because a dollar sticker
+ *      converts through the oracle at PAY time and the exact amount moves
+ *      between quoting and landing (`DECISIONS.md §1`). The frontend therefore
+ *      sends a 1.5% cushion. A refund cannot bound anything the SELLER
+ *      controls: `updatePrice` is instant, unbounded and seller-callable, so a
+ *      seller watching the mempool re-prices to exactly the cushioned figure,
+ *      `buyerPays` swells to meet `msg.value`, the refund computes to zero, and
+ *      they re-price back down. Riskless, repeatable, and INVISIBLE — `Sold`
+ *      reports the price actually charged.
+ *
+ * @dev ⚠ AND THE FIRST FIX DID NOT CLOSE IT, WHICH IS WHY THIS FILE IS SHAPED
+ *      LIKE THIS. That version bounded `buyerPays` alone, and the frontend
+ *      passed `withCushion(due)` as BOTH `msg.value` and the ceiling — the same
+ *      number — so a seller re-pricing to exactly that figure hit
+ *      `buyerPays == maxPay`, cleared a `>` check, and banked the full 1.5%
+ *      exactly as before. Its regression test went green only because it hand-
+ *      picked `sent - 1` instead of passing what the frontend passes.
+ *
+ *      Two movements land on `buyerPays` and are indistinguishable there:
+ *      oracle drift (legitimate, and the entire reason for the cushion) and a
+ *      re-price (theft). Any ceiling loose enough for the first admits the
+ *      second. So the guard bounds the SELLER-CONTROLLED number instead:
+ *      `maxUsdPrice` against `l.usdPrice`, upstream of the oracle.
+ *
+ *      ⚠ EVERY TEST BELOW USES `_frontendArgs`. Do not hand-pick a ceiling in
+ *      this contract — a bound that only holds for a number the test chose is
+ *      not a bound on the shipped path, and that is the exact mistake being
+ *      regressed against.
+ */
+contract MarketplaceMaxPayTest is MarketplaceHarness {
+    /// @dev The 1.5% the frontend actually sends (`BNB_QUOTE_CUSHION_BPS`).
+    uint256 internal constant CUSHION_BPS = 150;
+
+    function _withCushion(uint256 due) internal pure returns (uint256) {
+        return due + (due * CUSHION_BPS) / 10_000;
+    }
+
+    /**
+     * @dev EXACTLY what `ListingCard.tsx` builds, in one place so no test can
+     *      quietly pick friendlier numbers: the sticker the card is showing as
+     *      `maxUsdPrice` (no cushion — a sticker is not an oracle value), and
+     *      the cushioned due as `maxPay`.
+     */
+    function _frontendArgs(uint256 tokenId, uint256 due)
+        internal
+        view
+        returns (uint256 maxUsdPrice, uint256 maxPay)
+    {
+        return (_sticker(tokenId), _withCushion(due));
+    }
+
+    /// @dev The sticker a front-runner moves to in order to swallow exactly the
+    ///      cushion — sized to land on equality rather than above it, which is
+    ///      what survived the first fix.
+    function _cushionedSticker() internal pure returns (uint128) {
+        return uint128(LIST_USD + (LIST_USD * CUSHION_BPS) / 10_000);
+    }
+
+    // -- BNB leg -------------------------------------------------------
+
+    /// @dev The audit repro, inverted. Same setup, same numbers, and the sale
+    ///      now refuses instead of settling.
+    function test_sellerCannotFrontRunTheCushionOnBnb() public {
+        _list(alice, 1, LIST_USD);
+        uint256 due = _bnbGross(LIST_USD);
+        uint256 sent = _withCushion(due);
+        (uint256 maxUsdPrice, uint256 maxPay) = _frontendArgs(1, due);
+
+        vm.prank(alice);
+        market.updatePrice(1, _cushionedSticker(), Marketplace.BnbullMode.Off, 0);
+
+        vm.deal(bob, sent);
+        vm.prank(bob);
+        // Asserted WITH ITS ARGUMENTS. A bare selector would pass on any revert
+        // at all, including one thrown for an unrelated reason.
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                Marketplace.ListingRepriced.selector, uint256(_cushionedSticker()), maxUsdPrice
+            )
+        );
+        market.buyWithBNB{value: sent}(1, maxUsdPrice, maxPay);
+
+        assertEq(bulls.ownerOf(1), alice, "refused: the bull never moved");
+        assertEq(bob.balance, sent, "refused: not one wei left the buyer");
+    }
+
+    /// @dev A re-price of ONE WEI on the sticker is refused. The cushion buys
+    ///      the seller no room at all — that room belongs to the oracle.
+    function test_evenAOneWeiRepriceIsRefused() public {
+        _list(alice, 1, LIST_USD);
+        uint256 due = _bnbGross(LIST_USD);
+        uint256 sent = _withCushion(due);
+        (uint256 maxUsdPrice, uint256 maxPay) = _frontendArgs(1, due);
+
+        vm.prank(alice);
+        market.updatePrice(1, uint128(LIST_USD) + 1, Marketplace.BnbullMode.Off, 0);
+
+        vm.deal(bob, sent);
+        vm.prank(bob);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                Marketplace.ListingRepriced.selector, uint256(LIST_USD) + 1, maxUsdPrice
+            )
+        );
+        market.buyWithBNB{value: sent}(1, maxUsdPrice, maxPay);
+        assertEq(bulls.ownerOf(1), alice);
+    }
+
+    /// @dev THE ONE THAT PROVES THE BOUND IS ON THE RIGHT QUANTITY. The cushion
+    ///      exists for oracle drift, so drift INSIDE it must still settle at the
+    ///      frontend's own arguments. Bound `buyerPays` instead of the sticker
+    ///      and you must choose: refuse this, or admit the re-price above.
+    function test_oracleDriftInsideTheCushionStillSettles() public {
+        _list(alice, 1, LIST_USD);
+        uint256 due = _bnbGross(LIST_USD);
+        uint256 sent = _withCushion(due);
+        (uint256 maxUsdPrice, uint256 maxPay) = _frontendArgs(1, due);
+
+        // BNB down 1%: the same sticker now costs ~1% more wei. Nobody cheated,
+        // and the total lands above the pre-drift due but inside the cushion.
+        uint256 drifted = (BNB_USD_1E18 * 99) / 100;
+        feed.setAnswer(int256(drifted / 1e10));
+        uint256 dueNow = _ceilDiv(uint256(LIST_USD) * 1e18, drifted);
+        assertGt(dueNow, due, "the drift really did raise the bill");
+        assertLe(dueNow, maxPay, "and it is inside the cushion");
+
+        vm.deal(bob, sent);
+        vm.prank(bob);
+        market.buyWithBNB{value: sent}(1, maxUsdPrice, maxPay);
+
+        assertEq(bulls.ownerOf(1), bob, "honest drift inside the cushion settles");
+        assertEq(bob.balance, sent - dueNow, "charged the drifted price, surplus returned");
+    }
+
+    /// @dev Drift BEYOND the cushion is the case `maxPay` exists for. Refused,
+    ///      and it must NOT be reported as a re-price — nobody moved a sticker.
+    function test_oracleDriftBeyondTheCushionIsRefusedAsPriceNotReprice() public {
+        _list(alice, 1, LIST_USD);
+        uint256 due = _bnbGross(LIST_USD);
+        (uint256 maxUsdPrice, uint256 maxPay) = _frontendArgs(1, due);
+
+        feed.setAnswer(int256((BNB_USD_1E18 / 2) / 1e10)); // BNB halves: due doubles.
+        uint256 dueNow = _ceilDiv(uint256(LIST_USD) * 1e18, BNB_USD_1E18 / 2);
+
+        vm.deal(bob, 10 ether);
+        vm.prank(bob);
+        vm.expectRevert(
+            abi.encodeWithSelector(Marketplace.PriceAboveMax.selector, dueNow, maxPay)
+        );
+        market.buyWithBNB{value: 10 ether}(1, maxUsdPrice, maxPay);
+        assertEq(bulls.ownerOf(1), alice);
+    }
+
+    /// @dev The guard must not break the case it exists to allow: an oracle
+    ///      that moved DOWN still refunds the surplus, at frontend arguments.
+    function test_theCushionStillRefundsWhenNobodyCheats() public {
+        _list(alice, 1, LIST_USD);
+        uint256 due = _bnbGross(LIST_USD);
+        uint256 sent = _withCushion(due);
+        (uint256 maxUsdPrice, uint256 maxPay) = _frontendArgs(1, due);
+
+        vm.deal(bob, sent);
+        vm.prank(bob);
+        market.buyWithBNB{value: sent}(1, maxUsdPrice, maxPay);
+
+        assertEq(bulls.ownerOf(1), bob, "an honest cushioned buy still settles");
+        assertEq(bob.balance, sent - due, "the surplus came straight back");
+    }
+
+    /// @dev A seller re-pricing DOWN is not an attack and must still settle —
+    ///      the bound is a ceiling, not an equality.
+    function test_aSellerRepricingDownStillSettles() public {
+        _list(alice, 1, LIST_USD);
+        uint256 due = _bnbGross(LIST_USD);
+        uint256 sent = _withCushion(due);
+        (uint256 maxUsdPrice, uint256 maxPay) = _frontendArgs(1, due);
+
+        vm.prank(alice);
+        market.updatePrice(1, uint128(LIST_USD / 2), Marketplace.BnbullMode.Off, 0);
+
+        vm.deal(bob, sent);
+        vm.prank(bob);
+        market.buyWithBNB{value: sent}(1, maxUsdPrice, maxPay);
+
+        assertEq(bulls.ownerOf(1), bob, "a cheaper sale is still a sale");
+        assertEq(bob.balance, sent - _bnbGross(LIST_USD / 2), "charged the LOWER price");
+    }
+
+    // -- BNBULL leg ----------------------------------------------------
+
+    /// @dev The audit's second repro, inverted: re-priced by exactly the
+    ///      cushion, at frontend arguments, against an infinite approval.
+    function test_sellerCannotFrontRunTheCushionOnBnbull() public {
+        _listPegged(alice, 1, LIST_USD);
+        uint256 due = 8_000e18; // $80 / $0.01
+        (uint256 maxUsdPrice, uint256 maxPay) = _frontendArgs(1, due);
+
+        // The approval wallets nudge people toward.
+        bnbull.mint(bob, due * 100);
+        vm.prank(bob);
+        bnbull.approve(address(market), type(uint256).max);
+
+        vm.prank(alice);
+        market.updatePrice(1, _cushionedSticker(), Marketplace.BnbullMode.Pegged, 0);
+
+        uint256 before = bnbull.balanceOf(bob);
+        vm.prank(bob);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                Marketplace.ListingRepriced.selector, uint256(_cushionedSticker()), maxUsdPrice
+            )
+        );
+        market.buyWithBNBULL(1, maxUsdPrice, maxPay);
+
+        assertEq(bulls.ownerOf(1), alice, "refused: the bull never moved");
+        assertEq(bnbull.balanceOf(bob), before, "refused: the allowance was not touched");
+    }
+
+    /// @dev A 10x grab is refused for the same reason, and `maxPay` independently
+    ///      refuses it too. Both bounds are asserted present, so neither can be
+    ///      dropped later as redundant.
+    function test_sellerCannotFrontRunAnInfiniteApprovalOnBnbull() public {
+        _listPegged(alice, 1, LIST_USD);
+        uint256 due = 8_000e18;
+        (uint256 maxUsdPrice, uint256 maxPay) = _frontendArgs(1, due);
+
+        bnbull.mint(bob, due * 100);
+        vm.prank(bob);
+        bnbull.approve(address(market), type(uint256).max);
+
+        vm.prank(alice);
+        market.updatePrice(1, uint128(LIST_USD * 10), Marketplace.BnbullMode.Pegged, 0);
+
+        uint256 before = bnbull.balanceOf(bob);
+        vm.prank(bob);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                Marketplace.ListingRepriced.selector, uint256(LIST_USD) * 10, maxUsdPrice
+            )
+        );
+        market.buyWithBNBULL(1, maxUsdPrice, maxPay);
+        assertEq(bnbull.balanceOf(bob), before, "the infinite approval was not touched");
+
+        // ...and with the sticker bound stood down, `maxPay` still refuses.
+        vm.prank(bob);
+        vm.expectRevert(
+            abi.encodeWithSelector(Marketplace.PriceAboveMax.selector, due * 10, maxPay)
+        );
+        market.buyWithBNBULL(1, type(uint256).max, maxPay);
+        assertEq(bnbull.balanceOf(bob), before, "still not touched");
+    }
+
+    /// @dev THE SEAM BETWEEN THE TWO BOUNDS. `Fixed` mode prices in tokens
+    ///      outright and never reads the sticker, so a seller who flips
+    ///      `Pegged -> Fixed` in the front-run steps clean around `maxUsdPrice`.
+    ///      `maxPay` is the only thing standing there — this is the test that
+    ///      stops anyone deleting it as redundant.
+    function test_flippingPeggedToFixedIsCaughtByMaxPay() public {
+        _listPegged(alice, 1, LIST_USD);
+        uint256 due = 8_000e18;
+        (uint256 maxUsdPrice, uint256 maxPay) = _frontendArgs(1, due);
+
+        bnbull.mint(bob, due * 100);
+        vm.prank(bob);
+        bnbull.approve(address(market), type(uint256).max);
+
+        // Sticker UNCHANGED — so `maxUsdPrice` passes — but the token amount is
+        // now whatever alice says it is.
+        vm.prank(alice);
+        market.updatePrice(1, LIST_USD, Marketplace.BnbullMode.Fixed, uint128(due * 10));
+
+        uint256 before = bnbull.balanceOf(bob);
+        vm.prank(bob);
+        vm.expectRevert(
+            abi.encodeWithSelector(Marketplace.PriceAboveMax.selector, due * 10, maxPay)
+        );
+        market.buyWithBNBULL(1, maxUsdPrice, maxPay);
+
+        assertEq(bulls.ownerOf(1), alice, "refused: the bull never moved");
+        assertEq(bnbull.balanceOf(bob), before, "refused: the allowance was not touched");
+    }
+
+    function test_bnbullSettlesWithinTheCeiling() public {
+        _listPegged(alice, 1, LIST_USD);
+        uint256 due = 8_000e18;
+        (uint256 maxUsdPrice, uint256 maxPay) = _frontendArgs(1, due);
+
+        bnbull.mint(bob, due);
+        vm.startPrank(bob);
+        bnbull.approve(address(market), due);
+        market.buyWithBNBULL(1, maxUsdPrice, maxPay);
+        vm.stopPrank();
+
+        assertEq(bulls.ownerOf(1), bob);
+        assertEq(bnbull.balanceOf(bob), 0, "charged the quoted due, not the ceiling");
     }
 }

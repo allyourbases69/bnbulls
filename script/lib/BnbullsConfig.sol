@@ -106,6 +106,15 @@ abstract contract BnbullsConfig is Script {
         // configured is `Duel.setUsdFightPrice`, never a WBNB peg.
         uint256 fightWbnb;
         uint256 fightBnbull;
+        // The jackpot-ticket DUST FLOOR per asset (`Duel.setMinTicketStake`).
+        // ⚠ SET THESE OR THEY READ ZERO. `_rollOnePool` refuses a stake of
+        // exactly 0, but ONE WEI mints the same full-odds ticket, and
+        // `devCut = stake * 1000 / 10000` truncates to 0 below 10 wei — a
+        // literally rake-free ticket against a 100%-payout pot. The mapping is
+        // reachable only through the admin UI, so on mainnet it read 0 because
+        // no script ever called it.
+        uint256 minTicketStakeWbnb;
+        uint256 minTicketStakeBnbull;
         // Splitter swap floors. A ZERO here means that leg defers on every
         // payment, silently, forever. See `setFloors` in `PotSplitter`.
         uint256 floorBnbullPerBnb;
@@ -357,6 +366,63 @@ abstract contract BnbullsConfig is Script {
         // was written here shipped by accident rather than by decision. Now
         // chain 56 fails loud, by name, until an operator types it.
         c.params.fightBnbull = _mainnetReqUint("FIGHT_COST_BNBULL", 200e18);
+
+        // ── the jackpot-ticket dust floor ────────────────────────────────
+        // Sized at ~10% of the LIVE stake, and the 10x is the whole argument.
+        //
+        // Both stakes shrink in token terms as the underlying appreciates: the
+        // WBNB side is a DOLLAR anchor converted through Chainlink at read
+        // time, and the BNBULL side is a keeper peg the keeper walks DOWN as
+        // BNBULL rises. So a floor pinned near today's stake starts silently
+        // refusing tickets on perfectly ordinary fights the moment the price
+        // moves — `_rollOnePool` just `return`s, so the pot keeps filling from
+        // mints and market fees and NEVER issues a ticket again. Silent, and
+        // exactly the failure this codebase keeps getting bitten by.
+        //
+        // 10% buys a 10x move of headroom (BNB to ~$6,000, or BNBULL up 10x)
+        // before ticketing is at risk, while still refusing the attack by
+        // twelve orders of magnitude: the rake-free window is stakes under 10
+        // WEI, and 3e14 is 3e13 times larger than that.
+        //
+        // ⚠ THIS IS A DUST GUARD, NOT AN ECONOMIC CONTROL. It kills the
+        // free-ticket hole. It does NOT price a ticket meaningfully, and it is
+        // not the answer to the self-dealt-duel farm (two wallets, one owner,
+        // the stake circulating so only the rake is a real cost) — that needs a
+        // product decision, not a floor.
+        //
+        // Promoted to `_mainnetReqUint` for the same reason `fightBnbull` was:
+        // as a plain `vm.envOr` mainnet never has to say the number out loud,
+        // and whatever happens to be there ships by accident rather than by
+        // decision. Zero read on mainnet once already.
+        c.params.minTicketStakeWbnb = _mainnetReqUint("MIN_TICKET_STAKE_WBNB", 3e14);
+        // ⚠⚠ THIS DEFAULT IS THE **LOCAL** ONE AND MAINNET NEVER READS IT.
+        // `_mainnetReqUint` returns `_reqUint(name)` when `block.chainid` is
+        // BSC, so on 56 the second argument is dead and the env var is hard
+        // required. There are two consistent pairs, and confusing them is how
+        // this line got edited wrongly once already:
+        //
+        //     local / testnet : fightBnbull 200e18      floor 20e18      (10%)
+        //     mainnet (env)   : fightBnbull 250_000e18  floor 25_000e18  (10%)
+        //
+        // 20e18 is the local pair's tenth, matching the local `fightBnbull`
+        // default directly below the WBNB line. **Do not pin 20e18 on chain 56.**
+        // Against the live 250,000e18 stake that is 0.008% — a floor low enough
+        // to be no floor, which is the rake-free dust ticket the WBNB comment
+        // above describes, against a pot that pays 100%.
+        //
+        // The failure mode either way is silent: `_rollOnePool` RETURNS on a
+        // sub-floor stake rather than reverting, so a wrong floor issues no
+        // revert, no event and no alert while the pot keeps filling from mints,
+        // revives and marketplace fees. Both legs are floored independently, so
+        // a wrong floor on one asset also vetoes MIXED duels — a WBNB-vs-BNBULL
+        // fight earns nothing on EITHER pool.
+        //
+        // `Verify.s.sol` asserted only `!= 0` and `== config`, which any wrong
+        // number satisfies. The check that actually binds is
+        // `minTicketStakeOf(asset) < fighterCost(asset)`, now added there — it
+        // holds on BOTH pairs, which is exactly why it is encoded as a relation
+        // rather than as a hardcoded amount.
+        c.params.minTicketStakeBnbull = _mainnetReqUint("MIN_TICKET_STAKE_BNBULL", 20e18);
 
         // A zero floor DISABLES that swap leg: the pre-check fails and every
         // slice defers into a `pending*` bucket, silently, on every payment.
@@ -941,6 +1007,16 @@ abstract contract BnbullsConfig is Script {
         // the ordinary pre-graduation deferral except that it never stops.
         // Measured floor is 1100; 1500 leaves headroom. Ceiling is 2000.
         c.params.inlineSlippageBps = vm.envOr("MINT_INLINE_SLIPPAGE_BPS", uint256(1_500));
+        // ⚠ THE SAME OMISSION AS `minPoolLiquidity`, AND IT RECURRED. Added to
+        // `loadConfig` (:397, :425) when the dust floor shipped, never mirrored
+        // here — so the standalone `Verify` compared the live 3e14 / 25,000e18
+        // against a struct default of 0 and reported TWO false failures on the
+        // 2026-08-10 fresh deploy. The chain was correct; the verifier was not.
+        // EXPRESSION AND DEFAULT must match `loadConfig` exactly, including the
+        // local 20e18 default (mainnet ignores it: `_mainnetReqUint` hard-requires
+        // the env var on chain 56, so the pin in deploy-fresh.ps1 is what lands).
+        c.params.minTicketStakeWbnb = _mainnetReqUint("MIN_TICKET_STAKE_WBNB", 3e14);
+        c.params.minTicketStakeBnbull = _mainnetReqUint("MIN_TICKET_STAKE_BNBULL", 20e18);
         // ⚠ SAME RULE AS `minPoolLiquidity` ABOVE: the EXPRESSION AND THE
         // DEFAULT must match `loadConfig` exactly. They are not in the record,
         // so a mismatch here would make the standalone `Verify` — the one the

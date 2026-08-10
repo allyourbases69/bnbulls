@@ -311,3 +311,26 @@ contract DuelShortWBNB is ERC20 {
         _mint(to, amount);
     }
 }
+
+/**
+ * @dev A Yards stand-in that blocks nothing.
+ *
+ * ⚠ IT EXISTS BECAUSE `DuelNative._requireInYards` FAILS CLOSED. The WBNB-era
+ *    contract skipped the check on an unwired slot, so every native fixture in
+ *    this repo was written without wiring one — and passed. So was the shipped
+ *    migration script, which bootstraps four of the five wires. An external
+ *    review turned that into 0.8 BNB lifted from a wallet whose only action had
+ *    ever been `deposit()`: push a junk bull at a depositor, fight it, and the
+ *    custodied float pays, because credit needs no allowance and ERC-721 needs
+ *    no consent to receive.
+ *
+ *    Wiring this keeps a money-path fixture about money paths. It deliberately
+ *    does NOT make the gate permissive in production — the real `Yards` is what
+ *    ships, and the gate's own behaviour is covered in `DuelYards.t.sol` and by
+ *    the review PoC that pushes an unentered bull.
+ */
+contract PermissiveYards {
+    function fightBlocked(uint256, address, uint256, address) external pure returns (uint256) {
+        return 0;
+    }
+}

@@ -228,6 +228,16 @@ export const MarketplaceAbi = [
         "name": "tokenId",
         "type": "uint256",
         "internalType": "uint256"
+      },
+      {
+        "name": "maxUsdPrice",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "maxPay",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "outputs": [],
@@ -239,6 +249,16 @@ export const MarketplaceAbi = [
     "inputs": [
       {
         "name": "tokenId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "maxUsdPrice",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "maxPay",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -1926,6 +1946,22 @@ export const MarketplaceAbi = [
   },
   {
     "type": "error",
+    "name": "ListingRepriced",
+    "inputs": [
+      {
+        "name": "usdPrice",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "maxUsdPrice",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
     "name": "NotApproved",
     "inputs": []
   },
@@ -2061,6 +2097,22 @@ export const MarketplaceAbi = [
       },
       {
         "name": "received",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "PriceAboveMax",
+    "inputs": [
+      {
+        "name": "buyerPays",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "maxPay",
         "type": "uint256",
         "internalType": "uint256"
       }

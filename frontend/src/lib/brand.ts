@@ -347,7 +347,22 @@ export const DEATH = {
  */
 export const POTS = {
   bnbull: { label: '$BNBULL pot', symbolFallback: 'BNBULL', odds: '1-in-150' },
-  bnb: { label: 'BNB pot', symbolFallback: 'WBNB', odds: '1-in-75' },
+  /**
+   * ⚠ `BNB`, NOT `WBNB`, AND THE PARAGRAPH ABOVE IS NOW HISTORY FOR THIS POT.
+   * It reasoned that `prizeToken` is immutable so the fallback "cannot drift
+   * for THIS deployment" — true, and then the deployment changed. `JackpotNative`
+   * pays the winner native BNB and has no `prizeToken()` at all, so the surfaces
+   * assert `BNB` (`NATIVE_POT_DECIMALS`/`NATIVE_POT_SYMBOL`) instead of reading a
+   * token that does not exist. This string survives as the PRE-LAUNCH figure and
+   * the legacy-pot fallback; leaving it at `WBNB` would have printed the wrong
+   * ticker beside every number on the card the migration exists to fix.
+   */
+  bnb: { label: 'BNB pot', symbolFallback: 'BNB', odds: '1-in-75' },
+  /** Shown beside an unclaimed jackpot prize on the native pot, where a win
+   *  credits the winner rather than transferring to them. */
+  prizeHeld:
+    'the pot credits a winner rather than pushing the money out, so one broken wallet ' +
+    'cannot wreck the roll for everybody else. it is yours, claim it whenever you like.',
   /**
    * ⚠ THIS SLOT USED TO BE THE "no withdraw function" TRUST STORY. Owner,
    * 2026-08-07: "get rid of the withdraw function and the way it's all worded,
@@ -446,8 +461,29 @@ export const CURRENCY = {
   balanceSetup:
     'to be challenged while you are offline your side has to come from money the ' +
     'duel contract is already holding for you, because only the wallet sending a ' +
-    'transaction can put bnb in it. top up here and your bulls can be picked while ' +
-    'you are away. it is plain bnb and you can take it out whenever you like.',
+    'transaction can put bnb in it. it takes two things: money in here, and an ' +
+    'away budget saying how much of it those fights may spend. it is plain bnb ' +
+    'and you can take it out whenever you like.',
+
+  /**
+   * ⚠ THIS IS THE APPROVAL CUSTODY DELETED, AND SAYING SO IS THE POINT.
+   *
+   * On the old contract a player's exposure to a fight they did not sign was
+   * the WBNB allowance they granted — a number they chose. Moving to a credit
+   * ledger removed the approval step and silently replaced that ceiling with
+   * their ENTIRE balance: a review's proof of concept drained 81 of 90 BNB in
+   * one transaction with a leaked signer key. `passiveAllowance` puts the
+   * ceiling back, and this string is why a player should bother setting one.
+   *
+   * It deliberately does NOT lead with "if our key leaks" — that is the true
+   * reason and it is in here, but a control framed as a confession gets read as
+   * an admission of fragility rather than a seatbelt. It leads with the thing
+   * the player actually controls.
+   */
+  awayBudgetWhy:
+    'this is the only thing bounding what an offline fight can take, so keep it to ' +
+    'what you are happy to have in play. everything above it stays out of reach, ' +
+    'even if something goes wrong at our end.',
 
   /**
    * ⚠ THE SINGLE BIGGEST TRAP OF THE MIGRATION, AND THE ONE STRING THAT

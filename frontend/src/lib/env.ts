@@ -57,6 +57,29 @@ export const NATIVE_DUEL: boolean = (() => {
   return raw === 'true' || raw === '1';
 })();
 
+/**
+ * True for a pot that settles in NATIVE BNB rather than an ERC-20.
+ *
+ * ⚠ ONLY THE BNB POT EVER FLIPS, AND THAT ASYMMETRY IS PERMANENT. $BNBULL
+ * genuinely IS an ERC-20, so `jackpotBnbull` stays on `Jackpot.sol` with a real
+ * `prizeToken()` forever. Branching on the flag ALONE would point the $BNBULL
+ * pot at the native ABI, whose `prizeToken()` does not exist — every figure on
+ * that card would go to `?` at cutover, for a pot that never changed.
+ *
+ * Both contracts are deployed by the SAME migration (stage 1 deploys the new
+ * Duel and the new BNB pot together), so one flag governs both and they cannot
+ * disagree — see `NATIVE_DUEL` for why this is told, not sniffed.
+ */
+export function isNativePot(name: 'jackpotBnbull' | 'jackpotBnb'): boolean {
+  return NATIVE_DUEL && name === 'jackpotBnb';
+}
+
+/** What a native pot pays, asserted rather than read: there is no token
+ *  contract to ask, so `prizeToken()`/`decimals()`/`symbol()` have nothing to
+ *  answer. Native BNB is 18dp on every EVM chain. */
+export const NATIVE_POT_DECIMALS = 18;
+export const NATIVE_POT_SYMBOL = 'BNB';
+
 function readList(value: string | undefined): string[] {
   if (!value) return [];
   return value

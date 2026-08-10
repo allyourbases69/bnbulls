@@ -25,11 +25,28 @@
  * So the sender decides the route and the source decides the flavour, never the
  * other way round.
  *
- * ⚠ AND `JackpotNative` HAS ONE UNLOGGED WAY IN. Its `receive()` accepts a bare
- * BNB transfer as a donation and emits nothing at all, so such a deposit raises
- * `pool()` without ever appearing here. That is exactly why the feed compares
- * its own total against the pot's on-chain `totalFunded()` and says plainly
- * when the two disagree, instead of presenting a sum it cannot prove.
+ * ⚠ THE TWO POTS' EVENT SETS ARE NOT THE SAME, AND THIS IS WHERE IT SHOWS.
+ * `JackpotNative` adds three events `Jackpot` does not have (`FundUnwrapped`,
+ * `StrayWbnbAbsorbed`, `PrizeCredited`/`PrizeWithdrawn`), and exactly one of
+ * them is a DEPOSIT the `Funded` sweep would miss:
+ *
+ *   `absorbStrayWbnb()` is permissionless, credits `totalFunded`, and emits
+ *   `StrayWbnbAbsorbed(uint256)` — NOT `Funded`.
+ *
+ * So the native pot is swept on two topics and the erc-20 pot on one. It has
+ * never fired on chain (0 of 226 logs on the bnb pot at the time of writing),
+ * which is precisely why it is worth handling rather than assuming: the day it
+ * does, the money is in the pot and this feed would otherwise have to report a
+ * shortfall it could not explain. Note `StrayWbnbAbsorbed` carries no sender —
+ * the address on that row is the pot's own, and the ui never prints it.
+ *
+ * ⚠ AND BOTH POTS STILL HAVE ONE GENUINELY UNLOGGED WAY IN. `JackpotNative`'s
+ * `receive()` takes a bare BNB transfer as a donation and emits nothing at all;
+ * a plain erc-20 `transfer` to `Jackpot` does the same, because `pool()` there
+ * is just `balanceOf`. Neither touches `totalFunded` either, so they raise the
+ * pot without raising anything this feed can see. That is why the feed compares
+ * its own sum against the pot's `totalFunded()` and says plainly when the two
+ * disagree, instead of presenting a total it cannot prove.
  */
 
 /** Which part of the game paid, decided by the SENDER. See the header. */
@@ -40,6 +57,7 @@ export type DepositRouteKey =
   | 'revive'
   | 'market'
   | 'house'
+  | 'stray'
   | 'unknown';
 
 export interface DepositRouteCopy {
@@ -60,6 +78,10 @@ export const DEPOSIT_ROUTES: Record<DepositRouteKey, DepositRouteCopy> = {
   revive: { chip: 'revive', line: 'a slice of every bull dragged back out of the graveyard' },
   market: { chip: 'market sale', line: 'the pot fee on every sale in the marketplace' },
   house: { chip: 'house top-up', line: 'the house putting money in the middle by hand' },
+  stray: {
+    chip: 'stray wbnb',
+    line: 'wbnb somebody sent to the pot by mistake, pushed into the pool for good',
+  },
   unknown: { chip: 'other', line: 'a funder the site does not have a name for yet' },
 };
 

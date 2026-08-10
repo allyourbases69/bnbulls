@@ -77,6 +77,17 @@ const FUNDED_ABI = parseAbi([
   'event Funded(address indexed from, uint256 amount, string source)',
 ]);
 
+/**
+ * ⚠ THE SECOND DEPOSIT EVENT, AND ONLY THE NATIVE POT HAS IT.
+ * `JackpotNative.absorbStrayWbnb()` is permissionless, credits `totalFunded`,
+ * and emits THIS rather than `Funded`. Sweeping only `Funded` on that pot would
+ * mean the day somebody mis-sends wbnb and anyone pushes it into the pool, the
+ * feed reports a shortfall it cannot explain for money that is really there.
+ * `Jackpot.sol` has no such function and no such event, so it is not asked.
+ */
+const STRAY_TOPIC = toEventSelector('StrayWbnbAbsorbed(uint256)');
+const STRAY_ABI = parseAbi(['event StrayWbnbAbsorbed(uint256 amount)']);
+
 type PotName = 'jackpotBnbull' | 'jackpotBnb';
 
 interface CacheEntry {
@@ -334,18 +345,23 @@ async function readPotState(pot: PotName, address: `0x${string}`): Promise<PotSt
 // ─── the payload ──────────────────────────────────────────────────────
 
 async function build(pot: PotName, address: `0x${string}`): Promise<PotDepositsPayload> {
-  // The log sweep is the one read allowed to fail the request: with no history
-  // there is no feed, and an empty list would be indistinguishable from a pot
-  // nobody has funded.
+  // Absent a configured deploy block, start at genesis: etherscan is not
+  // range-capped, so "everything" is a legitimate answer here in a way it never
+  // is against a public node.
+  const fromBlock = deployBlock() ?? 0n;
+
+  // The log sweeps are the one read allowed to fail the request: with no
+  // history there is no feed, and an empty list would be indistinguishable from
+  // a pot nobody has funded.
   const sweep = await fetchLogsByTopic0({
     chainId: CHAIN_ID,
     address,
     topic0: FUNDED_TOPIC,
-    // Absent a configured deploy block, start at genesis: etherscan is not
-    // range-capped, so "everything" is a legitimate answer here in a way it
-    // never is against a public node.
-    fromBlock: deployBlock() ?? 0n,
+    fromBlock,
   });
+  const strays = isNativePot(pot)
+    ? await fetchLogsByTopic0({ chainId: CHAIN_ID, address, topic0: STRAY_TOPIC, fromBlock })
+    : { logs: [], truncated: false };
 
   const [routes, state] = await Promise.all([wiring(address), readPotState(pot, address)]);
 
@@ -388,6 +404,42 @@ async function build(pot: PotName, address: `0x${string}`): Promise<PotDepositsP
     });
   }
 
+  for (const log of strays.logs) {
+    let amount: bigint;
+    try {
+      amount = decodeEventLog({
+        abi: STRAY_ABI,
+        data: log.data,
+        topics: log.topics as [`0x${string}`, ...`0x${string}`[]],
+      }).args.amount;
+    } catch {
+      continue;
+    }
+    if (amount === 0n) continue;
+    shownTotal += amount;
+    deposits.push({
+      amount: amount.toString(),
+      // The contract's own word for it. Kept raw like every other source, so
+      // the row is still checkable against the log.
+      source: 'stray-wbnb',
+      // ⚠ THE EVENT CARRIES NO SENDER. This is the pot's own address, and the
+      // ui prints an address only for the `unknown` route, so it is never shown
+      // as if it were the person who paid.
+      from: address,
+      route: 'stray',
+      txHash: log.txHash,
+      blockNumber: log.blockNumber,
+      logIndex: log.logIndex,
+      timestamp: log.timestamp,
+    });
+  }
+
+  // Two sweeps, one timeline. Sorted rather than concatenated, or a stray
+  // absorb would sit at the bottom of the feed no matter when it happened.
+  deposits.sort((a, b) =>
+    a.blockNumber !== b.blockNumber ? a.blockNumber - b.blockNumber : a.logIndex - b.logIndex,
+  );
+
   // Newest first: the point of the feed is that the pot is filling NOW.
   deposits.reverse();
 
@@ -403,7 +455,7 @@ async function build(pot: PotName, address: `0x${string}`): Promise<PotDepositsP
     pool: state.pool === null ? null : state.pool.toString(),
     totalAwarded: state.totalAwarded === null ? null : state.totalAwarded.toString(),
     bnbUsd1e18: state.bnbUsd1e18 === null ? null : state.bnbUsd1e18.toString(),
-    truncated: sweep.truncated,
+    truncated: sweep.truncated || strays.truncated,
     fetchedAt: Date.now(),
   };
 }

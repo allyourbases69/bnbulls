@@ -11,19 +11,28 @@
  * WHY THIS EXISTS AT ALL: THE BROWSER CANNOT READ THIS CHAIN'S HISTORY
  * ═══════════════════════════════════════════════════════════════════════
  *
- * Measured on BSC mainnet, 2026-08-10, against the live pot addresses:
+ * Measured on BSC mainnet, 2026-08-10, asking each endpoint in `rpcUrls()` for
+ * the pot's own `Funded` logs. Columns are the `fromBlock` of the window:
  *
- *   - both bnb dataseeds REFUSE `eth_getLogs` outright
- *   - `bsc.drpc.org` answers "You reached Public endpoint rate limit"
- *   - `bsc-rpc.publicnode.com` 403s every `eth_getTransactionReceipt`
- *   - every free public bsc endpoint PRUNES logs to roughly the last ~10,000
- *     blocks, about two hours at 0.45s blocks
+ *   endpoint                   deploy block   ~5,000 back   ~500 back
+ *   bsc-rpc.publicnode.com     HTTP 403       ok            ok
+ *   bsc.drpc.org               HTTP 400       HTTP 400      HTTP 400
+ *   bsc-dataseed1.defibit.io   -32005         -32005        -32005
+ *   bsc-dataseed.bnbchain.org  -32005         -32005        -32005
+ *
+ * Read the top-left cell. **Only one endpoint will serve this filter at all,
+ * and it refuses the moment the window reaches back past its retention** — the
+ * same "archive request" 403 it gives on `eth_getTransactionReceipt`. Both
+ * dataseeds answer `-32005 limit exceeded` even for a FIVE HUNDRED block
+ * window, so no amount of chunking rescues them.
  *
  * So a client-side sweep does not merely run slowly, it is WRONG BY DESIGN:
- * within two hours of any deposit the endpoint has forgotten it, and the page
- * would quietly show a shorter and shorter history while the pot kept growing.
- * A visitor cannot tell that apart from "the pot is not filling", which is the
- * single most damaging thing this feed could imply.
+ * the near chunks answer and the far ones 403 forever, so the page shows a
+ * shorter and shorter history while the pot keeps growing. A visitor cannot
+ * tell that apart from "the pot is not filling", which is the single most
+ * damaging thing this feed could imply. Note that `useContractLogs`' halving
+ * path cannot save it either: it handles RANGE-CAP errors, and neither a 403
+ * nor a rate-limit is one.
  *
  * The keyed archive endpoint in `alchemy-dprc.env` does not rescue it either:
  * that key is on the free tier, where `eth_getLogs` is capped to a **10 block

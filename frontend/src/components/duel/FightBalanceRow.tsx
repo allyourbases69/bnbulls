@@ -108,6 +108,42 @@ export function FightBalanceRow({
         </p>
       )}
 
+      {/* ── how many fights, and EXACTLY what that costs ────────────────
+          ⚠ THE PRICE IS SHOWN, NOT IMPLIED. Owner call 2026-08-10: a player
+          putting money into a contract must see the exact BNB before they
+          click, for the number of fights they actually want. A bare "top up"
+          box asks someone to fund custody against a figure they have to work
+          out themselves, which is precisely when people either overshoot or
+          walk away.
+
+          ⚠ PRICED OFF THE LIVE `perFight`, NEVER A CONSTANT. The BNB stake is
+          a USD sticker converted through chainlink, so it moves every block —
+          a hardcoded ladder would drift and quietly under-fund. When the read
+          has not landed, the row is not rendered at all rather than showing a
+          zero, because "1 fight · 0.0000 bnb" is a lie that costs money. */}
+      {balance.perFight !== undefined && balance.perFight > 0n && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-bull-text-faint">put in for</span>
+          {[1, 5, 10, 25, 50].map((n) => {
+            const wei = balance.perFight! * BigInt(n);
+            return (
+              <button
+                key={n}
+                type="button"
+                onClick={() => setTopUp(formatUnits(wei, dp))}
+                className="rounded-full border border-bull-border px-2 py-0.5 font-mono text-[11px] text-bull-text hover:border-bull-gold hover:text-bull-gold"
+              >
+                {n} {n === 1 ? 'fight' : 'fights'}
+                <span className="ml-1 text-bull-text-faint">{fmt(wei)}</span>
+              </button>
+            );
+          })}
+          <span className="text-bull-text-faint">
+            one fight is {fmt(balance.perFight)} bnb right now
+          </span>
+        </div>
+      )}
+
       {/* ── top up ─────────────────────────────────────────────────── */}
       <div className="flex flex-wrap items-center gap-2">
         <input
@@ -233,6 +269,15 @@ export function FightBalanceRow({
           gate, never behind a pause. See the file header. */}
       {balance.hasCredit && (
         <div className="flex flex-wrap items-center gap-2 border-t border-bull-border pt-2">
+          {/* ⚠ SAY THE EXIT OUT LOUD, ABOVE THE CONTROLS. Owner call
+              2026-08-10. This is real BNB sitting in a contract, and the one
+              question a player has before putting it there is whether they can
+              get it back. `withdraw` is gated on NOTHING — no cooldown, no
+              pause, no in-fight lock — so the honest thing is to state that
+              where the decision is made, not in fine print underneath it. */}
+          <span className="w-full text-bull-text-faint">
+            didn&apos;t fight, or done? take it back any time — there is no lock and no waiting.
+          </span>
           <input
             type="text"
             inputMode="decimal"

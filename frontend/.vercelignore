@@ -1,0 +1,50 @@
+# ⚠⚠ THIS FILE EXISTS BECAUSE A DEPLOY SHIPPED TESTNET TO PRODUCTION.
+#
+# `vercel --prod` uploads this directory and Vercel builds from it. `.gitignore`
+# DOES NOT STOP THAT — there was no `.vercelignore`, so `.env.local` went up with
+# everything else, Next loaded it, and it beat the project's own environment.
+# `.env.local` was pointed at BNB testnet at the time, so bnbulls.xyz went live
+# on chain 97: every wallet got "wrong network, switch to bnb testnet" and the
+# revive ladder read $0.10 instead of $50. 2026-08-11, ~4 minutes, rolled back.
+#
+# ⚠ `.env.local` ALSO CARRIES SECRETS — `ADMIN_SESSION_SECRET` and a testnet
+# `BNBULLS_SIGNER_KEY_97`. Uploading it did not just break the chain config, it
+# overrode the real production admin session secret with a local dev one. The
+# comment inside `.env.local` claims "this file is not deployed". It was.
+#
+# So: local env files never leave this machine. Everything production needs
+# lives in the Vercel project environment (`vercel env ls production`), which is
+# the only source that cannot change depending on whose laptop ran the deploy.
+.env
+.env.*
+!.env.example
+
+# Build/test scratch that has no business in a deployment.
+.next/cache
+*.log
+
+# ══════════════════════════════════════════════════════════════════════════
+# ⚠⚠ READ THIS BEFORE TOUCHING PRODUCTION ENV: `vercel.json` WINS. ALWAYS.
+# ══════════════════════════════════════════════════════════════════════════
+# `vercel.json`'s `build.env` is the HIGHEST-priority env source on Vercel. It
+# beats the project's own environment variables AND it beats `.env.local`.
+# `vercel.json` cannot hold comments (Vercel rejects unknown keys, `_comment`
+# included), which is why this warning lives here.
+#
+# On 2026-08-11 that file was still pinned to BNB TESTNET (chain 97) while the
+# site served mainnet. FOUR production deploys shipped testnet to bnbulls.xyz
+# because of it: "wrong network, switch to bnb testnet" in every wallet, revive
+# ladder reading $0.10 instead of $50. Each was caught and rolled back in about
+# ten seconds, but the point is what did NOT help — fixing `.env.local`, adding
+# all 21 NEXT_PUBLIC vars to the Vercel project, deleting `.next`, and passing
+# `--force`. Every one of those loses to `vercel.json`.
+#
+# So the chain config lives in `vercel.json`, on mainnet, in git where it can be
+# reviewed. `.env.local` is for `next dev` only and never reaches a build.
+# If a contract is redeployed, `vercel.json` changes in the SAME commit.
+#
+# Verify EVERY production deploy before trusting it:
+#   curl -s https://bnbulls.xyz/ | grep -o '0x[aA]8[dD]00[fF]9b[a-fA-F0-9]*'
+# That is the mainnet $BNBULL address. If the testnet one (0x12b10E53...)
+# comes back, roll back immediately:
+#   vercel rollback <last-good-deployment-url> --yes

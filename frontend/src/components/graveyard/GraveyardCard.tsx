@@ -71,6 +71,16 @@ export function GraveyardCard({ tokenId }: { tokenId: number }) {
     query: { enabled: !!graveyardAddress },
   });
 
+  /**
+   * ⚠ HAS THE QUOTE ACTUALLY COME BACK? The defaults below are only safe for
+   * ARITHMETIC — they are NOT an answer, and they must never be rendered as
+   * one. `allowed` falls back to `false`, and `false` is the same value the
+   * contract returns for "this bull is out of lives", so a read that is merely
+   * pending is indistinguishable from a final refusal unless this flag is
+   * checked first. It was not, and both dead bulls were publicly declared
+   * mince while a $50 rung-0 revive was available (2026-08-11).
+   */
+  const quoteLoaded = quoteResurrect !== undefined;
   const [allowed, used, ownerUsd1e18, takeoverUsd1e18, takeoverOpensAt] =
     (quoteResurrect as readonly [boolean, bigint, bigint, bigint, bigint] | undefined) ?? [
       false,
@@ -263,7 +273,10 @@ export function GraveyardCard({ tokenId }: { tokenId: number }) {
         </div>
       </div>
 
-      {!allowed ? (
+      {/* ⚠ THREE STATES, NOT TWO. "still asking" is not "gone". */}
+      {!quoteLoaded ? (
+        <p className="mt-4 text-sm text-bull-text-dim">{DEATH.quoting}</p>
+      ) : !allowed ? (
         <p className="mt-4 text-sm text-bull-red">{DEATH.gone}</p>
       ) : (
         <div className="mt-4">

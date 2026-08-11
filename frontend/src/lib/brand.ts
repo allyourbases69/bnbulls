@@ -301,8 +301,22 @@ export const DEATH = {
     'decision every time you send it in.',
   /** Empty state when nothing has died. */
   empty: 'the truck is empty. quiet week at the butcher.',
-  /** Out of revives. */
+  /** Out of revives. ⚠ ONLY when the chain has actually SAID SO — see
+   *  `quoting` below. */
   gone: 'out of lives. this one is mince.',
+  /**
+   * The revive quote has not come back yet.
+   *
+   * ⚠ THIS EXISTS BECAUSE "NOT LOADED" USED TO RENDER AS `gone`. The card
+   * destructures `quoteResurrect` with `?? [false, ...]`, so a pending or
+   * failed read produced `allowed === false` and the bull was announced as
+   * mince. On 2026-08-11 #24 and #26 both showed "out of lives" on a fresh
+   * page load while the chain said `allowed = true` and a $50 rung 0 revive
+   * was sitting there. Telling a holder their bull is unrecoverable when it is
+   * one click from coming back is the worst thing this card can say, and it
+   * was the DEFAULT.
+   */
+  quoting: 'checking the ledger…',
   /** The list of the dead. */
   listHeading: 'on the truck',
   listLoading: 'checking the yard…',

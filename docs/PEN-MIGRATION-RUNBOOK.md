@@ -38,7 +38,7 @@ scripts; none of it is hardcoded.
 Every step:
 
 ```
-powershell -ExecutionPolicy Bypass -File "C:\tools\Claude\bnbulls\marketing\keeper\deploy-pen.ps1" -Step <step> [-Simulate]
+powershell -ExecutionPolicy Bypass -File ".\marketing\keeper\deploy-pen.ps1" -Step <step> [-Simulate]
 ```
 
 **Always `-Simulate` first on every broadcasting step.** Simulation restores
